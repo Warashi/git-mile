@@ -1,6 +1,7 @@
 pub mod clock;
 pub mod dag;
 pub mod error;
+pub mod mile;
 
 pub use clock::{LamportClock, LamportTimestamp, ReplicaId};
 pub use dag::{
@@ -8,6 +9,10 @@ pub use dag::{
     Operation, OperationBlob, OperationId, OperationMetadata, OperationPack, PackPersistResult,
 };
 pub use error::{Error, Result};
+pub use mile::{
+    ChangeStatusInput, ChangeStatusOutcome, CreateMileInput, MileEvent, MileEventKind, MileId,
+    MileSnapshot, MileStatus, MileStatusChanged, MileStore, MileSummary,
+};
 
 pub const APP_NAME: &str = "git-mile";
 
