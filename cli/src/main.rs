@@ -41,7 +41,13 @@ fn run() -> Result<()> {
             email.as_deref(),
             command,
         )?,
-        Commands::List(args) => run_mile_list(&repo, args)?,
+        Commands::List { command } => handle_list_command(
+            &repo,
+            replica.as_deref(),
+            author.as_deref(),
+            email.as_deref(),
+            command,
+        )?,
         Commands::Show(args) => {
             let mile_id = parse_entity_id(&args.mile_id)?;
             let snapshot = command_mile_show(&repo, &mile_id)?;
@@ -97,7 +103,14 @@ fn run() -> Result<()> {
                 eprintln!("warning: mile {} already closed", mile_id);
             }
         }
-        Commands::Identity { command } => handle_identity_command(
+        Commands::Adopt { command } => handle_adopt_command(
+            &repo,
+            replica.as_deref(),
+            author.as_deref(),
+            email.as_deref(),
+            command,
+        )?,
+        Commands::Protect { command } => handle_protect_command(
             &repo,
             replica.as_deref(),
             author.as_deref(),
@@ -139,13 +152,20 @@ enum Commands {
         #[command(subcommand)]
         command: CreateCommand,
     },
-    List(ListArgs),
+    List {
+        #[command(subcommand)]
+        command: ListCommand,
+    },
     Show(ShowArgs),
     Open(StatusArgs),
     Close(StatusArgs),
-    Identity {
+    Adopt {
         #[command(subcommand)]
-        command: IdentityCommand,
+        command: AdoptCommand,
+    },
+    Protect {
+        #[command(subcommand)]
+        command: ProtectCommand,
     },
     Mile {
         #[command(subcommand)]
@@ -166,7 +186,7 @@ struct MileCreateArgs {
 }
 
 #[derive(Parser)]
-struct ListArgs {
+struct MileListArgs {
     #[arg(long)]
     all: bool,
     #[arg(long, value_enum, default_value = "table")]
@@ -191,14 +211,6 @@ struct StatusArgs {
 enum CreateCommand {
     Mile(MileCreateArgs),
     Identity(IdentityCreateArgs),
-}
-
-#[derive(Subcommand)]
-enum IdentityCommand {
-    Create(IdentityCreateArgs),
-    List(IdentityListArgs),
-    Adopt(IdentityAdoptArgs),
-    Protect(IdentityProtectArgs),
 }
 
 #[derive(Parser)]
@@ -250,7 +262,23 @@ struct IdentityProtectArgs {
 #[derive(Subcommand)]
 enum MileCommand {
     Create(MileCreateArgs),
-    List(ListArgs),
+    List(MileListArgs),
+}
+
+#[derive(Subcommand)]
+enum ListCommand {
+    Mile(MileListArgs),
+    Identity(IdentityListArgs),
+}
+
+#[derive(Subcommand)]
+enum AdoptCommand {
+    Identity(IdentityAdoptArgs),
+}
+
+#[derive(Subcommand)]
+enum ProtectCommand {
+    Identity(IdentityProtectArgs),
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -404,8 +432,8 @@ fn run_mile_create(
     Ok(())
 }
 
-fn run_mile_list(repo: &Path, args: ListArgs) -> Result<()> {
-    let ListArgs { all, format } = args;
+fn run_mile_list(repo: &Path, args: MileListArgs) -> Result<()> {
+    let MileListArgs { all, format } = args;
     let mut miles = command_mile_list(repo)?;
     if !all {
         miles.retain(|mile| mile.status != MileStatus::Closed);
@@ -440,164 +468,50 @@ fn handle_create_command(
 ) -> Result<()> {
     match command {
         CreateCommand::Mile(args) => run_mile_create(repo, replica, author, email, args)?,
-        CreateCommand::Identity(args) => {
-            handle_identity_command(repo, replica, author, email, IdentityCommand::Create(args))?;
-        }
+        CreateCommand::Identity(args) => run_identity_create(repo, replica, author, email, args)?,
     }
 
     Ok(())
 }
 
-fn handle_identity_command(
+fn handle_list_command(
     repo: &Path,
     replica: Option<&str>,
     author: Option<&str>,
     email: Option<&str>,
-    command: IdentityCommand,
+    command: ListCommand,
 ) -> Result<()> {
     match command {
-        IdentityCommand::Create(args) => {
-            let IdentityCreateArgs {
-                display_name,
-                email: identity_email,
-                login,
-                signature,
-                message,
-                adopt,
-                protect_pgp,
-                protect_pgp_armored,
-            } = args;
+        ListCommand::Mile(args) => run_mile_list(repo, args)?,
+        ListCommand::Identity(args) => run_identity_list(repo, replica, author, email, args)?,
+    }
 
-            if !protect_pgp_armored.is_empty() && protect_pgp.len() != protect_pgp_armored.len() {
-                return Err(anyhow!(
-                    "--protect-pgp-armored must be specified the same number of times as --protect-pgp"
-                ));
-            }
+    Ok(())
+}
 
-            let replica_id = resolve_replica(replica);
-            let actor = resolve_identity(repo, &replica_id, author, email)?;
-            let store = IdentityStore::open(repo)?;
+fn handle_adopt_command(
+    repo: &Path,
+    replica: Option<&str>,
+    author: Option<&str>,
+    email: Option<&str>,
+    command: AdoptCommand,
+) -> Result<()> {
+    match command {
+        AdoptCommand::Identity(args) => run_identity_adopt(repo, replica, author, email, args)?,
+    }
 
-            let mut protections = Vec::new();
-            for (index, fingerprint) in protect_pgp.into_iter().enumerate() {
-                let armored_public_key = protect_pgp_armored
-                    .get(index)
-                    .map(|path| {
-                        fs::read_to_string(path).with_context(|| {
-                            format!("failed to read armored key at {}", path.display())
-                        })
-                    })
-                    .transpose()?;
+    Ok(())
+}
 
-                protections.push(IdentityProtection {
-                    kind: ProtectionKind::Pgp,
-                    fingerprint,
-                    armored_public_key,
-                });
-            }
-
-            let snapshot = store.create_identity(CreateIdentityInput {
-                replica_id: replica_id.clone(),
-                author: actor.signature.clone(),
-                message,
-                display_name,
-                email: identity_email,
-                login,
-                initial_signature: signature,
-                adopt_immediately: adopt,
-                protections,
-            })?;
-            println!("{}", snapshot.id);
-        }
-        IdentityCommand::List(args) => {
-            let IdentityListArgs { format } = args;
-            let store = IdentityStore::open(repo)?;
-            let identities = store.list_identities()?;
-
-            match format {
-                OutputFormat::Table => {
-                    if identities.is_empty() {
-                        println!("No identities found");
-                    } else {
-                        print_identity_table(&identities);
-                    }
-                }
-                OutputFormat::Raw => print_identity_raw(&identities),
-                OutputFormat::Json => {
-                    let stdout = io::stdout();
-                    let mut handle = stdout.lock();
-                    to_writer_pretty(&mut handle, &identities)?;
-                    handle.write_all(b"\n")?;
-                }
-            }
-        }
-        IdentityCommand::Adopt(args) => {
-            let IdentityAdoptArgs {
-                identity_id,
-                signature,
-                message,
-            } = args;
-            let identity_id = parse_entity_id(&identity_id)?;
-            let replica_id = resolve_replica(replica);
-            let actor = resolve_identity(repo, &replica_id, author, email)?;
-            let store = IdentityStore::open(repo)?;
-            let current = store.load_identity(&identity_id)?;
-            let signature = signature
-                .unwrap_or_else(|| format!("{} <{}>", current.display_name, current.email));
-            let outcome = store.adopt_identity(AdoptIdentityInput {
-                identity_id: identity_id.clone(),
-                replica_id: replica_id.clone(),
-                author: actor.signature.clone(),
-                message,
-                signature,
-            })?;
-            if outcome.changed {
-                println!("Identity {} adopted for {}", identity_id, replica_id);
-            } else {
-                println!(
-                    "Identity {} already adopted for {}",
-                    identity_id, replica_id
-                );
-            }
-        }
-        IdentityCommand::Protect(args) => {
-            let IdentityProtectArgs {
-                identity_id,
-                pgp_fingerprint,
-                armored_key,
-                message,
-            } = args;
-
-            let identity_id = parse_entity_id(&identity_id)?;
-            let replica_id = resolve_replica(replica);
-            let actor = resolve_identity(repo, &replica_id, author, email)?;
-            let store = IdentityStore::open(repo)?;
-
-            let armored_public_key = match armored_key {
-                Some(path) => Some(fs::read_to_string(&path).with_context(|| {
-                    format!("failed to read armored key at {}", path.display())
-                })?),
-                None => None,
-            };
-
-            let outcome = store.add_protection(AddProtectionInput {
-                identity_id: identity_id.clone(),
-                replica_id: replica_id.clone(),
-                author: actor.signature.clone(),
-                message,
-                protection: IdentityProtection {
-                    kind: ProtectionKind::Pgp,
-                    fingerprint: pgp_fingerprint,
-                    armored_public_key,
-                },
-            })?;
-
-            if outcome.changed {
-                println!("Protection added to identity {}", identity_id);
-            } else {
-                println!("Protection already registered on identity {}", identity_id);
-            }
-        }
+fn handle_protect_command(
+    repo: &Path,
+    replica: Option<&str>,
+    author: Option<&str>,
+    email: Option<&str>,
+    command: ProtectCommand,
+) -> Result<()> {
+    match command {
+        ProtectCommand::Identity(args) => run_identity_protect(repo, replica, author, email, args)?,
     }
 
     Ok(())
@@ -614,6 +528,183 @@ fn handle_mile_command(
         MileCommand::Create(args) => run_mile_create(repo, replica, author, email, args)?,
         MileCommand::List(args) => run_mile_list(repo, args)?,
     }
+    Ok(())
+}
+
+fn run_identity_create(
+    repo: &Path,
+    replica: Option<&str>,
+    author: Option<&str>,
+    email: Option<&str>,
+    args: IdentityCreateArgs,
+) -> Result<()> {
+    let IdentityCreateArgs {
+        display_name,
+        email: identity_email,
+        login,
+        signature,
+        message,
+        adopt,
+        protect_pgp,
+        protect_pgp_armored,
+    } = args;
+
+    if !protect_pgp_armored.is_empty() && protect_pgp.len() != protect_pgp_armored.len() {
+        return Err(anyhow!(
+            "--protect-pgp-armored must be specified the same number of times as --protect-pgp"
+        ));
+    }
+
+    let replica_id = resolve_replica(replica);
+    let actor = resolve_identity(repo, &replica_id, author, email)?;
+    let store = IdentityStore::open(repo)?;
+
+    let mut protections = Vec::new();
+    for (index, fingerprint) in protect_pgp.into_iter().enumerate() {
+        let armored_public_key = protect_pgp_armored
+            .get(index)
+            .map(|path| {
+                fs::read_to_string(path)
+                    .with_context(|| format!("failed to read armored key at {}", path.display()))
+            })
+            .transpose()?;
+
+        protections.push(IdentityProtection {
+            kind: ProtectionKind::Pgp,
+            fingerprint,
+            armored_public_key,
+        });
+    }
+
+    let snapshot = store.create_identity(CreateIdentityInput {
+        replica_id: replica_id.clone(),
+        author: actor.signature.clone(),
+        message,
+        display_name,
+        email: identity_email,
+        login,
+        initial_signature: signature,
+        adopt_immediately: adopt,
+        protections,
+    })?;
+    println!("{}", snapshot.id);
+    Ok(())
+}
+
+fn run_identity_list(
+    repo: &Path,
+    _replica: Option<&str>,
+    _author: Option<&str>,
+    _email: Option<&str>,
+    args: IdentityListArgs,
+) -> Result<()> {
+    let IdentityListArgs { format } = args;
+    let store = IdentityStore::open(repo)?;
+    let identities = store.list_identities()?;
+
+    match format {
+        OutputFormat::Table => {
+            if identities.is_empty() {
+                println!("No identities found");
+            } else {
+                print_identity_table(&identities);
+            }
+        }
+        OutputFormat::Raw => print_identity_raw(&identities),
+        OutputFormat::Json => {
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            to_writer_pretty(&mut handle, &identities)?;
+            handle.write_all(b"\n")?;
+        }
+    }
+
+    Ok(())
+}
+
+fn run_identity_adopt(
+    repo: &Path,
+    replica: Option<&str>,
+    author: Option<&str>,
+    email: Option<&str>,
+    args: IdentityAdoptArgs,
+) -> Result<()> {
+    let IdentityAdoptArgs {
+        identity_id,
+        signature,
+        message,
+    } = args;
+    let identity_id = parse_entity_id(&identity_id)?;
+    let replica_id = resolve_replica(replica);
+    let actor = resolve_identity(repo, &replica_id, author, email)?;
+    let store = IdentityStore::open(repo)?;
+    let current = store.load_identity(&identity_id)?;
+    let signature =
+        signature.unwrap_or_else(|| format!("{} <{}>", current.display_name, current.email));
+    let outcome = store.adopt_identity(AdoptIdentityInput {
+        identity_id: identity_id.clone(),
+        replica_id: replica_id.clone(),
+        author: actor.signature.clone(),
+        message,
+        signature,
+    })?;
+    if outcome.changed {
+        println!("Identity {} adopted for {}", identity_id, replica_id);
+    } else {
+        println!(
+            "Identity {} already adopted for {}",
+            identity_id, replica_id
+        );
+    }
+
+    Ok(())
+}
+
+fn run_identity_protect(
+    repo: &Path,
+    replica: Option<&str>,
+    author: Option<&str>,
+    email: Option<&str>,
+    args: IdentityProtectArgs,
+) -> Result<()> {
+    let IdentityProtectArgs {
+        identity_id,
+        pgp_fingerprint,
+        armored_key,
+        message,
+    } = args;
+
+    let identity_id = parse_entity_id(&identity_id)?;
+    let replica_id = resolve_replica(replica);
+    let actor = resolve_identity(repo, &replica_id, author, email)?;
+    let store = IdentityStore::open(repo)?;
+
+    let armored_public_key = match armored_key {
+        Some(path) => Some(
+            fs::read_to_string(&path)
+                .with_context(|| format!("failed to read armored key at {}", path.display()))?,
+        ),
+        None => None,
+    };
+
+    let outcome = store.add_protection(AddProtectionInput {
+        identity_id: identity_id.clone(),
+        replica_id: replica_id.clone(),
+        author: actor.signature.clone(),
+        message,
+        protection: IdentityProtection {
+            kind: ProtectionKind::Pgp,
+            fingerprint: pgp_fingerprint,
+            armored_public_key,
+        },
+    })?;
+
+    if outcome.changed {
+        println!("Protection added to identity {}", identity_id);
+    } else {
+        println!("Protection already registered on identity {}", identity_id);
+    }
+
     Ok(())
 }
 
@@ -1094,24 +1185,24 @@ mod tests {
         assert_eq!(summaries[0].status, IdentityStatus::PendingAdoption);
         let identity_id = summaries[0].id.clone();
 
-        handle_identity_command(
+        handle_adopt_command(
             repo,
             Some(replica),
             Some("Tester"),
             Some("tester@example.com"),
-            IdentityCommand::Adopt(IdentityAdoptArgs {
+            AdoptCommand::Identity(IdentityAdoptArgs {
                 identity_id: identity_id.to_string(),
                 signature: Some("Alice <alice@example.com>".into()),
                 message: None,
             }),
         )?;
 
-        handle_identity_command(
+        handle_protect_command(
             repo,
             Some(replica),
             Some("Tester"),
             Some("tester@example.com"),
-            IdentityCommand::Protect(IdentityProtectArgs {
+            ProtectCommand::Identity(IdentityProtectArgs {
                 identity_id: identity_id.to_string(),
                 pgp_fingerprint: "FP".into(),
                 armored_key: None,

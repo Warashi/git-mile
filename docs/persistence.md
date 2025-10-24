@@ -119,7 +119,7 @@ git-mile init --repo path/to/repo
 
 # Manage miles end-to-end
 git-mile create mile "Ship onboarding flow" --description "Track onboarding improvements"
-git-mile list --format table
+git-mile list mile --format table
 git-mile show <MILE_ID> --json
 git-mile open <MILE_ID>
 git-mile close <MILE_ID> --message "Reached GA quality"
@@ -129,9 +129,9 @@ git-mile mile list --all
 
 # Work with identities
 git-mile create identity --display-name "Alice" --email "alice@example.com" --adopt
-git-mile identity list --format json
-git-mile identity adopt <IDENTITY_ID> --signature "Alice <alice@example.com>"
-git-mile identity protect <IDENTITY_ID> --pgp-fingerprint ABC12345
+git-mile list identity --format json
+git-mile adopt identity <IDENTITY_ID> --signature "Alice <alice@example.com>"
+git-mile protect identity <IDENTITY_ID> --pgp-fingerprint ABC12345
 
 # Low-level DAG helpers remain available for debugging
 git-mile entity-debug list
@@ -144,7 +144,7 @@ git-mile entity-debug resolve <ENTITY_ID> --strategy manual --head <OP_ID>
 - `show` renders either a human-friendly description or the JSON snapshot emitted by `MileStore`.
 - `open` / `close` record status transitions via `change_status`, returning idempotent warnings when the desired state already matches.
 - `entity-debug` mirrors the previous `entity` namespace for advanced inspection and conflict resolution.
-- `identity` commands rely on `IdentityStore`: `create` optionally adopts immediately and seeds protections, `list` surfaces summaries, `adopt` assigns a replica signature, and `protect` records PGP metadata. `resolve_identity` now prefers an adopted identity over raw Git config when author information is required.
+- Identity-centric verbs (`create identity`, `list identity`, `adopt identity`, `protect identity`) rely on `IdentityStore`: creation optionally adopts immediately and seeds protections, listing surfaces summaries, adoption assigns a replica signature, and protection records PGP metadata. `resolve_identity` now prefers an adopted identity over raw Git config when author information is required.
 
 ## Testing Strategy
 
