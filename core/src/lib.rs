@@ -1,6 +1,7 @@
 pub mod clock;
 pub mod dag;
 pub mod error;
+pub mod identity;
 pub mod mile;
 
 pub use clock::{LamportClock, LamportTimestamp, ReplicaId};
@@ -9,6 +10,11 @@ pub use dag::{
     Operation, OperationBlob, OperationId, OperationMetadata, OperationPack, PackPersistResult,
 };
 pub use error::{Error, Result};
+pub use identity::{
+    AddProtectionInput, AddProtectionOutcome, AdoptIdentityInput, AdoptIdentityOutcome,
+    CreateIdentityInput, IdentityEvent, IdentityEventKind, IdentityId, IdentityProtection,
+    IdentitySnapshot, IdentityStatus, IdentityStore, IdentitySummary, ProtectionKind,
+};
 pub use mile::{
     ChangeStatusInput, ChangeStatusOutcome, CreateMileInput, MileEvent, MileEventKind, MileId,
     MileSnapshot, MileStatus, MileStatusChanged, MileStore, MileSummary,

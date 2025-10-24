@@ -208,14 +208,20 @@ impl MileStore {
         let mut miles = Vec::with_capacity(summaries.len());
 
         for summary in summaries {
-            let snapshot = self.entities.load_entity(&summary.entity_id)?;
-            let mile = build_mile_snapshot(snapshot)?;
-            miles.push(MileSummary {
-                id: mile.id,
-                title: mile.title.clone(),
-                status: mile.status,
-                updated_at: mile.updated_at.clone(),
-            });
+            let entity_id = summary.entity_id.clone();
+            let snapshot = self.entities.load_entity(&entity_id)?;
+            match build_mile_snapshot(snapshot) {
+                Ok(mile) => {
+                    miles.push(MileSummary {
+                        id: mile.id,
+                        title: mile.title.clone(),
+                        status: mile.status,
+                        updated_at: mile.updated_at.clone(),
+                    });
+                }
+                Err(Error::Validation(_)) => continue,
+                Err(err) => return Err(err),
+            }
         }
 
         miles.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
@@ -465,6 +471,7 @@ fn build_mile_snapshot(entity: EntitySnapshot) -> Result<MileSnapshot> {
 mod tests {
     use super::*;
     use crate::clock::ReplicaId;
+    use crate::identity::{CreateIdentityInput, IdentityStore};
     use tempfile::TempDir;
 
     fn init_store() -> (TempDir, MileStore) {
@@ -559,5 +566,41 @@ mod tests {
 
         assert!(!outcome.changed);
         assert_eq!(outcome.snapshot.events.len(), 1);
+    }
+
+    #[test]
+    fn list_miles_ignores_identity_entities() {
+        let (temp, store) = init_store();
+        let replica = ReplicaId::new("replica-a");
+
+        let identity_store = IdentityStore::open(temp.path()).expect("open identity store");
+        identity_store
+            .create_identity(CreateIdentityInput {
+                replica_id: replica.clone(),
+                author: "tester <tester@example.com>".into(),
+                message: None,
+                display_name: "Alice".into(),
+                email: "alice@example.com".into(),
+                login: None,
+                initial_signature: None,
+                adopt_immediately: true,
+                protections: vec![],
+            })
+            .expect("create identity");
+
+        let mile = store
+            .create_mile(CreateMileInput {
+                replica_id: replica.clone(),
+                author: "tester <tester@example.com>".into(),
+                message: None,
+                title: "Initial Mile".into(),
+                description: None,
+                initial_status: MileStatus::Open,
+            })
+            .expect("create mile");
+
+        let miles = store.list_miles().expect("list miles");
+        assert_eq!(miles.len(), 1);
+        assert_eq!(miles[0].id, mile.id);
     }
 }
