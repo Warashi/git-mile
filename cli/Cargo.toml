@@ -1,0 +1,7 @@
+[package]
+name = "git-mile"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+git_mile_core.workspace = true
