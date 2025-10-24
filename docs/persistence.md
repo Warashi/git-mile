@@ -123,9 +123,6 @@ git-mile list mile --format table
 git-mile show <MILE_ID> --json
 git-mile open <MILE_ID>
 git-mile close <MILE_ID> --message "Reached GA quality"
-# The same verbs are available under the namespaced alias:
-git-mile mile create --title "Ship onboarding flow"
-git-mile mile list --all
 
 # Work with identities
 git-mile create identity --display-name "Alice" --email "alice@example.com" --adopt

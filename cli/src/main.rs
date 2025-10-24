@@ -117,13 +117,6 @@ fn run() -> Result<()> {
             email.as_deref(),
             command,
         )?,
-        Commands::Mile { command } => handle_mile_command(
-            &repo,
-            replica.as_deref(),
-            author.as_deref(),
-            email.as_deref(),
-            command,
-        )?,
         Commands::EntityDebug(entity_args) => handle_entity_debug(&repo, entity_args)?,
     }
 
@@ -166,10 +159,6 @@ enum Commands {
     Protect {
         #[command(subcommand)]
         command: ProtectCommand,
-    },
-    Mile {
-        #[command(subcommand)]
-        command: MileCommand,
     },
     EntityDebug(EntityArgs),
 }
@@ -257,12 +246,6 @@ struct IdentityProtectArgs {
     armored_key: Option<PathBuf>,
     #[arg(long)]
     message: Option<String>,
-}
-
-#[derive(Subcommand)]
-enum MileCommand {
-    Create(MileCreateArgs),
-    List(MileListArgs),
 }
 
 #[derive(Subcommand)]
@@ -514,20 +497,6 @@ fn handle_protect_command(
         ProtectCommand::Identity(args) => run_identity_protect(repo, replica, author, email, args)?,
     }
 
-    Ok(())
-}
-
-fn handle_mile_command(
-    repo: &Path,
-    replica: Option<&str>,
-    author: Option<&str>,
-    email: Option<&str>,
-    command: MileCommand,
-) -> Result<()> {
-    match command {
-        MileCommand::Create(args) => run_mile_create(repo, replica, author, email, args)?,
-        MileCommand::List(args) => run_mile_list(repo, args)?,
-    }
     Ok(())
 }
 

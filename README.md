@@ -38,7 +38,7 @@ git-mile protect identity <IDENTITY_ID> --pgp-fingerprint ABC12345
 git-mile entity-debug list
 ```
 
-Global flags `--repo`, `--replica`, `--author`, and `--email` apply to every command; when omitted the CLI resolves values from the ambient Git configuration and host environment. Mile operations also have namespaced aliases (`git-mile mile create`, `git-mile mile list`) if you prefer explicit nouns in the command.
+Global flags `--repo`, `--replica`, `--author`, and `--email` apply to every command; when omitted the CLI resolves values from the ambient Git configuration and host environment.
 
 ## Tooling
 - `cargo fmt-all` / `cargo fmt --all --check` to enforce Rustfmt with edition 2024 settings.
