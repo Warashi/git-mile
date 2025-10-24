@@ -81,7 +81,7 @@ pub struct MileStatusChanged {
 }
 
 /// Represents a user-facing event in a mile's history.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct MileEvent {
     pub id: OperationId,
     pub timestamp: LamportTimestamp,
@@ -90,7 +90,8 @@ pub struct MileEvent {
 }
 
 /// High-level event kind presented to callers.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MileEventKind {
     Created(MileCreated),
     StatusChanged(MileStatusChanged),
@@ -102,7 +103,7 @@ pub enum MileEventKind {
 }
 
 /// Snapshot describing the current state of a mile.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct MileSnapshot {
     pub id: MileId,
     pub title: String,
@@ -115,7 +116,7 @@ pub struct MileSnapshot {
 }
 
 /// Summary data used for listing miles.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct MileSummary {
     pub id: MileId,
     pub title: String,
@@ -145,7 +146,7 @@ pub struct ChangeStatusInput {
 }
 
 /// Outcome returned when applying a status change.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ChangeStatusOutcome {
     pub changed: bool,
     pub snapshot: MileSnapshot,
