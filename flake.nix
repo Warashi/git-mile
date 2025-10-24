@@ -27,6 +27,7 @@
           mkShell {
             packages = [
               nixfmt
+              just
               rust-bin.stable.latest.complete
             ];
           };
