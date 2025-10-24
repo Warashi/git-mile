@@ -1,3 +1,9 @@
+pub mod clock;
+pub mod error;
+
+pub use clock::{LamportClock, LamportTimestamp, ReplicaId};
+pub use error::{Error, Result};
+
 pub const APP_NAME: &str = "git-mile";
 
 pub fn app_version() -> &'static str {
