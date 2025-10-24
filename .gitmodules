@@ -1,0 +1,3 @@
+[submodule "references/git-bug"]
+	path = references/git-bug
+	url = https://github.com/git-bug/git-bug.git
