@@ -34,12 +34,12 @@ fn run() -> Result<()> {
 
     match command {
         Commands::Init => command_init(&repo)?,
-        Commands::Create(args) => run_mile_create(
+        Commands::Create { command } => handle_create_command(
             &repo,
             replica.as_deref(),
             author.as_deref(),
             email.as_deref(),
-            args,
+            command,
         )?,
         Commands::List(args) => run_mile_list(&repo, args)?,
         Commands::Show(args) => {
@@ -135,7 +135,10 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Init,
-    Create(CreateArgs),
+    Create {
+        #[command(subcommand)]
+        command: CreateCommand,
+    },
     List(ListArgs),
     Show(ShowArgs),
     Open(StatusArgs),
@@ -152,7 +155,7 @@ enum Commands {
 }
 
 #[derive(Parser)]
-struct CreateArgs {
+struct MileCreateArgs {
     title: String,
     #[arg(long)]
     description: Option<String>,
@@ -182,6 +185,12 @@ struct StatusArgs {
     mile_id: String,
     #[arg(long)]
     message: Option<String>,
+}
+
+#[derive(Subcommand)]
+enum CreateCommand {
+    Mile(MileCreateArgs),
+    Identity(IdentityCreateArgs),
 }
 
 #[derive(Subcommand)]
@@ -240,7 +249,7 @@ struct IdentityProtectArgs {
 
 #[derive(Subcommand)]
 enum MileCommand {
-    Create(CreateArgs),
+    Create(MileCreateArgs),
     List(ListArgs),
 }
 
@@ -365,9 +374,9 @@ fn run_mile_create(
     replica: Option<&str>,
     author: Option<&str>,
     email: Option<&str>,
-    args: CreateArgs,
+    args: MileCreateArgs,
 ) -> Result<()> {
-    let CreateArgs {
+    let MileCreateArgs {
         title,
         description,
         message,
@@ -416,6 +425,23 @@ fn run_mile_list(repo: &Path, args: ListArgs) -> Result<()> {
             let mut handle = stdout.lock();
             to_writer_pretty(&mut handle, &miles)?;
             handle.write_all(b"\n")?;
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_create_command(
+    repo: &Path,
+    replica: Option<&str>,
+    author: Option<&str>,
+    email: Option<&str>,
+    command: CreateCommand,
+) -> Result<()> {
+    match command {
+        CreateCommand::Mile(args) => run_mile_create(repo, replica, author, email, args)?,
+        CreateCommand::Identity(args) => {
+            handle_identity_command(repo, replica, author, email, IdentityCommand::Create(args))?;
         }
     }
 
@@ -1045,12 +1071,12 @@ mod tests {
         let repo = temp.path();
         let replica = "cli-tests";
 
-        handle_identity_command(
+        handle_create_command(
             repo,
             Some(replica),
             Some("Tester"),
             Some("tester@example.com"),
-            IdentityCommand::Create(IdentityCreateArgs {
+            CreateCommand::Identity(IdentityCreateArgs {
                 display_name: "Alice".into(),
                 email: "alice@example.com".into(),
                 login: Some("alice".into()),
@@ -1163,7 +1189,7 @@ mod tests {
             Some(replica.as_str()),
             None,
             None,
-            CreateArgs {
+            MileCreateArgs {
                 title: "Identity Mile".into(),
                 description: None,
                 message: None,
