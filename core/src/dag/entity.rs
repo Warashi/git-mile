@@ -2,6 +2,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use uuid::Uuid;
 
 use crate::clock::{LamportTimestamp, ReplicaId};
@@ -65,6 +66,42 @@ impl OperationId {
 impl fmt::Display for OperationId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.timestamp.fmt(f)
+    }
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum ParseOperationIdError {
+    #[error("operation id must contain '@': {0}")]
+    MissingReplicaSeparator(String),
+    #[error("operation id has invalid logical time '{value}': {source}")]
+    InvalidCounter {
+        value: String,
+        #[source]
+        source: std::num::ParseIntError,
+    },
+}
+
+impl FromStr for OperationId {
+    type Err = ParseOperationIdError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let trimmed = s.trim();
+        let (counter_part, replica_part) = trimmed
+            .split_once('@')
+            .ok_or_else(|| ParseOperationIdError::MissingReplicaSeparator(trimmed.to_string()))?;
+
+        let counter: u64 =
+            counter_part
+                .parse()
+                .map_err(|source| ParseOperationIdError::InvalidCounter {
+                    value: counter_part.to_string(),
+                    source,
+                })?;
+
+        Ok(Self::new(LamportTimestamp::new(
+            counter,
+            ReplicaId::new(replica_part),
+        )))
     }
 }
 

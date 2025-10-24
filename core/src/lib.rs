@@ -4,7 +4,8 @@ pub mod error;
 
 pub use clock::{LamportClock, LamportTimestamp, ReplicaId};
 pub use dag::{
-    BlobRef, EntityId, Operation, OperationBlob, OperationId, OperationMetadata, OperationPack,
+    BlobRef, EntityId, EntitySnapshot, EntityStore, EntitySummary, MergeOutcome, MergeStrategy,
+    Operation, OperationBlob, OperationId, OperationMetadata, OperationPack, PackPersistResult,
 };
 pub use error::{Error, Result};
 
