@@ -28,7 +28,7 @@
             packages = [
               nixfmt
               just
-              rust-bin.stable.latest.complete
+              (rust-bin.fromRustupToolchainFile ./rust-toolchain.toml)
             ];
           };
       }
