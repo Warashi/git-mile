@@ -1,9 +1,11 @@
 use std::cmp::Ordering;
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::{Error, Result};
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct ReplicaId(String);
 
 impl ReplicaId {
@@ -28,7 +30,7 @@ impl From<ReplicaId> for String {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct LamportTimestamp {
     counter: u64,
     replica_id: ReplicaId,
@@ -66,6 +68,12 @@ impl PartialOrd for LamportTimestamp {
     }
 }
 
+impl fmt::Display for LamportTimestamp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}@{}", self.counter, self.replica_id)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct LamportClock {
     counter: u64,
@@ -84,6 +92,13 @@ impl LamportClock {
         Self {
             counter,
             replica_id,
+        }
+    }
+
+    pub fn from_snapshot(snapshot: LamportTimestamp) -> Self {
+        Self {
+            counter: snapshot.counter(),
+            replica_id: snapshot.replica_id().clone(),
         }
     }
 

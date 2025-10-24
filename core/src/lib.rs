@@ -1,7 +1,11 @@
 pub mod clock;
+pub mod dag;
 pub mod error;
 
 pub use clock::{LamportClock, LamportTimestamp, ReplicaId};
+pub use dag::{
+    BlobRef, EntityId, Operation, OperationBlob, OperationId, OperationMetadata, OperationPack,
+};
 pub use error::{Error, Result};
 
 pub const APP_NAME: &str = "git-mile";
