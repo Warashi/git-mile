@@ -6,6 +6,9 @@ Rust workspace for experimenting with Git powered workflows.
 - `core`: shared library APIs that back the CLI experience.
 - `cli`: binary crate that exposes the library functionality to end users.
 
+## Documentation
+- [Persistence design](docs/persistence.md)
+
 ## Tooling
 - `cargo fmt-all` / `cargo fmt --all --check` to enforce Rustfmt with edition 2024 settings.
 - `cargo lint` wraps Clippy across the entire workspace with warnings treated as errors.
