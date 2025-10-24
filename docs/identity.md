@@ -14,11 +14,12 @@ Whenever a snapshot cannot be decoded (for example due to unknown event variants
 
 ```bash
 # Create a new identity (optionally adopt immediately)
-git-mile identity create \
+git-mile create identity \
   --display-name "Alice Example" \
   --email "alice@example.com" \
   --login alice \
   --adopt
+# (alias) git-mile identity create ...
 
 # List known identities in a repository
 git-mile identity list --format table

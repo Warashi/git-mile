@@ -18,7 +18,7 @@ The `git-mile` binary exposes mile and identity workflows alongside debugging ut
 git-mile init --repo path/to/repo
 
 # create a mile with optional metadata overrides
-git-mile create "Ship onboarding flow" --description "Track onboarding improvements"
+git-mile create mile "Ship onboarding flow" --description "Track onboarding improvements"
 
 # inspect the current state of miles
 git-mile list --format table
@@ -29,7 +29,7 @@ git-mile open <MILE_ID>
 git-mile close <MILE_ID> --message "Reached GA quality"
 
 # identity lifecycle management
-git-mile identity create --display-name "Alice" --email "alice@example.com" --adopt
+git-mile create identity --display-name "Alice" --email "alice@example.com" --adopt
 git-mile identity list --format table
 git-mile identity adopt <IDENTITY_ID> --signature "Alice <alice@example.com>"
 git-mile identity protect <IDENTITY_ID> --pgp-fingerprint ABC12345

@@ -118,7 +118,7 @@ The `git-mile` binary layers both mile and identity verbs on top of `git_mile_co
 git-mile init --repo path/to/repo
 
 # Manage miles end-to-end
-git-mile create "Ship onboarding flow" --description "Track onboarding improvements"
+git-mile create mile "Ship onboarding flow" --description "Track onboarding improvements"
 git-mile list --format table
 git-mile show <MILE_ID> --json
 git-mile open <MILE_ID>
@@ -128,7 +128,7 @@ git-mile mile create --title "Ship onboarding flow"
 git-mile mile list --all
 
 # Work with identities
-git-mile identity create --display-name "Alice" --email "alice@example.com" --adopt
+git-mile create identity --display-name "Alice" --email "alice@example.com" --adopt
 git-mile identity list --format json
 git-mile identity adopt <IDENTITY_ID> --signature "Alice <alice@example.com>"
 git-mile identity protect <IDENTITY_ID> --pgp-fingerprint ABC12345
