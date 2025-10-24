@@ -5,6 +5,7 @@ This document describes how the `git-mile` workspace persists entity graphs to G
 ## High-level Architecture
 
 - The `git_mile_core` crate exposes `EntityStore`, a façade for reading and writing operation packs backed by a Git repository (local or bare).
+- The `core::mile` module composes the raw entity primitives into `MileStore`, adding typed snapshots, event semantics (`created`, `status_changed`), and status transitions that power the CLI.
 - The DAG of operations for each entity is encoded inside Git commits under the reference namespace `refs/git-mile/entities/<entity_id>`.
 - Lamport clocks provide a total order over operations while preserving replica identifiers for tie-breaking.
 
@@ -50,6 +51,29 @@ Key points:
 
 Trying to insert duplicate operation IDs or referencing unknown parents returns a validation error (`Error::validation`).
 
+## Mile Event Schema
+
+`MileStore` stores all state transitions as JSON payloads inside operation blobs. Each payload follows a tagged envelope:
+
+```json
+{
+  "version": 1,
+  "type": "created",
+  "data": {
+    "title": "Ship onboarding flow",
+    "description": "Track onboarding improvements",
+    "status": "open"
+  }
+}
+```
+
+Supported event variants:
+
+- `created` — emitted once per mile, capturing the title, optional description, and initial status (`draft`, `open`, or `closed`).
+- `status_changed` — records a transition to a new status (`data.status`), preserving the Lamport timestamp and metadata author/message.
+
+Unknown event types are surfaced as `MileEventKind::Unknown` during snapshot reconstruction; CLI consumers include them in history listings while skipping state transitions so that future schema changes degrade gracefully.
+
 ### Conflict Resolution
 
 `EntityStore::resolve_conflicts` provides a small set of head-selection strategies:
@@ -62,26 +86,34 @@ The current implementation simply updates the stored head set; producing a merge
 
 ## CLI Integration
 
-The `git-mile` binary uses `clap` to provide user-facing commands:
+The `git-mile` binary now layers mile-friendly verbs on top of `MileStore`:
 
 ```bash
-# List entities tracked in the repository (defaults to the current directory)
-git-mile entity list --repo path/to/repo
+# Initialise or reuse a repository
+git-mile init --repo path/to/repo
 
-# Show details for a single entity
-git-mile entity show 6f2d0f3a-... --repo path/to/repo
+# Manage miles end-to-end
+git-mile create "Ship onboarding flow" --description "Track onboarding improvements"
+git-mile list --format table
+git-mile show <MILE_ID> --json
+git-mile open <MILE_ID>
+git-mile close <MILE_ID> --message "Reached GA quality"
 
-# Resolve conflicts by selecting preferred heads
-git-mile entity resolve 6f2d0f3a-... --strategy manual --head 7@cli --repo path/to/repo
+# Low-level DAG helpers remain available for debugging
+git-mile entity-debug list
+git-mile entity-debug show <ENTITY_ID>
+git-mile entity-debug resolve <ENTITY_ID> --strategy manual --head <OP_ID>
 ```
 
-- `entity list` prints entity IDs with their head counts.
-- `entity show` loads the full snapshot and reports clock, heads, and operation counts.
-- `entity resolve` executes the merge strategy described above and prints the resulting head set.
+- `create` resolves author/email from Git config (overridable via `--author` / `--email`) and accepts per-command messages that flow into `OperationMetadata`.
+- `list` filters closed miles unless `--all` is specified and supports `--format table|json|raw`.
+- `show` renders either a human-friendly description or the JSON snapshot emitted by `MileStore`.
+- `open` / `close` record status transitions via `change_status`, returning idempotent warnings when the desired state already matches.
+- `entity-debug` mirrors the previous `entity` namespace for advanced inspection and conflict resolution.
 
 ## Testing Strategy
 
 - `git_mile_core` contains unit tests for Lamport clocks, DAG validation, Git round-trips, and conflict resolution semantics using bare repositories.
-- The CLI crate adds tests that exercise the new commands directly against temporary repositories to ensure end-to-end behaviour.
+- The CLI crate adds tests that exercise both the new mile verbs and the legacy entity helpers against temporary repositories to ensure end-to-end behaviour.
 
 These tests run via `cargo test-all`, which is also wired into CI.
