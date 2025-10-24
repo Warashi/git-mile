@@ -74,6 +74,31 @@ Supported event variants:
 
 Unknown event types are surfaced as `MileEventKind::Unknown` during snapshot reconstruction; CLI consumers include them in history listings while skipping state transitions so that future schema changes degrade gracefully.
 
+## Identity Event Schema
+
+`IdentityStore` mirrors the mile machinery with identity-specific events. Each payload shares the same top-level envelope:
+
+```json
+{
+  "version": 1,
+  "type": "created",
+  "data": {
+    "display_name": "Alice",
+    "email": "alice@example.com",
+    "login": "alice",
+    "initial_signature": null
+  }
+}
+```
+
+Supported variants:
+
+- `created` — bootstraps the identity with display name, email, optional login, and an optional initial signature. The snapshot enters the `pending_adoption` state.
+- `adopted` — records the replica that adopted the identity together with the canonical signature string. Only a single adoption event is permitted per identity; additional events result in validation errors.
+- `protection_added` — appends protection metadata such as PGP fingerprints. The first protection transitions the status to `protected`; duplicates (same kind and fingerprint) are ignored.
+
+Snapshots expose `IdentityStatus` (`pending_adoption`, `adopted`, `protected`), the adopting replica, current signature, and the full list of protections. Unknown events degrade to `IdentityEventKind::Unknown`, allowing forward compatibility without breaking list or load operations. `IdentityStore::list_identities` and `MileStore::list_miles` both skip entities whose histories cannot be decoded into their respective schemas, preventing identity packs from breaking mile listings (and vice versa).
+
 ### Conflict Resolution
 
 `EntityStore::resolve_conflicts` provides a small set of head-selection strategies:
@@ -86,7 +111,7 @@ The current implementation simply updates the stored head set; producing a merge
 
 ## CLI Integration
 
-The `git-mile` binary now layers mile-friendly verbs on top of `MileStore`:
+The `git-mile` binary layers both mile and identity verbs on top of `git_mile_core`:
 
 ```bash
 # Initialise or reuse a repository
@@ -98,6 +123,15 @@ git-mile list --format table
 git-mile show <MILE_ID> --json
 git-mile open <MILE_ID>
 git-mile close <MILE_ID> --message "Reached GA quality"
+# The same verbs are available under the namespaced alias:
+git-mile mile create --title "Ship onboarding flow"
+git-mile mile list --all
+
+# Work with identities
+git-mile identity create --display-name "Alice" --email "alice@example.com" --adopt
+git-mile identity list --format json
+git-mile identity adopt <IDENTITY_ID> --signature "Alice <alice@example.com>"
+git-mile identity protect <IDENTITY_ID> --pgp-fingerprint ABC12345
 
 # Low-level DAG helpers remain available for debugging
 git-mile entity-debug list
@@ -110,10 +144,11 @@ git-mile entity-debug resolve <ENTITY_ID> --strategy manual --head <OP_ID>
 - `show` renders either a human-friendly description or the JSON snapshot emitted by `MileStore`.
 - `open` / `close` record status transitions via `change_status`, returning idempotent warnings when the desired state already matches.
 - `entity-debug` mirrors the previous `entity` namespace for advanced inspection and conflict resolution.
+- `identity` commands rely on `IdentityStore`: `create` optionally adopts immediately and seeds protections, `list` surfaces summaries, `adopt` assigns a replica signature, and `protect` records PGP metadata. `resolve_identity` now prefers an adopted identity over raw Git config when author information is required.
 
 ## Testing Strategy
 
 - `git_mile_core` contains unit tests for Lamport clocks, DAG validation, Git round-trips, and conflict resolution semantics using bare repositories.
-- The CLI crate adds tests that exercise both the new mile verbs and the legacy entity helpers against temporary repositories to ensure end-to-end behaviour.
+- The CLI crate adds tests that exercise both the mile verbs and the new identity lifecycle against temporary repositories to ensure end-to-end behaviour.
 
 These tests run via `cargo test-all`, which is also wired into CI.

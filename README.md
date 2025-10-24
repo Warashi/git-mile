@@ -8,9 +8,10 @@ Rust workspace for experimenting with Git powered workflows.
 
 ## Documentation
 - [Persistence design](docs/persistence.md)
+- [Identity lifecycle](docs/identity.md)
 
 ## CLI Usage
-The `git-mile` binary exposes mile-oriented verbs alongside debugging utilities:
+The `git-mile` binary exposes mile and identity workflows alongside debugging utilities:
 
 ```bash
 # bootstrap a repository (creates one if needed)
@@ -27,11 +28,17 @@ git-mile show <MILE_ID> --json
 git-mile open <MILE_ID>
 git-mile close <MILE_ID> --message "Reached GA quality"
 
+# identity lifecycle management
+git-mile identity create --display-name "Alice" --email "alice@example.com" --adopt
+git-mile identity list --format table
+git-mile identity adopt <IDENTITY_ID> --signature "Alice <alice@example.com>"
+git-mile identity protect <IDENTITY_ID> --pgp-fingerprint ABC12345
+
 # legacy DAG commands remain available for debugging
 git-mile entity-debug list
 ```
 
-Global flags `--repo`, `--replica`, `--author`, and `--email` apply to every command; when omitted the CLI resolves values from the ambient Git configuration and host environment.
+Global flags `--repo`, `--replica`, `--author`, and `--email` apply to every command; when omitted the CLI resolves values from the ambient Git configuration and host environment. Mile operations also have namespaced aliases (`git-mile mile create`, `git-mile mile list`) for parity with the new identity namespace.
 
 ## Tooling
 - `cargo fmt-all` / `cargo fmt --all --check` to enforce Rustfmt with edition 2024 settings.
