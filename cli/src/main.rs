@@ -10,13 +10,15 @@ use anyhow::{Context, Result, anyhow};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use git_mile_core::issue::{
     AppendIssueCommentInput, CreateIssueInput, IssueId, IssueSnapshot, IssueStatus, IssueStore,
+    UpdateIssueLabelsInput,
 };
 use git_mile_core::{
     AddProtectionInput, AdoptIdentityInput, AppendCommentInput, ChangeStatusInput,
     ChangeStatusOutcome, CreateIdentityInput, CreateMileInput, EntityId, EntitySnapshot,
     EntityStore, EntitySummary, IdentityProtection, IdentityStore, IdentitySummary,
     LamportTimestamp, LockMode, MergeOutcome, MergeStrategy, MileEventKind, MileId, MileSnapshot,
-    MileStatus, MileStore, MileSummary, OperationId, ProtectionKind, ReplicaId, app_version,
+    MileStatus, MileStore, MileSummary, OperationId, ProtectionKind, ReplicaId, UpdateLabelsInput,
+    app_version,
 };
 use git2::{Config, ErrorCode, Repository};
 use serde_json::{json, to_writer_pretty};
@@ -124,6 +126,13 @@ fn run() -> Result<()> {
             email.as_deref(),
             command,
         )?,
+        Commands::Label { command } => handle_label_command(
+            &repo,
+            replica.as_deref(),
+            author.as_deref(),
+            email.as_deref(),
+            command,
+        )?,
         Commands::Comment { command } => handle_comment_command(
             &repo,
             replica.as_deref(),
@@ -173,6 +182,10 @@ enum Commands {
     Protect {
         #[command(subcommand)]
         command: ProtectCommand,
+    },
+    Label {
+        #[command(subcommand)]
+        command: LabelCommand,
     },
     Comment {
         #[command(subcommand)]
@@ -228,6 +241,13 @@ enum CommentCommand {
     Issue(CommentTargetArgs),
 }
 
+#[derive(Subcommand)]
+enum LabelCommand {
+    #[command(alias = "mile")]
+    Milestone(LabelTargetArgs),
+    Issue(LabelTargetArgs),
+}
+
 #[derive(Args, Default)]
 struct CommentTargetArgs {
     id: String,
@@ -239,6 +259,21 @@ struct CommentTargetArgs {
     json: bool,
     #[arg(long = "dry-run")]
     dry_run: bool,
+}
+
+#[derive(Args, Default)]
+struct LabelTargetArgs {
+    id: String,
+    #[arg(long = "add", value_name = "LABEL")]
+    add: Vec<String>,
+    #[arg(long = "remove", value_name = "LABEL")]
+    remove: Vec<String>,
+    #[arg(long = "set", value_name = "LABEL")]
+    set: Vec<String>,
+    #[arg(long)]
+    clear: bool,
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Parser)]
@@ -1217,6 +1252,227 @@ fn run_comment_issue(
     )
 }
 
+fn run_label_milestone(
+    repo: &Path,
+    replica: Option<&str>,
+    author: Option<&str>,
+    email: Option<&str>,
+    args: LabelTargetArgs,
+) -> Result<()> {
+    let mile_id = parse_entity_id(&args.id)?;
+    let snapshot = command_mile_show(repo, &mile_id)?;
+    let delta = compute_label_delta(&args, &snapshot.labels)?;
+    let json = args.json;
+
+    if delta.add.is_empty() && delta.remove.is_empty() {
+        print_label_noop("milestone", &mile_id, &snapshot.labels, json)?;
+        return Ok(());
+    }
+
+    let replica_id = resolve_replica(replica);
+    let identity = resolve_identity(repo, &replica_id, author, email)?;
+    let store = MileStore::open_with_mode(repo, LockMode::Write)?;
+    let outcome = store.update_labels(UpdateLabelsInput {
+        mile_id: mile_id.clone(),
+        replica_id: replica_id.clone(),
+        author: identity.signature.clone(),
+        message: Some(format!("label milestone {}", mile_id)),
+        add: delta.add.clone(),
+        remove: delta.remove.clone(),
+    })?;
+
+    if !outcome.changed {
+        print_label_noop("milestone", &mile_id, &outcome.snapshot.labels, json)?;
+        return Ok(());
+    }
+
+    print_label_result(
+        "milestone",
+        &mile_id,
+        &outcome.added,
+        &outcome.removed,
+        &outcome.snapshot.labels,
+        json,
+    )
+}
+
+fn run_label_issue(
+    repo: &Path,
+    replica: Option<&str>,
+    author: Option<&str>,
+    email: Option<&str>,
+    args: LabelTargetArgs,
+) -> Result<()> {
+    let issue_id = parse_entity_id(&args.id)?;
+    let snapshot = command_issue_show(repo, &issue_id)?;
+    let delta = compute_label_delta(&args, &snapshot.labels)?;
+    let json = args.json;
+
+    if delta.add.is_empty() && delta.remove.is_empty() {
+        print_label_noop("issue", &issue_id, &snapshot.labels, json)?;
+        return Ok(());
+    }
+
+    let replica_id = resolve_replica(replica);
+    let identity = resolve_identity(repo, &replica_id, author, email)?;
+    let store = IssueStore::open_with_mode(repo, LockMode::Write)?;
+    let outcome = store.update_labels(UpdateIssueLabelsInput {
+        issue_id: issue_id.clone(),
+        replica_id: replica_id.clone(),
+        author: identity.signature.clone(),
+        message: Some(format!("label issue {}", issue_id)),
+        add: delta.add.clone(),
+        remove: delta.remove.clone(),
+    })?;
+
+    if !outcome.changed {
+        print_label_noop("issue", &issue_id, &outcome.snapshot.labels, json)?;
+        return Ok(());
+    }
+
+    print_label_result(
+        "issue",
+        &issue_id,
+        &outcome.added,
+        &outcome.removed,
+        &outcome.snapshot.labels,
+        json,
+    )
+}
+
+struct LabelDelta {
+    add: Vec<String>,
+    remove: Vec<String>,
+}
+
+fn compute_label_delta(args: &LabelTargetArgs, current: &BTreeSet<String>) -> Result<LabelDelta> {
+    if args.clear {
+        if !args.set.is_empty() {
+            return Err(anyhow!("--clear cannot be combined with --set"));
+        }
+        if !args.add.is_empty() || !args.remove.is_empty() {
+            return Err(anyhow!("--clear cannot be combined with --add or --remove"));
+        }
+        let add = Vec::new();
+        let remove = current.iter().cloned().collect();
+        return Ok(LabelDelta { add, remove });
+    }
+
+    if !args.set.is_empty() {
+        if !args.add.is_empty() || !args.remove.is_empty() {
+            return Err(anyhow!("--set cannot be combined with --add or --remove"));
+        }
+        let target = normalize_label_list(&args.set)?;
+        let target_set: BTreeSet<String> = target.into_iter().collect();
+
+        let add: Vec<String> = target_set.difference(current).cloned().collect();
+        let remove: Vec<String> = current.difference(&target_set).cloned().collect();
+        return Ok(LabelDelta { add, remove });
+    }
+
+    if args.add.is_empty() && args.remove.is_empty() {
+        return Err(anyhow!(
+            "no label operations specified; use --add/--remove/--set/--clear"
+        ));
+    }
+
+    let add = normalize_label_list(&args.add)?;
+    let remove = normalize_label_list(&args.remove)?;
+
+    let add_set: BTreeSet<String> = add.iter().cloned().collect();
+    let remove_set: BTreeSet<String> = remove.iter().cloned().collect();
+    if add_set.intersection(&remove_set).next().is_some() {
+        return Err(anyhow!(
+            "labels cannot be specified in both --add and --remove"
+        ));
+    }
+
+    Ok(LabelDelta {
+        add: add_set.into_iter().collect(),
+        remove: remove_set.into_iter().collect(),
+    })
+}
+
+fn normalize_label_list(values: &[String]) -> Result<Vec<String>> {
+    let mut normalized = BTreeSet::new();
+    for value in values {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err(anyhow!("label names cannot be empty"));
+        }
+        normalized.insert(trimmed.to_string());
+    }
+    Ok(normalized.into_iter().collect())
+}
+
+fn print_label_noop(
+    resource: &str,
+    resource_id: &EntityId,
+    labels: &BTreeSet<String>,
+    json: bool,
+) -> Result<()> {
+    let current: Vec<String> = labels.iter().cloned().collect();
+    if json {
+        let payload = json!({
+            "resource": resource,
+            "resource_id": resource_id.to_string(),
+            "changed": false,
+            "added": [],
+            "removed": [],
+            "current": current,
+        });
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        to_writer_pretty(&mut handle, &payload)?;
+        handle.write_all(b"\n")?;
+        return Ok(());
+    }
+
+    println!("No label changes needed for {} {}", resource, resource_id);
+    println!(" Current: {}", format_label_list(&current));
+    Ok(())
+}
+
+fn print_label_result(
+    resource: &str,
+    resource_id: &EntityId,
+    added: &[String],
+    removed: &[String],
+    labels: &BTreeSet<String>,
+    json: bool,
+) -> Result<()> {
+    let current: Vec<String> = labels.iter().cloned().collect();
+    if json {
+        let payload = json!({
+            "resource": resource,
+            "resource_id": resource_id.to_string(),
+            "changed": true,
+            "added": added,
+            "removed": removed,
+            "current": current,
+        });
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        to_writer_pretty(&mut handle, &payload)?;
+        handle.write_all(b"\n")?;
+        return Ok(());
+    }
+
+    println!("Labels updated on {} {}", resource, resource_id);
+    println!(" Added: {}", format_label_list(added));
+    println!(" Removed: {}", format_label_list(removed));
+    println!(" Current: {}", format_label_list(&current));
+    Ok(())
+}
+
+fn format_label_list(labels: &[String]) -> String {
+    if labels.is_empty() {
+        "(none)".to_string()
+    } else {
+        labels.join(", ")
+    }
+}
+
 fn run_mile_list(repo: &Path, args: MileListArgs) -> Result<()> {
     let MileListArgs { all, format } = args;
     let mut miles = command_mile_list(repo)?;
@@ -1315,6 +1571,21 @@ fn handle_comment_command(
             run_comment_milestone(repo, replica, author, email, args)?
         }
         CommentCommand::Issue(args) => run_comment_issue(repo, replica, author, email, args)?,
+    }
+
+    Ok(())
+}
+
+fn handle_label_command(
+    repo: &Path,
+    replica: Option<&str>,
+    author: Option<&str>,
+    email: Option<&str>,
+    command: LabelCommand,
+) -> Result<()> {
+    match command {
+        LabelCommand::Milestone(args) => run_label_milestone(repo, replica, author, email, args)?,
+        LabelCommand::Issue(args) => run_label_issue(repo, replica, author, email, args)?,
     }
 
     Ok(())
@@ -2248,6 +2519,115 @@ mod tests {
             Some("Tester"),
             Some("tester@example.com"),
             comment_args,
+        );
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn milestone_label_add_remove_flow() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        Repository::init_bare(temp.path())?;
+        let replica = ReplicaId::new("replica-label-milestone");
+
+        let snapshot = command_mile_create(
+            temp.path(),
+            &replica,
+            "tester <tester@example.com>",
+            "Milestone",
+            None,
+            None,
+            &["frontend".to_string()],
+            None,
+            MileStatus::Open,
+        )?;
+
+        let mut label_args = LabelTargetArgs::default();
+        label_args.id = snapshot.id.to_string();
+        label_args.add = vec!["backend".into()];
+        label_args.remove = vec!["frontend".into()];
+
+        run_label_milestone(
+            temp.path(),
+            Some("replica-label-milestone"),
+            Some("Tester"),
+            Some("tester@example.com"),
+            label_args,
+        )?;
+
+        let store = MileStore::open_with_mode(temp.path(), LockMode::Read)?;
+        let updated = store.load_mile(&snapshot.id)?;
+        let collected: Vec<_> = updated.labels.iter().cloned().collect();
+        assert_eq!(collected, vec!["backend"]);
+        Ok(())
+    }
+
+    #[test]
+    fn issue_label_set_replaces_all() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        Repository::init_bare(temp.path())?;
+        let replica = ReplicaId::new("replica-label-issue");
+
+        let snapshot = command_issue_create(
+            temp.path(),
+            &replica,
+            "tester <tester@example.com>",
+            "Issue",
+            None,
+            None,
+            &["bug".into(), "core".into()],
+            None,
+            IssueStatus::Open,
+        )?;
+
+        let mut label_args = LabelTargetArgs::default();
+        label_args.id = snapshot.id.to_string();
+        label_args.set = vec!["core".into(), "triaged".into()];
+
+        run_label_issue(
+            temp.path(),
+            Some("replica-label-issue"),
+            Some("Tester"),
+            Some("tester@example.com"),
+            label_args,
+        )?;
+
+        let store = IssueStore::open_with_mode(temp.path(), LockMode::Read)?;
+        let updated = store.load_issue(&snapshot.id)?;
+        let collected: Vec<_> = updated.labels.iter().cloned().collect();
+        assert_eq!(collected, vec!["core", "triaged"]);
+        Ok(())
+    }
+
+    #[test]
+    fn label_command_rejects_conflicting_flags() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        Repository::init_bare(temp.path())?;
+        let replica = ReplicaId::new("replica-label-conflict");
+
+        let snapshot = command_mile_create(
+            temp.path(),
+            &replica,
+            "tester <tester@example.com>",
+            "Milestone",
+            None,
+            None,
+            &[],
+            None,
+            MileStatus::Open,
+        )?;
+
+        let mut label_args = LabelTargetArgs::default();
+        label_args.id = snapshot.id.to_string();
+        label_args.add = vec!["backend".into()];
+        label_args.set = vec!["frontend".into()];
+
+        let result = run_label_milestone(
+            temp.path(),
+            Some("replica-label-conflict"),
+            Some("Tester"),
+            Some("tester@example.com"),
+            label_args,
         );
         assert!(result.is_err());
         Ok(())
