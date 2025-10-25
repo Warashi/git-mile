@@ -15,7 +15,14 @@ use git_mile_core::issue::{
     AppendIssueCommentInput, CreateIssueInput, IssueId, IssueSnapshot, IssueStatus, IssueStore,
     UpdateIssueLabelsInput,
 };
-use git_mile_core::model::LabelOperation;
+use git_mile_core::model::{
+    IssueDetails as CoreIssueDetails, LabelOperation, MilestoneDetails as CoreMilestoneDetails,
+};
+use git_mile_core::query::{
+    ComparisonExpr, ComparisonOp, Literal, LogicalExpr, PageCursor, QueryEngine, QueryExpr,
+    QueryRequest, QueryResponse, QuerySchema, issue_schema, milestone_schema, parse_sort_specs,
+    prepare_filter,
+};
 use git_mile_core::repo::{
     CacheConfig, CacheNamespace, CacheRepository, EntityCacheAdapter, PersistentCache,
     RepositoryCacheHook,
@@ -329,6 +336,16 @@ struct MilestoneListArgs {
     format: OutputFormat,
     #[arg(long)]
     json: bool,
+    #[arg(long)]
+    filter: Option<String>,
+    #[arg(long = "sort", value_name = "FIELD[:asc|desc]", action = clap::ArgAction::Append)]
+    sort: Vec<String>,
+    #[arg(long)]
+    limit: Option<usize>,
+    #[arg(long)]
+    cursor: Option<String>,
+    #[arg(long)]
+    legacy_query: bool,
 }
 
 #[derive(Parser)]
@@ -343,6 +360,16 @@ struct IssueListArgs {
     format: OutputFormat,
     #[arg(long)]
     json: bool,
+    #[arg(long)]
+    filter: Option<String>,
+    #[arg(long = "sort", value_name = "FIELD[:asc|desc]", action = clap::ArgAction::Append)]
+    sort: Vec<String>,
+    #[arg(long)]
+    limit: Option<usize>,
+    #[arg(long)]
+    cursor: Option<String>,
+    #[arg(long)]
+    legacy_query: bool,
 }
 
 #[derive(Parser)]
@@ -530,6 +557,127 @@ impl CacheBundle {
             namespace,
         ))
     }
+}
+
+fn build_query_request(
+    schema: &QuerySchema,
+    filter: Option<&str>,
+    sort_tokens: &[String],
+    limit: Option<usize>,
+    cursor: Option<&str>,
+) -> Result<QueryRequest> {
+    let filter_expr =
+        prepare_filter(schema, filter).map_err(|err| anyhow!("filter error: {err}"))?;
+    let sort_specs = parse_sort_specs(sort_tokens).map_err(|err| anyhow!("sort error: {err}"))?;
+    let cursor_value = if let Some(raw) = cursor {
+        Some(PageCursor::parse(raw).map_err(|err| anyhow!("invalid cursor: {err}"))?)
+    } else {
+        None
+    };
+
+    Ok(QueryRequest {
+        filter: filter_expr,
+        sort: sort_specs,
+        limit,
+        cursor: cursor_value,
+    })
+}
+
+fn augment_with_open_filter(mut request: QueryRequest, status_field: &str) -> QueryRequest {
+    let open_expr = QueryExpr::Comparison(ComparisonExpr {
+        operator: ComparisonOp::NotEq,
+        field: status_field.to_string(),
+        values: vec![Literal::String("closed".to_string())],
+    });
+
+    request.filter = match request.filter.take() {
+        Some(existing) => Some(QueryExpr::Logical(LogicalExpr::And(vec![
+            existing, open_expr,
+        ]))),
+        None => Some(open_expr),
+    };
+
+    request
+}
+
+fn execute_milestone_query(
+    repo: &Path,
+    schema: &QuerySchema,
+    request: &QueryRequest,
+) -> Result<QueryResponse<CoreMilestoneDetails>> {
+    let records = load_milestone_details(repo)?;
+    let engine = QueryEngine::new(schema.clone());
+    engine
+        .execute(records, request)
+        .map_err(|err| anyhow!("query execution failed: {err}"))
+}
+
+fn execute_issue_query(
+    repo: &Path,
+    schema: &QuerySchema,
+    request: &QueryRequest,
+) -> Result<QueryResponse<CoreIssueDetails>> {
+    let records = load_issue_details(repo)?;
+    let engine = QueryEngine::new(schema.clone());
+    engine
+        .execute(records, request)
+        .map_err(|err| anyhow!("query execution failed: {err}"))
+}
+
+fn load_milestone_details(repo: &Path) -> Result<Vec<CoreMilestoneDetails>> {
+    let cache = CacheBundle::open(repo);
+    let summaries = {
+        let store = if let Some(bundle) = cache.as_ref() {
+            MileStore::open_with_cache(
+                repo,
+                LockMode::Read,
+                bundle.adapter(CacheNamespace::Milestones),
+            )?
+        } else {
+            MileStore::open_with_mode(repo, LockMode::Read)?
+        };
+        store.list_miles()?
+    };
+    let service = if let Some(bundle) = cache.as_ref() {
+        MilestoneService::open_with_cache(
+            repo,
+            LockMode::Read,
+            bundle.adapter(CacheNamespace::Milestones),
+        )?
+    } else {
+        MilestoneService::open_with_mode(repo, LockMode::Read)?
+    };
+    let mut details = Vec::with_capacity(summaries.len());
+    for summary in summaries {
+        details.push(service.get_with_comments(&summary.id)?);
+    }
+    Ok(details)
+}
+
+fn load_issue_details(repo: &Path) -> Result<Vec<CoreIssueDetails>> {
+    let cache = CacheBundle::open(repo);
+    let summaries = {
+        let store = if let Some(bundle) = cache.as_ref() {
+            IssueStore::open_with_cache(
+                repo,
+                LockMode::Read,
+                bundle.adapter(CacheNamespace::Issues),
+            )?
+        } else {
+            IssueStore::open_with_mode(repo, LockMode::Read)?
+        };
+        store.list_issues()?
+    };
+    let service = if let Some(bundle) = cache.as_ref() {
+        IssueService::open_with_cache(repo, LockMode::Read, bundle.adapter(CacheNamespace::Issues))?
+    } else {
+        IssueService::open_with_mode(repo, LockMode::Read)?
+    };
+    let mut details = Vec::with_capacity(summaries.len());
+    for summary in summaries {
+        details.push(service.get_with_comments(&summary.id)?);
+    }
+    Ok(details)
 }
 
 fn command_init(repo: &Path) -> Result<()> {
@@ -1066,38 +1214,6 @@ fn command_mile_details(repo: &Path, mile_id: &MileId) -> Result<MilestoneDetail
     let details = service.get_with_comments(mile_id)?;
     Ok(details.into())
 }
-
-fn command_mile_details_list(repo: &Path) -> Result<Vec<MilestoneDetailsView>> {
-    let cache = CacheBundle::open(repo);
-    let summaries = {
-        let store = if let Some(bundle) = cache.as_ref() {
-            MileStore::open_with_cache(
-                repo,
-                LockMode::Read,
-                bundle.adapter(CacheNamespace::Milestones),
-            )?
-        } else {
-            MileStore::open_with_mode(repo, LockMode::Read)?
-        };
-        store.list_miles()?
-    };
-    let service = if let Some(bundle) = cache.as_ref() {
-        MilestoneService::open_with_cache(
-            repo,
-            LockMode::Read,
-            bundle.adapter(CacheNamespace::Milestones),
-        )?
-    } else {
-        MilestoneService::open_with_mode(repo, LockMode::Read)?
-    };
-    let mut views = Vec::with_capacity(summaries.len());
-    for summary in summaries {
-        let detail = service.get_with_comments(&summary.id)?;
-        views.push(detail.into());
-    }
-    Ok(views)
-}
-
 fn command_issue_details(repo: &Path, issue_id: &IssueId) -> Result<IssueDetailsView> {
     let cache = CacheBundle::open(repo);
     let service = if let Some(bundle) = cache.as_ref() {
@@ -1110,30 +1226,8 @@ fn command_issue_details(repo: &Path, issue_id: &IssueId) -> Result<IssueDetails
 }
 
 fn command_issue_details_list(repo: &Path) -> Result<Vec<IssueDetailsView>> {
-    let cache = CacheBundle::open(repo);
-    let summaries = {
-        let store = if let Some(bundle) = cache.as_ref() {
-            IssueStore::open_with_cache(
-                repo,
-                LockMode::Read,
-                bundle.adapter(CacheNamespace::Issues),
-            )?
-        } else {
-            IssueStore::open_with_mode(repo, LockMode::Read)?
-        };
-        store.list_issues()?
-    };
-    let service = if let Some(bundle) = cache.as_ref() {
-        IssueService::open_with_cache(repo, LockMode::Read, bundle.adapter(CacheNamespace::Issues))?
-    } else {
-        IssueService::open_with_mode(repo, LockMode::Read)?
-    };
-    let mut views = Vec::with_capacity(summaries.len());
-    for summary in summaries {
-        let detail = service.get_with_comments(&summary.id)?;
-        views.push(detail.into());
-    }
-    Ok(views)
+    let details = load_issue_details(repo)?;
+    Ok(details.into_iter().map(IssueDetailsView::from).collect())
 }
 
 #[cfg(test)]
@@ -1727,6 +1821,11 @@ fn run_milestone_list(repo: &Path, args: MilestoneListArgs) -> Result<()> {
         columns,
         format,
         json,
+        filter,
+        sort,
+        limit,
+        cursor,
+        legacy_query,
     } = args;
 
     let resolved_format = if json { OutputFormat::Json } else { format };
@@ -1734,7 +1833,8 @@ fn run_milestone_list(repo: &Path, args: MilestoneListArgs) -> Result<()> {
     let legacy_mode = std::env::var("GIT_MILE_LIST_LEGACY")
         .ok()
         .map(|value| is_env_truthy(&value))
-        .unwrap_or(false);
+        .unwrap_or(false)
+        || legacy_query;
 
     if legacy_mode {
         let mut miles = command_mile_list(repo)?;
@@ -1760,20 +1860,43 @@ fn run_milestone_list(repo: &Path, args: MilestoneListArgs) -> Result<()> {
         return Ok(());
     }
 
-    let mut milestones = command_mile_details_list(repo)?;
+    let schema = milestone_schema();
+    let mut request =
+        build_query_request(&schema, filter.as_deref(), &sort, limit, cursor.as_deref())?;
     if !all {
-        milestones.retain(|milestone| milestone.status != MileStatus::Closed);
+        request = augment_with_open_filter(request, "status");
     }
+
+    let response = execute_milestone_query(repo, &schema, &request)?;
+    let milestones: Vec<MilestoneDetailsView> = response
+        .items
+        .into_iter()
+        .map(MilestoneDetailsView::from)
+        .collect();
 
     match resolved_format {
         OutputFormat::Json => {
+            let payload = json!({
+                "items": milestones,
+                "next_cursor": response.next_cursor,
+            });
             let stdout = io::stdout();
             let mut handle = stdout.lock();
-            to_writer_pretty(&mut handle, &milestones)?;
+            to_writer_pretty(&mut handle, &payload)?;
             handle.write_all(b"\n")?;
         }
-        OutputFormat::Table => print_list_table(&milestones, columns.as_deref(), long)?,
-        OutputFormat::Raw => print_list_raw(&milestones, columns.as_deref())?,
+        OutputFormat::Table => {
+            print_list_table(&milestones, columns.as_deref(), long)?;
+            if let Some(cursor) = response.next_cursor {
+                println!("\nNext cursor: {cursor}");
+            }
+        }
+        OutputFormat::Raw => {
+            print_list_raw(&milestones, columns.as_deref())?;
+            if let Some(cursor) = response.next_cursor {
+                println!("\nNext cursor: {cursor}");
+            }
+        }
     }
 
     Ok(())
@@ -1786,24 +1909,76 @@ fn run_issue_list(repo: &Path, args: IssueListArgs) -> Result<()> {
         columns,
         format,
         json,
+        filter,
+        sort,
+        limit,
+        cursor,
+        legacy_query,
     } = args;
 
     let resolved_format = if json { OutputFormat::Json } else { format };
 
-    let mut issues = command_issue_details_list(repo)?;
-    if !all {
-        issues.retain(|issue| issue.status != IssueStatus::Closed);
+    let legacy_mode = std::env::var("GIT_MILE_LIST_LEGACY")
+        .ok()
+        .map(|value| is_env_truthy(&value))
+        .unwrap_or(false)
+        || legacy_query;
+
+    if legacy_mode {
+        let mut issues = command_issue_details_list(repo)?;
+        if !all {
+            issues.retain(|issue| issue.status != IssueStatus::Closed);
+        }
+        match resolved_format {
+            OutputFormat::Json => {
+                let stdout = io::stdout();
+                let mut handle = stdout.lock();
+                to_writer_pretty(&mut handle, &issues)?;
+                handle.write_all(b"\n")?;
+            }
+            OutputFormat::Table => print_list_table(&issues, columns.as_deref(), long)?,
+            OutputFormat::Raw => print_list_raw(&issues, columns.as_deref())?,
+        }
+        return Ok(());
     }
+
+    let schema = issue_schema();
+    let mut request =
+        build_query_request(&schema, filter.as_deref(), &sort, limit, cursor.as_deref())?;
+    if !all {
+        request = augment_with_open_filter(request, "status");
+    }
+
+    let response = execute_issue_query(repo, &schema, &request)?;
+    let issues: Vec<IssueDetailsView> = response
+        .items
+        .into_iter()
+        .map(IssueDetailsView::from)
+        .collect();
 
     match resolved_format {
         OutputFormat::Json => {
+            let payload = json!({
+                "items": issues,
+                "next_cursor": response.next_cursor,
+            });
             let stdout = io::stdout();
             let mut handle = stdout.lock();
-            to_writer_pretty(&mut handle, &issues)?;
+            to_writer_pretty(&mut handle, &payload)?;
             handle.write_all(b"\n")?;
         }
-        OutputFormat::Table => print_list_table(&issues, columns.as_deref(), long)?,
-        OutputFormat::Raw => print_list_raw(&issues, columns.as_deref())?,
+        OutputFormat::Table => {
+            print_list_table(&issues, columns.as_deref(), long)?;
+            if let Some(cursor) = response.next_cursor {
+                println!("\nNext cursor: {cursor}");
+            }
+        }
+        OutputFormat::Raw => {
+            print_list_raw(&issues, columns.as_deref())?;
+            if let Some(cursor) = response.next_cursor {
+                println!("\nNext cursor: {cursor}");
+            }
+        }
     }
 
     Ok(())
@@ -3392,6 +3567,138 @@ mod tests {
         let updated = store.load_issue(&snapshot.id)?;
         let collected: Vec<_> = updated.labels.iter().cloned().collect();
         assert_eq!(collected, vec!["core", "triaged"]);
+        Ok(())
+    }
+
+    #[test]
+    fn milestone_query_filters_closed_entries() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        Repository::init_bare(temp.path())?;
+        let replica = ReplicaId::new("query-filter");
+
+        command_mile_create(
+            temp.path(),
+            &replica,
+            "tester <tester@example.com>",
+            "Open Mile",
+            None,
+            None,
+            &[],
+            None,
+            MileStatus::Open,
+        )?;
+
+        let closed = command_mile_create(
+            temp.path(),
+            &replica,
+            "tester <tester@example.com>",
+            "Closed Mile",
+            None,
+            None,
+            &[],
+            None,
+            MileStatus::Open,
+        )?;
+
+        command_mile_change_status(
+            temp.path(),
+            &replica,
+            "tester <tester@example.com>",
+            &closed.id,
+            MileStatus::Closed,
+            None,
+        )?;
+
+        let schema = milestone_schema();
+        let request = build_query_request(&schema, Some("(= status \"open\")"), &[], None, None)?;
+        let response = execute_milestone_query(temp.path(), &schema, &request)?;
+        assert_eq!(response.items.len(), 1);
+        assert_eq!(response.items[0].status, MileStatus::Open);
+        Ok(())
+    }
+
+    #[test]
+    fn issue_query_sorts_by_title_desc() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        Repository::init_bare(temp.path())?;
+
+        run_issue_create(
+            temp.path(),
+            Some("replica-a"),
+            Some("Tester"),
+            Some("tester@example.com"),
+            IssueCreateArgs {
+                title: "Alpha".into(),
+                common: {
+                    let mut args = CreateCommonArgs::default();
+                    args.comment.no_editor = true;
+                    args
+                },
+                message: None,
+                draft: false,
+                json: false,
+            },
+        )?;
+
+        run_issue_create(
+            temp.path(),
+            Some("replica-z"),
+            Some("Tester"),
+            Some("tester@example.com"),
+            IssueCreateArgs {
+                title: "Zulu".into(),
+                common: {
+                    let mut args = CreateCommonArgs::default();
+                    args.comment.no_editor = true;
+                    args
+                },
+                message: None,
+                draft: false,
+                json: false,
+            },
+        )?;
+
+        let schema = issue_schema();
+        let request = build_query_request(&schema, None, &["title:desc".into()], None, None)?;
+        let response = execute_issue_query(temp.path(), &schema, &request)?;
+        assert_eq!(response.items.len(), 2);
+        assert_eq!(response.items[0].title, "Zulu");
+        assert_eq!(response.items[1].title, "Alpha");
+        Ok(())
+    }
+
+    #[test]
+    fn milestone_query_supports_pagination() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        Repository::init_bare(temp.path())?;
+        let replica = ReplicaId::new("replica-paging");
+
+        for index in 0..3 {
+            let title = format!("Mile {index}");
+            command_mile_create(
+                temp.path(),
+                &replica,
+                "tester <tester@example.com>",
+                title.as_str(),
+                None,
+                None,
+                &[],
+                None,
+                MileStatus::Open,
+            )?;
+        }
+
+        let schema = milestone_schema();
+        let request = build_query_request(&schema, None, &["title:asc".into()], Some(2), None)?;
+        let first_page = execute_milestone_query(temp.path(), &schema, &request)?;
+        assert_eq!(first_page.items.len(), 2);
+        let cursor = first_page.next_cursor.expect("cursor present");
+
+        let next_request =
+            build_query_request(&schema, None, &["title:asc".into()], Some(2), Some(&cursor))?;
+        let second_page = execute_milestone_query(temp.path(), &schema, &next_request)?;
+        assert_eq!(second_page.items.len(), 1);
+        assert!(second_page.next_cursor.is_none());
         Ok(())
     }
 

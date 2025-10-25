@@ -489,6 +489,7 @@ dependencies = [
  "fs2",
  "git2",
  "hex",
+ "nom",
  "rocksdb",
  "serde",
  "serde_bytes",

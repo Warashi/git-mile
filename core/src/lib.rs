@@ -5,6 +5,7 @@ pub mod identity;
 pub mod issue;
 pub mod mile;
 pub mod model;
+pub mod query;
 pub mod repo;
 pub mod service;
 

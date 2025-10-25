@@ -16,6 +16,7 @@ fs2 = "0.4"
 rocksdb = "0.22"
 serde_cbor = "0.11"
 crc32fast = "1.4"
+nom = "7"
 
 [dev-dependencies]
 tempfile = "3.10"
