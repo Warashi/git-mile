@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 mod view;
 
@@ -16,6 +16,7 @@ use git_mile_core::issue::{
     AppendIssueCommentInput, CreateIssueInput, IssueId, IssueSnapshot, IssueStatus, IssueStore,
     UpdateIssueLabelsInput,
 };
+use git_mile_core::mcp::StdioServerConfig;
 use git_mile_core::model::{
     IssueDetails as CoreIssueDetails, LabelOperation, MilestoneDetails as CoreMilestoneDetails,
 };
@@ -39,6 +40,7 @@ use git_mile_core::{
 use git2::{Config, ErrorCode, Repository};
 use serde_json::{json, to_writer_pretty};
 use tempfile::NamedTempFile;
+use tracing_subscriber::filter::LevelFilter;
 use uuid::Uuid;
 use view::{IssueDetailsView, MilestoneDetailsView};
 
@@ -76,6 +78,7 @@ fn run() -> Result<()> {
             email.as_deref(),
             command,
         )?,
+        Commands::McpServer(args) => run_mcp_server(&repo, args)?,
         Commands::Show(args) => {
             let ShowArgs {
                 mile_id,
@@ -198,6 +201,8 @@ enum Commands {
         #[command(subcommand)]
         command: ListCommand,
     },
+    /// Launch the MCP server over stdio for external clients.
+    McpServer(McpServerArgs),
     Show(ShowArgs),
     Open(StatusArgs),
     Close(StatusArgs),
@@ -383,6 +388,60 @@ struct IssueListArgs {
     cursor: Option<String>,
     #[arg(long)]
     legacy_query: bool,
+}
+
+#[derive(Args, Clone, Debug)]
+struct McpServerArgs {
+    #[arg(long = "log-level", value_enum, default_value = "info")]
+    log_level: McpLogLevel,
+    #[arg(
+        long = "handshake-timeout",
+        value_name = "SECONDS",
+        default_value_t = 30
+    )]
+    handshake_timeout: u64,
+    #[arg(long = "idle-shutdown", value_name = "SECONDS")]
+    idle_shutdown: Option<u64>,
+    #[arg(long = "protocol", value_enum, default_value = "v1")]
+    protocol: McpProtocolVersion,
+}
+
+impl Default for McpServerArgs {
+    fn default() -> Self {
+        Self {
+            log_level: McpLogLevel::Info,
+            handshake_timeout: 30,
+            idle_shutdown: None,
+            protocol: McpProtocolVersion::V1,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum McpLogLevel {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl From<McpLogLevel> for LevelFilter {
+    fn from(level: McpLogLevel) -> Self {
+        match level {
+            McpLogLevel::Error => LevelFilter::ERROR,
+            McpLogLevel::Warn => LevelFilter::WARN,
+            McpLogLevel::Info => LevelFilter::INFO,
+            McpLogLevel::Debug => LevelFilter::DEBUG,
+            McpLogLevel::Trace => LevelFilter::TRACE,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum McpProtocolVersion {
+    #[value(name = "v1")]
+    V1,
 }
 
 #[derive(Parser)]
@@ -2150,6 +2209,51 @@ fn handle_comment_command(
     Ok(())
 }
 
+fn run_mcp_server(repo: &Path, args: McpServerArgs) -> Result<()> {
+    let McpServerArgs {
+        log_level,
+        handshake_timeout,
+        idle_shutdown,
+        protocol,
+    } = args;
+
+    if handshake_timeout == 0 {
+        bail!("--handshake-timeout must be greater than 0");
+    }
+    if let Some(idle) = idle_shutdown {
+        if idle == 0 {
+            bail!("--idle-shutdown must be greater than 0 when specified");
+        }
+    }
+
+    init_mcp_tracing(log_level);
+
+    match protocol {
+        McpProtocolVersion::V1 => {}
+    }
+
+    let config = StdioServerConfig::new(repo.to_path_buf())
+        .with_handshake_timeout(Duration::from_secs(handshake_timeout))
+        .with_idle_shutdown(idle_shutdown.map(Duration::from_secs));
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to initialize async runtime")?;
+
+    runtime.block_on(async { git_mile_core::mcp::run_stdio_server(config).await })?;
+    Ok(())
+}
+
+fn init_mcp_tracing(level: McpLogLevel) {
+    let filter: LevelFilter = level.into();
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(filter)
+        .with_ansi(false)
+        .with_writer(io::stderr)
+        .try_init();
+}
+
 fn handle_label_command(
     repo: &Path,
     replica: Option<&str>,
@@ -3078,6 +3182,22 @@ mod tests {
         let (temp, _, _, _, _) = setup_entity_repo()?;
         let summaries = command_entity_list(temp.path())?;
         assert_eq!(summaries.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_server_stub_starts() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        Repository::init_bare(temp.path())?;
+        run_mcp_server(
+            temp.path(),
+            McpServerArgs {
+                log_level: McpLogLevel::Trace,
+                handshake_timeout: 5,
+                idle_shutdown: Some(10),
+                protocol: McpProtocolVersion::V1,
+            },
+        )?;
         Ok(())
     }
 

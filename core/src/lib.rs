@@ -3,6 +3,7 @@ pub mod dag;
 pub mod error;
 pub mod identity;
 pub mod issue;
+pub mod mcp;
 pub mod metrics;
 pub mod mile;
 pub mod model;

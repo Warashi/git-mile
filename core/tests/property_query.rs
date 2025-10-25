@@ -3,9 +3,9 @@
 use proptest::prelude::*;
 
 use git_mile_core::clock::{LamportTimestamp, ReplicaId};
-use git_mile_core::issue::{IssueStatus, IssueId};
+use git_mile_core::issue::{IssueId, IssueStatus};
 use git_mile_core::model::{Comment, CommentParent, IssueDetails, Markdown};
-use git_mile_core::query::{issue_schema, parse_query, QueryEngine, QueryRequest};
+use git_mile_core::query::{QueryEngine, QueryRequest, issue_schema, parse_query};
 
 fn issue_status_strategy() -> impl Strategy<Value = IssueStatus> {
     prop_oneof![

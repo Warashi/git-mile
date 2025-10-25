@@ -3,7 +3,9 @@
 use std::time::Duration;
 
 use git_mile_core::clock::{LamportClock, ReplicaId};
-use git_mile_core::dag::{BlobRef, EntityId, EntitySnapshot, Operation, OperationBlob, OperationId, OperationMetadata};
+use git_mile_core::dag::{
+    BlobRef, EntityId, EntitySnapshot, Operation, OperationBlob, OperationId, OperationMetadata,
+};
 use git_mile_core::repo::cache::CacheLoadOutcome;
 use git_mile_core::repo::{CacheConfig, CacheNamespace, CacheRepository, PersistentCache};
 use proptest::prelude::*;
