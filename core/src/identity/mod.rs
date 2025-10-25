@@ -1027,6 +1027,8 @@ mod tests {
                     title: "First Mile".into(),
                     description: None,
                     initial_status: MileStatus::Open,
+                    initial_comment: None,
+                    labels: vec![],
                 })
                 .expect("create mile");
         }

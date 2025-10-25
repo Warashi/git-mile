@@ -17,8 +17,10 @@ pub use identity::{
     IdentitySnapshot, IdentityStatus, IdentityStore, IdentitySummary, ProtectionKind,
 };
 pub use mile::{
-    ChangeStatusInput, ChangeStatusOutcome, CreateMileInput, MileEvent, MileEventKind, MileId,
-    MileSnapshot, MileStatus, MileStatusChanged, MileStore, MileSummary,
+    AppendCommentInput, AppendCommentOutcome, ChangeStatusInput, ChangeStatusOutcome, CommentId,
+    CreateMileInput, LabelId, MileComment, MileCommentAppended, MileEvent, MileEventKind, MileId,
+    MileLabelAttached, MileLabelDetached, MileSnapshot, MileStatus, MileStatusChanged, MileStore,
+    MileSummary, UpdateLabelsInput, UpdateLabelsOutcome,
 };
 pub use repo::{LockMode, NoopCache, RepositoryCacheHook, RepositoryLock, RepositoryLockGuard};
 

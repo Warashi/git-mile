@@ -29,6 +29,8 @@ fn concurrent_mile_creations_are_serialized() {
                     title: format!("Concurrent Mile {index}"),
                     description: None,
                     initial_status: MileStatus::Open,
+                    initial_comment: None,
+                    labels: vec![],
                 })
                 .expect("create mile");
             results.lock().expect("lock results").push(snapshot.id);

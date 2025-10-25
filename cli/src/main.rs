@@ -349,6 +349,8 @@ fn command_mile_create(
         title: title.to_string(),
         description: description.map(|value| value.to_string()),
         initial_status,
+        initial_comment: None,
+        labels: vec![],
     })?)
 }
 
@@ -913,6 +915,28 @@ fn print_mile_details(snapshot: &MileSnapshot) {
         Some(_) => println!("Description: (empty)"),
         None => println!("Description: (none)"),
     }
+    if snapshot.labels.is_empty() {
+        println!("Labels: (none)");
+    } else {
+        let labels = snapshot
+            .labels
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("Labels: {labels}");
+    }
+    println!("Comments:");
+    if snapshot.comments.is_empty() {
+        println!("  (none)");
+    } else {
+        for comment in &snapshot.comments {
+            println!(
+                "  - [{}] {}: {}",
+                comment.created_at, comment.author, comment.body
+            );
+        }
+    }
     println!("Events:");
     for event in &snapshot.events {
         print_event(event);
@@ -926,6 +950,23 @@ fn print_event(event: &git_mile_core::MileEvent) {
         }
         MileEventKind::StatusChanged(data) => {
             format!("{} status -> {}", event.timestamp, data.status)
+        }
+        MileEventKind::CommentAppended(data) => {
+            let first_line = data.body.lines().next().unwrap_or("").trim();
+            if first_line.is_empty() {
+                format!("{} comment {} appended", event.timestamp, data.comment_id)
+            } else {
+                format!(
+                    "{} comment {}: {}",
+                    event.timestamp, data.comment_id, first_line
+                )
+            }
+        }
+        MileEventKind::LabelAttached(data) => {
+            format!("{} label +{}", event.timestamp, data.label)
+        }
+        MileEventKind::LabelDetached(data) => {
+            format!("{} label -{}", event.timestamp, data.label)
         }
         MileEventKind::Unknown { event_type, .. } => {
             let kind = event_type.as_deref().unwrap_or("unknown");
