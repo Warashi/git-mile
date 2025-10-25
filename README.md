@@ -7,6 +7,8 @@ Rust workspace for experimenting with Git powered workflows.
 - `cli`: binary crate that exposes the library functionality to end users.
 
 ## Documentation
+- [CLI command reference](docs/reference/cli.md)
+- [Lifecycle guide](docs/guides/lifecycle.md)
 - [Persistence design](docs/persistence.md)
 - [Identity lifecycle](docs/identity.md)
 - [Concurrency and locking](docs/concurrency.md)
@@ -18,15 +20,22 @@ The `git-mile` binary exposes mile and identity workflows alongside debugging ut
 # bootstrap a repository (creates one if needed)
 git-mile init --repo path/to/repo
 
-# create a mile with optional metadata overrides
-git-mile create mile "Ship onboarding flow" --description "Track onboarding improvements"
+# create a milestone with description, initial comment, and labels
+git-mile create milestone "Ship onboarding flow" \
+  --description "Track onboarding improvements" \
+  --comment "Kickoff: align on success criteria" \
+  --label roadmap --label onboarding
 
-# inspect the current state of miles
-git-mile list mile --format table
-git-mile show <MILE_ID> --json
+# inspect enriched milestone data
+git-mile list milestone --long --columns id,title,status,labels,comments
+git-mile show <MILE_ID> --limit-comments 10
+
+# collaborate with comments and labels
+git-mile comment milestone <MILE_ID> --comment "ETA moved forward"
+git-mile label issue <ISSUE_ID> --add ready-for-review --remove backlog
 
 # record state transitions
-git-mile open <MILE_ID>
+git-mile open <MILE_ID> --message "Begin execution"
 git-mile close <MILE_ID> --message "Reached GA quality"
 
 # identity lifecycle management
