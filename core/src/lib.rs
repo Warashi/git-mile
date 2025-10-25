@@ -30,8 +30,9 @@ pub use model::{
     Comment, CommentParent, IssueDetails, LabelEvent, LabelOperation, Markdown, MilestoneDetails,
 };
 pub use repo::{
-    CacheGenerationSnapshot, LockMode, NoopCache, RepositoryCacheHook, RepositoryLock,
-    RepositoryLockGuard,
+    BackgroundSyncWorker, CacheGenerationSnapshot, IndexDelta, LockMode, NoopCache,
+    RepositoryCacheHook, RepositoryLock, RepositoryLockGuard, SyncContext, SyncHook,
+    SyncHookRegistry, SyncPhase, SyncTaskStatus,
 };
 
 pub const APP_NAME: &str = "git-mile";
