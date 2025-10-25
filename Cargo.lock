@@ -381,6 +381,7 @@ dependencies = [
  "clap",
  "git2",
  "git_mile_core",
+ "serde",
  "serde_json",
  "shlex",
  "tempfile",

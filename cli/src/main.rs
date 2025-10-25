@@ -6,20 +6,24 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
 
-use anyhow::{Context, Result, anyhow};
+mod view;
+
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use git_mile_core::issue::{
     AppendIssueCommentInput, CreateIssueInput, IssueId, IssueSnapshot, IssueStatus, IssueStore,
     UpdateIssueLabelsInput,
 };
+use git_mile_core::service::{IssueService, MilestoneService};
 use git_mile_core::{
     AddProtectionInput, AdoptIdentityInput, AppendCommentInput, ChangeStatusInput,
     ChangeStatusOutcome, CreateIdentityInput, CreateMileInput, EntityId, EntitySnapshot,
     EntityStore, EntitySummary, IdentityProtection, IdentityStore, IdentitySummary,
-    LamportTimestamp, LockMode, MergeOutcome, MergeStrategy, MileEventKind, MileId, MileSnapshot,
-    MileStatus, MileStore, MileSummary, OperationId, ProtectionKind, ReplicaId, UpdateLabelsInput,
-    app_version,
+    LamportTimestamp, LockMode, MergeOutcome, MergeStrategy, MileId, MileSnapshot, MileStatus,
+    MileStore, MileSummary, OperationId, ProtectionKind, ReplicaId, UpdateLabelsInput, app_version,
 };
+use git_mile_core::model::LabelOperation;
+use view::{IssueDetailsView, MilestoneDetailsView};
 use git2::{Config, ErrorCode, Repository};
 use serde_json::{json, to_writer_pretty};
 use tempfile::NamedTempFile;
@@ -58,16 +62,22 @@ fn run() -> Result<()> {
             command,
         )?,
         Commands::Show(args) => {
-            let mile_id = parse_entity_id(&args.mile_id)?;
-            let snapshot = command_mile_show(&repo, &mile_id)?;
+            let ShowArgs {
+                mile_id,
+                json,
+                limit_comments,
+            } = args;
+            let mile_id = parse_entity_id(&mile_id)?;
+            let details = command_mile_details(&repo, &mile_id)?;
 
-            if args.json {
+            if json {
+                let payload = build_milestone_show_payload(&details);
                 let stdout = io::stdout();
                 let mut handle = stdout.lock();
-                to_writer_pretty(&mut handle, &snapshot)?;
+                to_writer_pretty(&mut handle, &payload)?;
                 handle.write_all(b"\n")?;
             } else {
-                print_mile_details(&snapshot);
+                print_milestone_details(&details, limit_comments);
             }
         }
         Commands::Open(args) => {
@@ -303,11 +313,31 @@ struct IssueCreateArgs {
 }
 
 #[derive(Parser)]
-struct MileListArgs {
+struct MilestoneListArgs {
     #[arg(long)]
     all: bool,
+    #[arg(long)]
+    long: bool,
+    #[arg(long, value_name = "COLUMNS")]
+    columns: Option<String>,
     #[arg(long, value_enum, default_value = "table")]
     format: OutputFormat,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Parser)]
+struct IssueListArgs {
+    #[arg(long)]
+    all: bool,
+    #[arg(long)]
+    long: bool,
+    #[arg(long, value_name = "COLUMNS")]
+    columns: Option<String>,
+    #[arg(long, value_enum, default_value = "table")]
+    format: OutputFormat,
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Parser)]
@@ -315,6 +345,8 @@ struct ShowArgs {
     mile_id: String,
     #[arg(long)]
     json: bool,
+    #[arg(long = "limit-comments", value_name = "N")]
+    limit_comments: Option<usize>,
 }
 
 #[derive(Parser)]
@@ -380,7 +412,9 @@ struct IdentityProtectArgs {
 
 #[derive(Subcommand)]
 enum ListCommand {
-    Mile(MileListArgs),
+    #[command(alias = "mile")]
+    Milestone(MilestoneListArgs),
+    Issue(IssueListArgs),
     Identity(IdentityListArgs),
 }
 
@@ -932,15 +966,52 @@ fn command_mile_list(repo: &Path) -> Result<Vec<MileSummary>> {
     Ok(store.list_miles()?)
 }
 
+fn command_mile_details(repo: &Path, mile_id: &MileId) -> Result<MilestoneDetailsView> {
+    let service = MilestoneService::open_with_mode(repo, LockMode::Read)?;
+    let details = service.get_with_comments(mile_id)?;
+    Ok(details.into())
+}
+
+fn command_mile_details_list(repo: &Path) -> Result<Vec<MilestoneDetailsView>> {
+    let summaries = {
+        let store = MileStore::open_with_mode(repo, LockMode::Read)?;
+        store.list_miles()?
+    };
+    let service = MilestoneService::open_with_mode(repo, LockMode::Read)?;
+    let mut views = Vec::with_capacity(summaries.len());
+    for summary in summaries {
+        let detail = service.get_with_comments(&summary.id)?;
+        views.push(detail.into());
+    }
+    Ok(views)
+}
+
+fn command_issue_details(repo: &Path, issue_id: &IssueId) -> Result<IssueDetailsView> {
+    let service = IssueService::open_with_mode(repo, LockMode::Read)?;
+    let details = service.get_with_comments(issue_id)?;
+    Ok(details.into())
+}
+
+fn command_issue_details_list(repo: &Path) -> Result<Vec<IssueDetailsView>> {
+    let summaries = {
+        let store = IssueStore::open_with_mode(repo, LockMode::Read)?;
+        store.list_issues()?
+    };
+    let service = IssueService::open_with_mode(repo, LockMode::Read)?;
+    let mut views = Vec::with_capacity(summaries.len());
+    for summary in summaries {
+        let detail = service.get_with_comments(&summary.id)?;
+        views.push(detail.into());
+    }
+    Ok(views)
+}
+
+#[cfg(test)]
 fn command_mile_show(repo: &Path, mile_id: &MileId) -> Result<MileSnapshot> {
     let store = MileStore::open_with_mode(repo, LockMode::Read)?;
     Ok(store.load_mile(mile_id)?)
 }
 
-fn command_issue_show(repo: &Path, issue_id: &IssueId) -> Result<IssueSnapshot> {
-    let store = IssueStore::open_with_mode(repo, LockMode::Read)?;
-    Ok(store.load_issue(issue_id)?)
-}
 
 fn command_mile_change_status(
     repo: &Path,
@@ -1060,12 +1131,12 @@ fn run_comment_milestone(
     } = args;
 
     let mile_id = parse_entity_id(&id)?;
-    let snapshot = command_mile_show(repo, &mile_id)?;
+    let details = command_mile_details(repo, &mile_id)?;
 
     let quoted_body = if let Some(value) = quote {
         let comment_id = Uuid::parse_str(&value)
             .map_err(|err| anyhow!("invalid comment id '{value}': {err}"))?;
-        let comment = snapshot
+        let comment = details
             .comments
             .iter()
             .find(|comment| comment.id == comment_id)
@@ -1075,12 +1146,12 @@ fn run_comment_milestone(
         None
     };
 
-    let labels: Vec<String> = snapshot.labels.iter().cloned().collect();
+    let labels: Vec<String> = details.labels.clone();
     let template = build_comment_editor_template(
         "Milestone",
         &mile_id,
-        &snapshot.title,
-        &snapshot.status.to_string(),
+        &details.title,
+        &details.status.to_string(),
         &labels,
         quoted_body.as_deref(),
     );
@@ -1164,12 +1235,12 @@ fn run_comment_issue(
     } = args;
 
     let issue_id = parse_entity_id(&id)?;
-    let snapshot = command_issue_show(repo, &issue_id)?;
+    let details = command_issue_details(repo, &issue_id)?;
 
     let quoted_body = if let Some(value) = quote {
         let comment_id = Uuid::parse_str(&value)
             .map_err(|err| anyhow!("invalid comment id '{value}': {err}"))?;
-        let comment = snapshot
+        let comment = details
             .comments
             .iter()
             .find(|comment| comment.id == comment_id)
@@ -1179,12 +1250,12 @@ fn run_comment_issue(
         None
     };
 
-    let labels: Vec<String> = snapshot.labels.iter().cloned().collect();
+    let labels: Vec<String> = details.labels.clone();
     let template = build_comment_editor_template(
         "Issue",
         &issue_id,
-        &snapshot.title,
-        &snapshot.status.to_string(),
+        &details.title,
+        &details.status.to_string(),
         &labels,
         quoted_body.as_deref(),
     );
@@ -1260,12 +1331,13 @@ fn run_label_milestone(
     args: LabelTargetArgs,
 ) -> Result<()> {
     let mile_id = parse_entity_id(&args.id)?;
-    let snapshot = command_mile_show(repo, &mile_id)?;
-    let delta = compute_label_delta(&args, &snapshot.labels)?;
+    let details = command_mile_details(repo, &mile_id)?;
+    let current_labels: BTreeSet<String> = details.labels.iter().cloned().collect();
+    let delta = compute_label_delta(&args, &current_labels)?;
     let json = args.json;
 
     if delta.add.is_empty() && delta.remove.is_empty() {
-        print_label_noop("milestone", &mile_id, &snapshot.labels, json)?;
+        print_label_noop("milestone", &mile_id, &current_labels, json)?;
         return Ok(());
     }
 
@@ -1304,12 +1376,13 @@ fn run_label_issue(
     args: LabelTargetArgs,
 ) -> Result<()> {
     let issue_id = parse_entity_id(&args.id)?;
-    let snapshot = command_issue_show(repo, &issue_id)?;
-    let delta = compute_label_delta(&args, &snapshot.labels)?;
+    let details = command_issue_details(repo, &issue_id)?;
+    let current_labels: BTreeSet<String> = details.labels.iter().cloned().collect();
+    let delta = compute_label_delta(&args, &current_labels)?;
     let json = args.json;
 
     if delta.add.is_empty() && delta.remove.is_empty() {
-        print_label_noop("issue", &issue_id, &snapshot.labels, json)?;
+        print_label_noop("issue", &issue_id, &current_labels, json)?;
         return Ok(());
     }
 
@@ -1473,28 +1546,98 @@ fn format_label_list(labels: &[String]) -> String {
     }
 }
 
-fn run_mile_list(repo: &Path, args: MileListArgs) -> Result<()> {
-    let MileListArgs { all, format } = args;
-    let mut miles = command_mile_list(repo)?;
-    if !all {
-        miles.retain(|mile| mile.status != MileStatus::Closed);
-    }
+fn run_milestone_list(repo: &Path, args: MilestoneListArgs) -> Result<()> {
+    let MilestoneListArgs {
+        all,
+        long,
+        columns,
+        format,
+        json,
+    } = args;
 
-    match format {
-        OutputFormat::Table => {
-            if miles.is_empty() {
-                println!("No miles found");
-            } else {
-                print_mile_table(&miles);
+    let resolved_format = if json {
+        OutputFormat::Json
+    } else {
+        format
+    };
+
+    let legacy_mode = std::env::var("GIT_MILE_LIST_LEGACY")
+        .ok()
+        .map(|value| is_env_truthy(&value))
+        .unwrap_or(false);
+
+    if legacy_mode {
+        let mut miles = command_mile_list(repo)?;
+        if !all {
+            miles.retain(|mile| mile.status != MileStatus::Closed);
+        }
+        match resolved_format {
+            OutputFormat::Table => {
+                if miles.is_empty() {
+                    println!("No miles found");
+                } else {
+                    print_legacy_milestone_table(&miles);
+                }
+            }
+            OutputFormat::Raw => print_legacy_milestone_raw(&miles),
+            OutputFormat::Json => {
+                let stdout = io::stdout();
+                let mut handle = stdout.lock();
+                to_writer_pretty(&mut handle, &miles)?;
+                handle.write_all(b"\n")?;
             }
         }
-        OutputFormat::Raw => print_mile_raw(&miles),
+        return Ok(());
+    }
+
+    let mut milestones = command_mile_details_list(repo)?;
+    if !all {
+        milestones.retain(|milestone| milestone.status != MileStatus::Closed);
+    }
+
+    match resolved_format {
         OutputFormat::Json => {
             let stdout = io::stdout();
             let mut handle = stdout.lock();
-            to_writer_pretty(&mut handle, &miles)?;
+            to_writer_pretty(&mut handle, &milestones)?;
             handle.write_all(b"\n")?;
         }
+        OutputFormat::Table => print_list_table(&milestones, columns.as_deref(), long)?,
+        OutputFormat::Raw => print_list_raw(&milestones, columns.as_deref())?,
+    }
+
+    Ok(())
+}
+
+fn run_issue_list(repo: &Path, args: IssueListArgs) -> Result<()> {
+    let IssueListArgs {
+        all,
+        long,
+        columns,
+        format,
+        json,
+    } = args;
+
+    let resolved_format = if json {
+        OutputFormat::Json
+    } else {
+        format
+    };
+
+    let mut issues = command_issue_details_list(repo)?;
+    if !all {
+        issues.retain(|issue| issue.status != IssueStatus::Closed);
+    }
+
+    match resolved_format {
+        OutputFormat::Json => {
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            to_writer_pretty(&mut handle, &issues)?;
+            handle.write_all(b"\n")?;
+        }
+        OutputFormat::Table => print_list_table(&issues, columns.as_deref(), long)?,
+        OutputFormat::Raw => print_list_raw(&issues, columns.as_deref())?,
     }
 
     Ok(())
@@ -1524,7 +1667,8 @@ fn handle_list_command(
     command: ListCommand,
 ) -> Result<()> {
     match command {
-        ListCommand::Mile(args) => run_mile_list(repo, args)?,
+        ListCommand::Milestone(args) => run_milestone_list(repo, args)?,
+        ListCommand::Issue(args) => run_issue_list(repo, args)?,
         ListCommand::Identity(args) => run_identity_list(repo, replica, author, email, args)?,
     }
 
@@ -1978,96 +2122,445 @@ fn read_config(config: &Config, key: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn print_mile_table(miles: &[MileSummary]) {
+fn print_legacy_milestone_table(miles: &[MileSummary]) {
     println!("{:<40} {:<10} {}", "ID", "STATUS", "TITLE");
     for mile in miles {
         println!("{:<40} {:<10} {}", mile.id, mile.status, mile.title);
     }
 }
 
-fn print_mile_raw(miles: &[MileSummary]) {
+fn print_legacy_milestone_raw(miles: &[MileSummary]) {
     for mile in miles {
         println!("{}\t{}\t{}", mile.id, mile.status, mile.title);
     }
 }
 
-fn print_mile_details(snapshot: &MileSnapshot) {
-    println!("Mile: {}", snapshot.id);
-    println!("Title: {}", snapshot.title);
-    println!("Status: {}", snapshot.status);
-    println!("Created: {}", snapshot.created_at);
-    println!("Updated: {}", snapshot.updated_at);
-    match &snapshot.description {
-        Some(description) if !description.trim().is_empty() => {
-            println!("Description:\n{description}");
+#[derive(Clone, Copy, Debug)]
+enum ListColumn {
+    Id,
+    Title,
+    Status,
+    Labels,
+    Comments,
+    Updated,
+}
+
+fn default_list_columns() -> Vec<ListColumn> {
+    vec![
+        ListColumn::Id,
+        ListColumn::Status,
+        ListColumn::Title,
+        ListColumn::Labels,
+        ListColumn::Comments,
+        ListColumn::Updated,
+    ]
+}
+
+fn parse_list_columns(spec: Option<&str>) -> Result<Vec<ListColumn>> {
+    let mut columns = Vec::new();
+    if let Some(spec) = spec {
+        for token in spec.split(',') {
+            let trimmed = token.trim().to_ascii_lowercase();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let column = match trimmed.as_str() {
+                "id" => ListColumn::Id,
+                "title" => ListColumn::Title,
+                "status" => ListColumn::Status,
+                "labels" => ListColumn::Labels,
+                "comments" => ListColumn::Comments,
+                "updated" => ListColumn::Updated,
+                other => bail!("unknown column '{other}'"),
+            };
+            columns.push(column);
         }
-        Some(_) => println!("Description: (empty)"),
-        None => println!("Description: (none)"),
-    }
-    if snapshot.labels.is_empty() {
-        println!("Labels: (none)");
-    } else {
-        let labels = snapshot
-            .labels
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(", ");
-        println!("Labels: {labels}");
-    }
-    println!("Comments:");
-    if snapshot.comments.is_empty() {
-        println!("  (none)");
-    } else {
-        for comment in &snapshot.comments {
-            println!(
-                "  - [{}] {}: {}",
-                comment.created_at, comment.author, comment.body
-            );
+        if columns.is_empty() {
+            bail!("column list cannot be empty");
         }
+    } else {
+        columns = default_list_columns();
     }
-    println!("Events:");
-    for event in &snapshot.events {
-        print_event(event);
+    Ok(columns)
+}
+
+trait ListRecord {
+    fn id_str(&self) -> String;
+    fn title(&self) -> &str;
+    fn status_str(&self) -> String;
+    fn labels(&self) -> &[String];
+    fn comment_count(&self) -> usize;
+    fn last_commented_at(&self) -> Option<&LamportTimestamp>;
+    fn updated_at(&self) -> &LamportTimestamp;
+}
+
+trait DetailedRecord: ListRecord {
+    fn description_preview(&self) -> Option<&str>;
+    fn latest_comment_excerpt(&self) -> Option<&str>;
+}
+
+impl ListRecord for MilestoneDetailsView {
+    fn id_str(&self) -> String {
+        self.id.to_string()
+    }
+
+    fn title(&self) -> &str {
+        &self.title
+    }
+
+    fn status_str(&self) -> String {
+        self.status.to_string()
+    }
+
+    fn labels(&self) -> &[String] {
+        &self.labels
+    }
+
+    fn comment_count(&self) -> usize {
+        self.comment_count
+    }
+
+    fn last_commented_at(&self) -> Option<&LamportTimestamp> {
+        self.last_commented_at.as_ref()
+    }
+
+    fn updated_at(&self) -> &LamportTimestamp {
+        &self.updated_at
     }
 }
 
-fn print_event(event: &git_mile_core::MileEvent) {
-    let summary = match &event.payload {
-        MileEventKind::Created(data) => {
-            format!("{} created mile \"{}\"", event.timestamp, data.title)
+impl DetailedRecord for MilestoneDetailsView {
+    fn description_preview(&self) -> Option<&str> {
+        self.description_preview.as_deref()
+    }
+
+    fn latest_comment_excerpt(&self) -> Option<&str> {
+        self.latest_comment_excerpt.as_deref()
+    }
+}
+
+impl ListRecord for IssueDetailsView {
+    fn id_str(&self) -> String {
+        self.id.to_string()
+    }
+
+    fn title(&self) -> &str {
+        &self.title
+    }
+
+    fn status_str(&self) -> String {
+        self.status.to_string()
+    }
+
+    fn labels(&self) -> &[String] {
+        &self.labels
+    }
+
+    fn comment_count(&self) -> usize {
+        self.comment_count
+    }
+
+    fn last_commented_at(&self) -> Option<&LamportTimestamp> {
+        self.last_commented_at.as_ref()
+    }
+
+    fn updated_at(&self) -> &LamportTimestamp {
+        &self.updated_at
+    }
+}
+
+impl DetailedRecord for IssueDetailsView {
+    fn description_preview(&self) -> Option<&str> {
+        self.description_preview.as_deref()
+    }
+
+    fn latest_comment_excerpt(&self) -> Option<&str> {
+        self.latest_comment_excerpt.as_deref()
+    }
+}
+
+fn render_column<T: ListRecord>(column: ListColumn, record: &T) -> String {
+    match column {
+        ListColumn::Id => record.id_str(),
+        ListColumn::Title => record.title().to_string(),
+        ListColumn::Status => record.status_str(),
+        ListColumn::Labels => format_label_summary(record.labels()),
+        ListColumn::Comments => format_comment_summary(
+            record.comment_count(),
+            record.last_commented_at(),
+        ),
+        ListColumn::Updated => record.updated_at().to_string(),
+    }
+}
+
+fn print_list_table<T: DetailedRecord>(
+    records: &[T],
+    columns_spec: Option<&str>,
+    long: bool,
+) -> Result<()> {
+    if records.is_empty() {
+        println!("No records found");
+        return Ok(());
+    }
+
+    let columns = parse_list_columns(columns_spec)?;
+    let header_cells: Vec<String> = columns
+        .iter()
+        .map(|column| match column {
+            ListColumn::Id => "ID".to_string(),
+            ListColumn::Title => "TITLE".to_string(),
+            ListColumn::Status => "STATUS".to_string(),
+            ListColumn::Labels => "LABELS".to_string(),
+            ListColumn::Comments => "COMMENTS".to_string(),
+            ListColumn::Updated => "UPDATED".to_string(),
+        })
+        .collect();
+
+    let mut rows: Vec<Vec<String>> = Vec::with_capacity(records.len());
+    for record in records {
+        let row: Vec<String> = columns
+            .iter()
+            .map(|column| render_column(*column, record))
+            .collect();
+        rows.push(row);
+    }
+
+    let widths = compute_column_widths(&rows, &header_cells);
+    print_table_row(&header_cells, &widths);
+    print_table_separator(&widths);
+
+    for (record, row) in records.iter().zip(rows.iter()) {
+        print_table_row(row, &widths);
+        if long {
+            print_list_long_details(record);
         }
-        MileEventKind::StatusChanged(data) => {
-            format!("{} status -> {}", event.timestamp, data.status)
-        }
-        MileEventKind::CommentAppended(data) => {
-            let first_line = data.body.lines().next().unwrap_or("").trim();
-            if first_line.is_empty() {
-                format!("{} comment {} appended", event.timestamp, data.comment_id)
-            } else {
-                format!(
-                    "{} comment {}: {}",
-                    event.timestamp, data.comment_id, first_line
-                )
+    }
+
+    Ok(())
+}
+
+fn print_list_raw<T: ListRecord>(records: &[T], columns_spec: Option<&str>) -> Result<()> {
+    if records.is_empty() {
+        return Ok(());
+    }
+
+    let columns = parse_list_columns(columns_spec)?;
+    for record in records {
+        let values: Vec<String> = columns
+            .iter()
+            .map(|column| render_column(*column, record))
+            .collect();
+        println!("{}", values.join("\t"));
+    }
+    Ok(())
+}
+
+fn compute_column_widths(rows: &[Vec<String>], headers: &[String]) -> Vec<usize> {
+    let mut widths: Vec<usize> = headers.iter().map(|header| header.len()).collect();
+    for row in rows {
+        for (index, cell) in row.iter().enumerate() {
+            if let Some(width) = widths.get_mut(index) {
+                *width = (*width).max(cell.len());
             }
         }
-        MileEventKind::LabelAttached(data) => {
-            format!("{} label +{}", event.timestamp, data.label)
-        }
-        MileEventKind::LabelDetached(data) => {
-            format!("{} label -{}", event.timestamp, data.label)
-        }
-        MileEventKind::Unknown { event_type, .. } => {
-            let kind = event_type.as_deref().unwrap_or("unknown");
-            format!("{} unknown event {kind}", event.timestamp)
-        }
-    };
-
-    println!("  - {summary}");
-    println!("    author: {}", event.metadata.author);
-    if let Some(message) = &event.metadata.message {
-        println!("    message: {}", message);
     }
+    widths
+}
+
+fn print_table_row(cells: &[String], widths: &[usize]) {
+    for (index, cell) in cells.iter().enumerate() {
+        if index > 0 {
+            print!("  ");
+        }
+        if let Some(width) = widths.get(index) {
+            print!("{:<width$}", cell, width = *width);
+        } else {
+            print!("{cell}");
+        }
+    }
+    println!();
+}
+
+fn print_table_separator(widths: &[usize]) {
+    for (index, width) in widths.iter().enumerate() {
+        if index > 0 {
+            print!("  ");
+        }
+        let line = "-".repeat(*width);
+        print!("{line}");
+    }
+    println!();
+}
+
+fn print_list_long_details<T: DetailedRecord>(record: &T) {
+    if let Some(preview) = record.description_preview() {
+        if !preview.is_empty() {
+            println!("    desc: {preview}");
+        }
+    }
+    if let Some(excerpt) = record.latest_comment_excerpt() {
+        if !excerpt.is_empty() {
+            println!("    last: {excerpt}");
+        }
+    }
+}
+
+fn format_label_summary(labels: &[String]) -> String {
+    if labels.is_empty() {
+        return "(none)".to_string();
+    }
+
+    let mut rendered = Vec::new();
+    for label in labels.iter().take(3) {
+        rendered.push(label.clone());
+    }
+    if labels.len() > 3 {
+        rendered.push("...".to_string());
+    }
+    rendered.join(", ")
+}
+
+fn format_comment_summary(
+    count: usize,
+    last_commented_at: Option<&LamportTimestamp>,
+) -> String {
+    match last_commented_at {
+        Some(timestamp) => format!("{count} ({timestamp})"),
+        None => format!("{count}"),
+    }
+}
+
+fn is_env_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+const DEFAULT_COMMENT_LIMIT: usize = 20;
+
+fn print_milestone_details(details: &MilestoneDetailsView, limit: Option<usize>) {
+    let comment_limit = limit.unwrap_or(DEFAULT_COMMENT_LIMIT);
+
+    println!("{} [{}]", details.title, details.status);
+    println!("ID: {}", details.id);
+    if !details.labels.is_empty() {
+        println!("Labels: {}", details.labels.join(", "));
+    } else {
+        println!("Labels: (none)");
+    }
+
+    println!();
+    println!("Description:");
+    match &details.description {
+        Some(description) if !description.trim().is_empty() => {
+            for line in render_markdown_lines(description) {
+                println!("  {line}");
+            }
+        }
+        Some(_) | None => println!("  (none)"),
+    }
+
+    println!();
+    println!(
+        "Comments ({} total):",
+        details.comment_count
+    );
+    if details.comments.is_empty() {
+        println!("  (none)");
+    } else {
+        let total = details.comments.len();
+        let start = total.saturating_sub(comment_limit);
+        if start > 0 {
+            println!("  ... {} older comment(s) omitted ...", start);
+        }
+        for (index, comment) in details.comments.iter().enumerate().skip(start) {
+            println!(
+                "  #{} [{}] {}",
+                index + 1,
+                comment.created_at,
+                comment.author
+            );
+            for line in render_markdown_lines(&comment.body) {
+                println!("    {line}");
+            }
+            println!();
+        }
+    }
+
+    println!("Metadata:");
+    println!("  Created: {}", details.created_at);
+    println!("  Updated: {}", details.updated_at);
+    if let Some(last) = details.last_commented_at.as_ref() {
+        println!("  Last comment: {}", last);
+    }
+    if let Some(initial) = details.initial_comment_id {
+        println!("  Initial comment ID: {}", initial);
+    }
+    if !details.label_events.is_empty() {
+        println!("  Label history:");
+        for event in &details.label_events {
+            let symbol = match event.operation {
+                LabelOperation::Add => '+',
+                LabelOperation::Remove => '-',
+            };
+            println!(
+                "    {} {} {}",
+                event.timestamp, symbol, event.label
+            );
+        }
+    }
+}
+
+fn render_markdown_lines(markdown: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    for raw_line in markdown.lines() {
+        let trimmed = raw_line.trim_end();
+        if trimmed.is_empty() {
+            lines.push(String::new());
+            continue;
+        }
+
+        let normalized = if let Some(stripped) = trimmed.strip_prefix("### ") {
+            stripped.trim().to_string()
+        } else if let Some(stripped) = trimmed.strip_prefix("## ") {
+            stripped.trim().to_string()
+        } else if let Some(stripped) = trimmed.strip_prefix("# ") {
+            stripped.trim().to_uppercase()
+        } else if let Some(stripped) = trimmed.strip_prefix("- ") {
+            format!("• {}", stripped.trim())
+        } else if let Some(stripped) = trimmed.strip_prefix("* ") {
+            format!("• {}", stripped.trim())
+        } else {
+            trimmed.trim().to_string()
+        };
+
+        lines.push(normalized);
+    }
+
+    if lines.is_empty() {
+        lines.push(String::from("(empty)"));
+    }
+
+    lines
+}
+
+fn build_milestone_show_payload(details: &MilestoneDetailsView) -> serde_json::Value {
+    json!({
+        "id": details.id,
+        "title": details.title,
+        "status": details.status,
+        "description": details.description.as_deref(),
+        "labels": details.labels,
+        "comments": details.comments,
+        "stats": {
+            "comment_count": details.comment_count,
+            "last_commented_at": details.last_commented_at,
+            "created_at": details.created_at,
+            "updated_at": details.updated_at,
+        },
+        "label_events": details.label_events,
+    })
 }
 
 fn print_identity_table(identities: &[IdentitySummary]) {
