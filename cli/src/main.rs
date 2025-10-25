@@ -9,9 +9,9 @@ use clap::{Parser, Subcommand, ValueEnum};
 use git_mile_core::{
     AddProtectionInput, AdoptIdentityInput, ChangeStatusInput, ChangeStatusOutcome,
     CreateIdentityInput, CreateMileInput, EntityId, EntitySnapshot, EntityStore, EntitySummary,
-    IdentityProtection, IdentityStore, IdentitySummary, MergeOutcome, MergeStrategy, MileEventKind,
-    MileId, MileSnapshot, MileStatus, MileStore, MileSummary, OperationId, ProtectionKind,
-    ReplicaId, app_version,
+    IdentityProtection, IdentityStore, IdentitySummary, LockMode, MergeOutcome, MergeStrategy,
+    MileEventKind, MileId, MileSnapshot, MileStatus, MileStore, MileSummary, OperationId,
+    ProtectionKind, ReplicaId, app_version,
 };
 use git2::{Config, ErrorCode, Repository};
 use serde_json::to_writer_pretty;
@@ -341,7 +341,7 @@ fn command_mile_create(
     message: Option<String>,
     initial_status: MileStatus,
 ) -> Result<MileSnapshot> {
-    let store = MileStore::open(repo)?;
+    let store = MileStore::open_with_mode(repo, LockMode::Write)?;
     Ok(store.create_mile(CreateMileInput {
         replica_id: replica_id.clone(),
         author: author.to_string(),
@@ -353,12 +353,12 @@ fn command_mile_create(
 }
 
 fn command_mile_list(repo: &Path) -> Result<Vec<MileSummary>> {
-    let store = MileStore::open(repo)?;
+    let store = MileStore::open_with_mode(repo, LockMode::Read)?;
     Ok(store.list_miles()?)
 }
 
 fn command_mile_show(repo: &Path, mile_id: &MileId) -> Result<MileSnapshot> {
-    let store = MileStore::open(repo)?;
+    let store = MileStore::open_with_mode(repo, LockMode::Read)?;
     Ok(store.load_mile(mile_id)?)
 }
 
@@ -370,7 +370,7 @@ fn command_mile_change_status(
     status: MileStatus,
     message: Option<String>,
 ) -> Result<ChangeStatusOutcome> {
-    let store = MileStore::open(repo)?;
+    let store = MileStore::open_with_mode(repo, LockMode::Write)?;
     Ok(store.change_status(ChangeStatusInput {
         mile_id: mile_id.clone(),
         replica_id: replica_id.clone(),
@@ -526,7 +526,7 @@ fn run_identity_create(
 
     let replica_id = resolve_replica(replica);
     let actor = resolve_identity(repo, &replica_id, author, email)?;
-    let store = IdentityStore::open(repo)?;
+    let store = IdentityStore::open_with_mode(repo, LockMode::Write)?;
 
     let mut protections = Vec::new();
     for (index, fingerprint) in protect_pgp.into_iter().enumerate() {
@@ -568,7 +568,7 @@ fn run_identity_list(
     args: IdentityListArgs,
 ) -> Result<()> {
     let IdentityListArgs { format } = args;
-    let store = IdentityStore::open(repo)?;
+    let store = IdentityStore::open_with_mode(repo, LockMode::Read)?;
     let identities = store.list_identities()?;
 
     match format {
@@ -606,7 +606,7 @@ fn run_identity_adopt(
     let identity_id = parse_entity_id(&identity_id)?;
     let replica_id = resolve_replica(replica);
     let actor = resolve_identity(repo, &replica_id, author, email)?;
-    let store = IdentityStore::open(repo)?;
+    let store = IdentityStore::open_with_mode(repo, LockMode::Write)?;
     let current = store.load_identity(&identity_id)?;
     let signature =
         signature.unwrap_or_else(|| format!("{} <{}>", current.display_name, current.email));
@@ -646,7 +646,7 @@ fn run_identity_protect(
     let identity_id = parse_entity_id(&identity_id)?;
     let replica_id = resolve_replica(replica);
     let actor = resolve_identity(repo, &replica_id, author, email)?;
-    let store = IdentityStore::open(repo)?;
+    let store = IdentityStore::open_with_mode(repo, LockMode::Write)?;
 
     let armored_public_key = match armored_key {
         Some(path) => Some(
@@ -721,12 +721,12 @@ fn handle_entity_debug(repo: &Path, args: EntityArgs) -> Result<()> {
 }
 
 fn command_entity_list(repo: &Path) -> Result<Vec<EntitySummary>> {
-    let store = open_store(repo)?;
+    let store = open_store(repo, LockMode::Read)?;
     store.list_entities().map_err(Into::into)
 }
 
 fn command_entity_show(repo: &Path, entity_id: &EntityId) -> Result<EntitySnapshot> {
-    let store = open_store(repo)?;
+    let store = open_store(repo, LockMode::Read)?;
     store.load_entity(entity_id).map_err(Into::into)
 }
 
@@ -735,14 +735,14 @@ fn command_entity_resolve(
     entity_id: &EntityId,
     strategy: MergeStrategy,
 ) -> Result<MergeOutcome> {
-    let store = open_store(repo)?;
+    let store = open_store(repo, LockMode::Write)?;
     store
         .resolve_conflicts(entity_id, strategy)
         .map_err(Into::into)
 }
 
-fn open_store(path: &Path) -> Result<EntityStore> {
-    EntityStore::open(path)
+fn open_store(path: &Path, mode: LockMode) -> Result<EntityStore> {
+    EntityStore::open_with_mode(path, mode)
         .with_context(|| format!("failed to open repository at {}", path.display()))
 }
 
@@ -814,7 +814,7 @@ fn resolve_identity(
     let mut identity_signature: Option<String> = None;
 
     if !overrides_present || name.is_none() || email.is_none() {
-        if let Ok(store) = IdentityStore::open(repo) {
+        if let Ok(store) = IdentityStore::open_with_mode(repo, LockMode::Read) {
             if let Ok(Some(snapshot)) = store.find_adopted_by_replica(replica_id) {
                 if !overrides_present && name.is_none() && email.is_none() {
                     if let Some(signature) = snapshot.signature.clone() {
@@ -985,7 +985,7 @@ mod tests {
     fn setup_entity_repo() -> Result<(TempDir, EntityId, OperationId, OperationId, OperationId)> {
         let temp = tempfile::tempdir()?;
         Repository::init_bare(temp.path())?;
-        let store = open_store(temp.path())?;
+        let store = open_store(temp.path(), LockMode::Write)?;
 
         let entity_id = EntityId::new();
         let mut clock = LamportClock::new(ReplicaId::new("cli-tests"));
@@ -1148,11 +1148,13 @@ mod tests {
             }),
         )?;
 
-        let store = IdentityStore::open(repo)?;
-        let summaries = store.list_identities()?;
-        assert_eq!(summaries.len(), 1);
-        assert_eq!(summaries[0].status, IdentityStatus::PendingAdoption);
-        let identity_id = summaries[0].id.clone();
+        let identity_id = {
+            let store = IdentityStore::open_with_mode(repo, LockMode::Read)?;
+            let summaries = store.list_identities()?;
+            assert_eq!(summaries.len(), 1);
+            assert_eq!(summaries[0].status, IdentityStatus::PendingAdoption);
+            summaries[0].id.clone()
+        };
 
         handle_adopt_command(
             repo,
@@ -1179,7 +1181,8 @@ mod tests {
             }),
         )?;
 
-        let snapshot = IdentityStore::open(repo)?.load_identity(&identity_id)?;
+        let snapshot =
+            IdentityStore::open_with_mode(repo, LockMode::Read)?.load_identity(&identity_id)?;
         assert_eq!(snapshot.status, IdentityStatus::Protected);
         assert_eq!(snapshot.protections.len(), 1);
         Ok(())
@@ -1192,25 +1195,27 @@ mod tests {
         let repo = temp.path();
         let replica = ReplicaId::new("cli-tests");
 
-        let store = IdentityStore::open(repo)?;
-        let identity = store.create_identity(CreateIdentityInput {
-            replica_id: replica.clone(),
-            author: "tester".into(),
-            message: None,
-            display_name: "Alice".into(),
-            email: "alice@example.com".into(),
-            login: None,
-            initial_signature: None,
-            adopt_immediately: false,
-            protections: vec![],
-        })?;
-        store.adopt_identity(AdoptIdentityInput {
-            identity_id: identity.id.clone(),
-            replica_id: replica.clone(),
-            author: "tester".into(),
-            message: None,
-            signature: "Alice <alice@example.com>".into(),
-        })?;
+        {
+            let store = IdentityStore::open_with_mode(repo, LockMode::Write)?;
+            let identity = store.create_identity(CreateIdentityInput {
+                replica_id: replica.clone(),
+                author: "tester".into(),
+                message: None,
+                display_name: "Alice".into(),
+                email: "alice@example.com".into(),
+                login: None,
+                initial_signature: None,
+                adopt_immediately: false,
+                protections: vec![],
+            })?;
+            store.adopt_identity(AdoptIdentityInput {
+                identity_id: identity.id.clone(),
+                replica_id: replica.clone(),
+                author: "tester".into(),
+                message: None,
+                signature: "Alice <alice@example.com>".into(),
+            })?;
+        }
 
         let resolved = resolve_identity(repo, &replica, None, None)?;
         assert_eq!(resolved.signature, "Alice <alice@example.com>");
@@ -1224,25 +1229,27 @@ mod tests {
         let repo = temp.path();
         let replica = ReplicaId::new("cli-tests");
 
-        let store = IdentityStore::open(repo)?;
-        let identity = store.create_identity(CreateIdentityInput {
-            replica_id: replica.clone(),
-            author: "tester".into(),
-            message: None,
-            display_name: "Alice".into(),
-            email: "alice@example.com".into(),
-            login: None,
-            initial_signature: None,
-            adopt_immediately: false,
-            protections: vec![],
-        })?;
-        store.adopt_identity(AdoptIdentityInput {
-            identity_id: identity.id.clone(),
-            replica_id: replica.clone(),
-            author: "tester".into(),
-            message: None,
-            signature: "Alice <alice@example.com>".into(),
-        })?;
+        {
+            let store = IdentityStore::open_with_mode(repo, LockMode::Write)?;
+            let identity = store.create_identity(CreateIdentityInput {
+                replica_id: replica.clone(),
+                author: "tester".into(),
+                message: None,
+                display_name: "Alice".into(),
+                email: "alice@example.com".into(),
+                login: None,
+                initial_signature: None,
+                adopt_immediately: false,
+                protections: vec![],
+            })?;
+            store.adopt_identity(AdoptIdentityInput {
+                identity_id: identity.id.clone(),
+                replica_id: replica.clone(),
+                author: "tester".into(),
+                message: None,
+                signature: "Alice <alice@example.com>".into(),
+            })?;
+        }
 
         run_mile_create(
             repo,
