@@ -3,6 +3,7 @@ pub mod dag;
 pub mod error;
 pub mod identity;
 pub mod mile;
+pub mod repo;
 
 pub use clock::{LamportClock, LamportTimestamp, ReplicaId};
 pub use dag::{
@@ -19,6 +20,7 @@ pub use mile::{
     ChangeStatusInput, ChangeStatusOutcome, CreateMileInput, MileEvent, MileEventKind, MileId,
     MileSnapshot, MileStatus, MileStatusChanged, MileStore, MileSummary,
 };
+pub use repo::{LockMode, NoopCache, RepositoryCacheHook, RepositoryLock, RepositoryLockGuard};
 
 pub const APP_NAME: &str = "git-mile";
 

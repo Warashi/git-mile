@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -10,6 +11,7 @@ use crate::dag::{
     OperationMetadata, OperationPack,
 };
 use crate::error::{Error, Result};
+use crate::repo::{LockMode, RepositoryCacheHook};
 
 const EVENT_VERSION: u8 = 1;
 
@@ -202,6 +204,20 @@ pub struct IdentityStore {
 impl IdentityStore {
     pub fn open(repo_path: impl AsRef<Path>) -> Result<Self> {
         let entities = EntityStore::open(repo_path)?;
+        Ok(Self { entities })
+    }
+
+    pub fn open_with_mode(repo_path: impl AsRef<Path>, mode: LockMode) -> Result<Self> {
+        let entities = EntityStore::open_with_mode(repo_path, mode)?;
+        Ok(Self { entities })
+    }
+
+    pub fn open_with_cache(
+        repo_path: impl AsRef<Path>,
+        mode: LockMode,
+        cache: Arc<dyn RepositoryCacheHook>,
+    ) -> Result<Self> {
+        let entities = EntityStore::open_with_cache(repo_path, mode, cache)?;
         Ok(Self { entities })
     }
 
@@ -998,21 +1014,24 @@ mod tests {
 
     #[test]
     fn list_identities_skips_other_entities() {
-        let (temp, store) = init_store();
+        let temp = tempfile::tempdir().expect("create temp dir");
         let replica = ReplicaId::new("replica-a");
-        let mile_store = MileStore::open(temp.path()).expect("open mile store");
 
-        mile_store
-            .create_mile(CreateMileInput {
-                replica_id: replica.clone(),
-                author: "tester".into(),
-                message: None,
-                title: "First Mile".into(),
-                description: None,
-                initial_status: MileStatus::Open,
-            })
-            .expect("create mile");
+        {
+            let mile_store = MileStore::open(temp.path()).expect("open mile store");
+            mile_store
+                .create_mile(CreateMileInput {
+                    replica_id: replica.clone(),
+                    author: "tester".into(),
+                    message: None,
+                    title: "First Mile".into(),
+                    description: None,
+                    initial_status: MileStatus::Open,
+                })
+                .expect("create mile");
+        }
 
+        let store = IdentityStore::open(temp.path()).expect("open identity store");
         store
             .create_identity(CreateIdentityInput {
                 replica_id: replica.clone(),

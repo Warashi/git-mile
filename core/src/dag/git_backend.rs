@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::str::{self, FromStr};
+use std::sync::Arc;
 
 use git2::{Commit, ErrorCode, FileMode, Oid, Repository, Signature, Tree};
 use serde::{Deserialize, Serialize};
@@ -8,31 +9,58 @@ use sha2::{Digest, Sha256};
 
 use crate::clock::{LamportTimestamp, ReplicaId};
 use crate::error::{Error, Result};
+use crate::repo::{LockMode, NoopCache, RepositoryCacheHook, RepositoryLock, RepositoryLockGuard};
 
 use super::entity::{EntityId, OperationId};
 use super::pack::{BlobRef, Operation, OperationBlob, OperationMetadata, OperationPack};
 
 pub struct EntityStore {
     backend: GitBackend,
+    _lock: RepositoryLockGuard,
+    cache: Arc<dyn RepositoryCacheHook>,
 }
 
 impl EntityStore {
     pub fn open(repo_path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_mode(repo_path, LockMode::Write)
+    }
+
+    pub fn open_with_mode(repo_path: impl AsRef<Path>, mode: LockMode) -> Result<Self> {
+        let cache: Arc<dyn RepositoryCacheHook> = Arc::new(NoopCache::default());
+        Self::open_with_cache(repo_path, mode, cache)
+    }
+
+    pub fn open_with_cache(
+        repo_path: impl AsRef<Path>,
+        mode: LockMode,
+        cache: Arc<dyn RepositoryCacheHook>,
+    ) -> Result<Self> {
         let backend = GitBackend::open(repo_path)?;
-        Ok(Self { backend })
+        let repo_path = backend.repository_path().to_path_buf();
+        let lock = RepositoryLock::acquire(&repo_path, mode)?;
+        Ok(Self {
+            backend,
+            _lock: lock,
+            cache,
+        })
     }
 
     pub fn persist_pack(&self, pack: OperationPack) -> Result<PackPersistResult> {
         let entity_id = pack.entity_id.clone();
-        let mut entity = self.backend.load_or_default(entity_id)?;
+        let mut entity = self.backend.load_or_default(entity_id.clone())?;
         let inserted = self.backend.apply_pack(&mut entity, pack)?;
         self.backend
             .write_entity(&mut entity, "persist operation pack")?;
 
-        Ok(PackPersistResult {
+        let result = PackPersistResult {
             inserted,
             clock_snapshot: entity.clock.clone(),
-        })
+        };
+
+        self.cache.invalidate_entity(&entity_id);
+        self.cache.on_pack_persisted(&entity_id, &result.inserted);
+
+        Ok(result)
     }
 
     pub fn load_entity(&self, entity_id: &EntityId) -> Result<EntitySnapshot> {
@@ -40,7 +68,9 @@ impl EntityStore {
             .backend
             .load_entity(entity_id)?
             .ok_or_else(|| Error::validation(format!("entity {} not found", entity_id)))?;
-        self.backend.snapshot_from_entity(entity)
+        let snapshot = self.backend.snapshot_from_entity(entity)?;
+        self.cache.on_entity_loaded(entity_id, &snapshot);
+        Ok(snapshot)
     }
 
     pub fn list_entities(&self) -> Result<Vec<EntitySummary>> {
@@ -100,6 +130,8 @@ impl EntityStore {
         self.backend
             .write_entity(&mut entity, "resolve entity conflicts")?;
 
+        self.cache.invalidate_entity(entity_id);
+
         Ok(MergeOutcome {
             heads: entity.sorted_heads(),
         })
@@ -148,6 +180,10 @@ impl GitBackend {
         };
 
         Ok(Self { repo })
+    }
+
+    fn repository_path(&self) -> &Path {
+        self.repo.path()
     }
 
     fn load_or_default(&self, entity_id: EntityId) -> Result<StoredEntity> {
