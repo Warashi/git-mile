@@ -2752,6 +2752,151 @@ mod tests {
     }
 
     #[test]
+    fn milestone_comment_and_label_lifecycle() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        Repository::init_bare(temp.path())?;
+
+        let replica = ReplicaId::new("replica-cli");
+        let labels = vec!["alpha".to_string(), "beta".to_string()];
+        let snapshot = command_mile_create(
+            temp.path(),
+            &replica,
+            "Tester <tester@example.com>",
+            "CLI Milestone",
+            Some("Milestone description"),
+            Some("Kickoff comment"),
+            &labels,
+            Some("create milestone".to_string()),
+            MileStatus::Open,
+        )?;
+
+        let mut comment_args = CommentTargetArgs::default();
+        comment_args.id = snapshot.id.to_string();
+        comment_args.input.comment = Some("Second comment".to_string());
+        comment_args.input.no_editor = true;
+        run_comment_milestone(
+            temp.path(),
+            Some("replica-cli"),
+            Some("Tester"),
+            Some("tester@example.com"),
+            comment_args,
+        )?;
+
+        let mut label_args = LabelTargetArgs::default();
+        label_args.id = snapshot.id.to_string();
+        label_args.add = vec!["gamma".to_string()];
+        label_args.remove = vec!["alpha".to_string()];
+        run_label_milestone(
+            temp.path(),
+            Some("replica-cli"),
+            Some("Tester"),
+            Some("tester@example.com"),
+            label_args,
+        )?;
+
+        let details = command_mile_details(temp.path(), &snapshot.id)?;
+        assert_eq!(details.comment_count, 2);
+        assert!(details.labels.contains(&"beta".to_string()));
+        assert!(details.labels.contains(&"gamma".to_string()));
+        assert!(!details.labels.contains(&"alpha".to_string()));
+        assert!(details
+            .latest_comment_excerpt
+            .as_deref()
+            .unwrap_or("")
+            .contains("Second comment"));
+        assert_eq!(details.label_events.len(), 2);
+        assert_eq!(details.label_events[0].label, "alpha");
+        assert_eq!(details.label_events[1].label, "gamma");
+        Ok(())
+    }
+
+    #[test]
+    fn issue_comment_and_label_lifecycle() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        Repository::init_bare(temp.path())?;
+
+        let replica = ReplicaId::new("replica-cli");
+        let labels = vec!["bug".to_string(), "core".to_string()];
+        let snapshot = command_issue_create(
+            temp.path(),
+            &replica,
+            "Tester <tester@example.com>",
+            "CLI Issue",
+            Some("Issue description"),
+            Some("Initial issue comment"),
+            &labels,
+            Some("create issue".to_string()),
+            IssueStatus::Open,
+        )?;
+
+        let mut comment_args = CommentTargetArgs::default();
+        comment_args.id = snapshot.id.to_string();
+        comment_args.input.comment = Some("Follow up".to_string());
+        comment_args.input.no_editor = true;
+        run_comment_issue(
+            temp.path(),
+            Some("replica-cli"),
+            Some("Tester"),
+            Some("tester@example.com"),
+            comment_args,
+        )?;
+
+        let mut label_args = LabelTargetArgs::default();
+        label_args.id = snapshot.id.to_string();
+        label_args.add = vec!["frontend".to_string()];
+        label_args.remove = vec!["core".to_string()];
+        run_label_issue(
+            temp.path(),
+            Some("replica-cli"),
+            Some("Tester"),
+            Some("tester@example.com"),
+            label_args,
+        )?;
+
+        let details = command_issue_details_list(temp.path())?
+            .into_iter()
+            .find(|issue| issue.id == snapshot.id)
+            .expect("issue present");
+        assert_eq!(details.comment_count, 2);
+        assert!(details.labels.contains(&"bug".to_string()));
+        assert!(details.labels.contains(&"frontend".to_string()));
+        assert!(!details.labels.contains(&"core".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn build_show_payload_includes_metadata() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        Repository::init_bare(temp.path())?;
+
+        let replica = ReplicaId::new("replica-cli");
+        let snapshot = command_mile_create(
+            temp.path(),
+            &replica,
+            "Tester <tester@example.com>",
+            "Payload Test",
+            Some("# Heading\n\n* item"),
+            Some("Initial"),
+            &[],
+            None,
+            MileStatus::Open,
+        )?;
+
+        let details = command_mile_details(temp.path(), &snapshot.id)?;
+        let payload = build_milestone_show_payload(&details);
+        assert_eq!(payload["id"], snapshot.id.to_string());
+        assert_eq!(payload["title"], "Payload Test");
+        assert_eq!(payload["status"], details.status.to_string());
+        assert_eq!(payload["stats"]["comment_count"], 1);
+        assert!(payload["comments"].is_array());
+
+        let rendered = render_markdown_lines(details.description.as_deref().unwrap());
+        assert_eq!(rendered[0], "HEADING");
+        assert_eq!(rendered[2], "• item");
+        Ok(())
+    }
+
+    #[test]
     fn description_input_rejects_multiple_sources() {
         let args = DescriptionInputArgs {
             description: Some("inline".into()),
