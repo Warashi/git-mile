@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 mod view;
 
@@ -56,6 +57,8 @@ fn run() -> Result<()> {
         email,
         command,
     } = Cli::parse();
+
+    let _ = git_mile_core::metrics::init_prometheus();
 
     match command {
         Commands::Init => command_init(&repo)?,
@@ -162,6 +165,7 @@ fn run() -> Result<()> {
             email.as_deref(),
             command,
         )?,
+        Commands::Metrics { command } => handle_metrics_command(command)?,
         Commands::EntityDebug(entity_args) => handle_entity_debug(&repo, entity_args)?,
     }
 
@@ -213,6 +217,10 @@ enum Commands {
         #[command(subcommand)]
         command: CommentCommand,
     },
+    Metrics {
+        #[command(subcommand)]
+        command: MetricsCommand,
+    },
     EntityDebug(EntityArgs),
 }
 
@@ -261,6 +269,11 @@ enum CommentCommand {
     #[command(alias = "mile")]
     Milestone(CommentTargetArgs),
     Issue(CommentTargetArgs),
+}
+
+#[derive(Subcommand)]
+enum MetricsCommand {
+    Dump,
 }
 
 #[derive(Subcommand)]
@@ -1231,6 +1244,7 @@ fn command_mile_list(repo: &Path) -> Result<Vec<MileSummary>> {
 }
 
 fn command_mile_details(repo: &Path, mile_id: &MileId) -> Result<MilestoneDetailsView> {
+    let start = Instant::now();
     let cache = CacheBundle::open(repo);
     let service = if let Some(bundle) = cache.as_ref() {
         MilestoneService::open_with_cache(
@@ -1242,9 +1256,12 @@ fn command_mile_details(repo: &Path, mile_id: &MileId) -> Result<MilestoneDetail
         MilestoneService::open_with_mode(repo, LockMode::Read)?
     };
     let details = service.get_with_comments(mile_id)?;
+    metrics::histogram!("latency.show", "entity" => "milestone")
+        .record(start.elapsed().as_secs_f64());
     Ok(details.into())
 }
 fn command_issue_details(repo: &Path, issue_id: &IssueId) -> Result<IssueDetailsView> {
+    let start = Instant::now();
     let cache = CacheBundle::open(repo);
     let service = if let Some(bundle) = cache.as_ref() {
         IssueService::open_with_cache(repo, LockMode::Read, bundle.adapter(CacheNamespace::Issues))?
@@ -1252,6 +1269,7 @@ fn command_issue_details(repo: &Path, issue_id: &IssueId) -> Result<IssueDetails
         IssueService::open_with_mode(repo, LockMode::Read)?
     };
     let details = service.get_with_comments(issue_id)?;
+    metrics::histogram!("latency.show", "entity" => "issue").record(start.elapsed().as_secs_f64());
     Ok(details.into())
 }
 
@@ -1836,6 +1854,18 @@ fn print_label_result(
     Ok(())
 }
 
+fn handle_metrics_command(command: MetricsCommand) -> Result<()> {
+    match command {
+        MetricsCommand::Dump => {
+            let snapshot = git_mile_core::metrics::render_prometheus()
+                .unwrap_or_else(|| "# metrics recorder not initialized".to_string());
+            println!("{snapshot}");
+        }
+    }
+
+    Ok(())
+}
+
 fn format_label_list(labels: &[String]) -> String {
     if labels.is_empty() {
         "(none)".to_string()
@@ -1890,6 +1920,8 @@ fn run_milestone_list(repo: &Path, args: MilestoneListArgs) -> Result<()> {
         return Ok(());
     }
 
+    let start = Instant::now();
+
     let schema = milestone_schema();
     let mut request =
         build_query_request(&schema, filter.as_deref(), &sort, limit, cursor.as_deref())?;
@@ -1939,6 +1971,9 @@ fn run_milestone_list(repo: &Path, args: MilestoneListArgs) -> Result<()> {
         }
     }
 
+    metrics::histogram!("latency.list", "entity" => "milestone")
+        .record(start.elapsed().as_secs_f64());
+
     Ok(())
 }
 
@@ -1981,6 +2016,8 @@ fn run_issue_list(repo: &Path, args: IssueListArgs) -> Result<()> {
         }
         return Ok(());
     }
+
+    let start = Instant::now();
 
     let schema = issue_schema();
     let mut request =
@@ -2030,6 +2067,8 @@ fn run_issue_list(repo: &Path, args: IssueListArgs) -> Result<()> {
             }
         }
     }
+
+    metrics::histogram!("latency.list", "entity" => "issue").record(start.elapsed().as_secs_f64());
 
     Ok(())
 }

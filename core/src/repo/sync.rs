@@ -168,6 +168,7 @@ impl BackgroundSyncWorker {
 
     pub fn enqueue_delta(&self, delta: IndexDelta) -> Result<oneshot::Receiver<Result<()>>> {
         let key = delta.key();
+        let namespace_label = delta.namespace.as_str();
         {
             let mut statuses = self
                 .inner
@@ -178,6 +179,8 @@ impl BackgroundSyncWorker {
         }
 
         self.inner.queue_depth.fetch_add(1, Ordering::SeqCst);
+        metrics::gauge!("sync.queue_depth", "namespace" => namespace_label)
+            .set(self.queue_depth() as f64);
 
         let (tx, rx) = oneshot::channel();
         let envelope = SyncEnvelope {
@@ -185,10 +188,14 @@ impl BackgroundSyncWorker {
             respond_to: Some(tx),
         };
 
-        self.inner
-            .sender
-            .try_send(SyncCommand::Apply(envelope))
-            .map_err(|err| Error::validation(format!("failed to enqueue sync work: {err}")))?;
+        if let Err(err) = self.inner.sender.try_send(SyncCommand::Apply(envelope)) {
+            self.inner.queue_depth.fetch_sub(1, Ordering::SeqCst);
+            metrics::gauge!("sync.queue_depth", "namespace" => namespace_label)
+                .set(self.queue_depth() as f64);
+            return Err(Error::validation(format!(
+                "failed to enqueue sync work: {err}"
+            )));
+        }
 
         Ok(rx)
     }
@@ -223,6 +230,11 @@ impl BackgroundSyncWorkerInner {
                             let key = envelope.delta.key();
                             let result = process_delta(&envelope.delta).await;
                             self.queue_depth.fetch_sub(1, Ordering::SeqCst);
+                            metrics::gauge!(
+                                "sync.queue_depth",
+                                "namespace" => envelope.delta.namespace.as_str()
+                            )
+                            .set(self.queue_depth.load(Ordering::SeqCst) as f64);
                             {
                                 let mut statuses = self.statuses.lock().expect("sync status map poisoned");
                                 statuses.insert(
@@ -234,6 +246,12 @@ impl BackgroundSyncWorkerInner {
                                     },
                                 );
                             }
+                            metrics::counter!(
+                                "sync.delta_processed",
+                                "namespace" => envelope.delta.namespace.as_str(),
+                                "status" => if result.is_ok() { "applied" } else { "failed" }
+                            )
+                            .increment(1);
                             if let Some(respond_to) = envelope.respond_to {
                                 let _ = respond_to.send(result);
                             }

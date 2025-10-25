@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap};
 use std::str::FromStr;
+use std::time::Instant;
 
 use nom::branch::alt;
 use nom::bytes::complete::{escaped_transform, is_not, tag, take_while1};
@@ -730,9 +731,12 @@ enum SExpr {
 }
 
 pub fn parse_query(input: &str) -> QueryResult<QueryExpr> {
+    let start = Instant::now();
     let (_, expr) = delimited(multispace0, parse_sexpr, multispace0)(input)
         .map_err(|_| QueryError::EmptyExpression)?;
-    build_expr(expr)
+    let parsed = build_expr(expr);
+    metrics::histogram!("query.ast_parse_time").record(start.elapsed().as_secs_f64());
+    parsed
 }
 
 fn parse_sexpr(input: &str) -> nom::IResult<&str, SExpr> {

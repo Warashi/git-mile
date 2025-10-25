@@ -19,6 +19,8 @@ crc32fast = "1.4"
 nom = "7"
 async-trait = "0.1"
 tokio = { version = "1.38", features = ["rt-multi-thread", "macros", "sync", "time"] }
+metrics = "0.22"
+metrics-exporter-prometheus = "0.13"
 
 [dev-dependencies]
 tempfile = "3.10"
@@ -26,4 +28,8 @@ criterion = { version = "0.5" }
 
 [[bench]]
 name = "repository_lock"
+harness = false
+
+[[bench]]
+name = "query_latency"
 harness = false

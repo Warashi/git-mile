@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rocksdb::{
     ColumnFamily, ColumnFamilyDescriptor, DB, DEFAULT_COLUMN_FAMILY_NAME, IteratorMode, Options,
@@ -75,6 +75,10 @@ impl CacheNamespace {
         CacheNamespace::Labels,
         CacheNamespace::Identities,
     ];
+
+    pub fn as_str(self) -> &'static str {
+        self.cf_name()
+    }
 
     fn cf_name(self) -> &'static str {
         match self {
@@ -589,7 +593,15 @@ impl CacheRepository for PersistentCache {
             .append_journal_entry(namespace, entity_id, &generation, inserted)?;
 
         // Conservatively invalidate the entity so the next read rebuilds the cache.
-        self.invalidate(namespace, entity_id)
+        let result = self.invalidate(namespace, entity_id);
+        if result.is_ok() {
+            metrics::counter!(
+                "cache.invalidate",
+                "namespace" => namespace.as_str()
+            )
+            .increment(1);
+        }
+        result
     }
 }
 
@@ -804,22 +816,51 @@ impl RepositoryCacheHook for EntityCacheAdapter {
         match self.repository.get(self.namespace, entity_id)? {
             CacheLoadOutcome::Hit(snapshot) => {
                 self.metrics.record_hit();
+                metrics::counter!(
+                    "cache.requests",
+                    "namespace" => self.namespace.as_str(),
+                    "outcome" => "hit"
+                )
+                .increment(1);
                 Ok(Some(snapshot))
             }
             CacheLoadOutcome::Miss => {
                 self.metrics.record_miss();
+                metrics::counter!(
+                    "cache.requests",
+                    "namespace" => self.namespace.as_str(),
+                    "outcome" => "miss"
+                )
+                .increment(1);
                 Ok(None)
             }
             CacheLoadOutcome::Stale => {
                 self.metrics.record_rebuild();
                 self.metrics.record_miss();
+                metrics::counter!(
+                    "cache.requests",
+                    "namespace" => self.namespace.as_str(),
+                    "outcome" => "stale"
+                )
+                .increment(1);
                 Ok(None)
             }
         }
     }
 
     fn on_entity_loaded(&self, entity_id: &EntityId, snapshot: &EntitySnapshot) -> Result<()> {
+        let start = Instant::now();
         self.repository.put(self.namespace, entity_id, snapshot)?;
+        metrics::histogram!(
+            "cache.rebuild_latency",
+            "namespace" => self.namespace.as_str()
+        )
+        .record(start.elapsed().as_secs_f64());
+        metrics::counter!(
+            "cache.rebuilds",
+            "namespace" => self.namespace.as_str()
+        )
+        .increment(1);
         self.metrics.record_store();
         Ok(())
     }
@@ -837,6 +878,11 @@ impl RepositoryCacheHook for EntityCacheAdapter {
 
     fn invalidate_entity(&self, entity_id: &EntityId) -> Result<()> {
         self.repository.invalidate(self.namespace, entity_id)?;
+        metrics::counter!(
+            "cache.evictions",
+            "namespace" => self.namespace.as_str()
+        )
+        .increment(1);
         self.metrics.record_eviction();
         Ok(())
     }
