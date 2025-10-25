@@ -384,6 +384,7 @@ dependencies = [
  "serde_json",
  "shlex",
  "tempfile",
+ "uuid",
 ]
 
 [[package]]

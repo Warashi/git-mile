@@ -8,17 +8,20 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use git_mile_core::issue::{CreateIssueInput, IssueSnapshot, IssueStatus, IssueStore};
+use git_mile_core::issue::{
+    AppendIssueCommentInput, CreateIssueInput, IssueId, IssueSnapshot, IssueStatus, IssueStore,
+};
 use git_mile_core::{
-    AddProtectionInput, AdoptIdentityInput, ChangeStatusInput, ChangeStatusOutcome,
-    CreateIdentityInput, CreateMileInput, EntityId, EntitySnapshot, EntityStore, EntitySummary,
-    IdentityProtection, IdentityStore, IdentitySummary, LockMode, MergeOutcome, MergeStrategy,
-    MileEventKind, MileId, MileSnapshot, MileStatus, MileStore, MileSummary, OperationId,
-    ProtectionKind, ReplicaId, app_version,
+    AddProtectionInput, AdoptIdentityInput, AppendCommentInput, ChangeStatusInput,
+    ChangeStatusOutcome, CreateIdentityInput, CreateMileInput, EntityId, EntitySnapshot,
+    EntityStore, EntitySummary, IdentityProtection, IdentityStore, IdentitySummary,
+    LamportTimestamp, LockMode, MergeOutcome, MergeStrategy, MileEventKind, MileId, MileSnapshot,
+    MileStatus, MileStore, MileSummary, OperationId, ProtectionKind, ReplicaId, app_version,
 };
 use git2::{Config, ErrorCode, Repository};
 use serde_json::{json, to_writer_pretty};
 use tempfile::NamedTempFile;
+use uuid::Uuid;
 
 fn main() {
     if let Err(err) = run() {
@@ -121,6 +124,13 @@ fn run() -> Result<()> {
             email.as_deref(),
             command,
         )?,
+        Commands::Comment { command } => handle_comment_command(
+            &repo,
+            replica.as_deref(),
+            author.as_deref(),
+            email.as_deref(),
+            command,
+        )?,
         Commands::EntityDebug(entity_args) => handle_entity_debug(&repo, entity_args)?,
     }
 
@@ -164,6 +174,10 @@ enum Commands {
         #[command(subcommand)]
         command: ProtectCommand,
     },
+    Comment {
+        #[command(subcommand)]
+        command: CommentCommand,
+    },
     EntityDebug(EntityArgs),
 }
 
@@ -205,6 +219,26 @@ struct CreateCommonArgs {
     comment: CommentInputArgs,
     #[command(flatten)]
     labels: LabelInputArgs,
+}
+
+#[derive(Subcommand)]
+enum CommentCommand {
+    #[command(alias = "mile")]
+    Milestone(CommentTargetArgs),
+    Issue(CommentTargetArgs),
+}
+
+#[derive(Args, Default)]
+struct CommentTargetArgs {
+    id: String,
+    #[command(flatten)]
+    input: CommentInputArgs,
+    #[arg(long)]
+    quote: Option<String>,
+    #[arg(long)]
+    json: bool,
+    #[arg(long = "dry-run")]
+    dry_run: bool,
 }
 
 #[derive(Parser)]
@@ -468,7 +502,11 @@ fn resolve_description_input(args: &DescriptionInputArgs) -> Result<Option<Strin
     }
 }
 
-fn resolve_comment_input(args: &CommentInputArgs) -> Result<Option<String>> {
+fn resolve_comment_input(
+    args: &CommentInputArgs,
+    template: Option<&str>,
+    strip_template_headers: bool,
+) -> Result<Option<String>> {
     let mut provided = 0;
     if args.comment.is_some() {
         provided += 1;
@@ -517,7 +555,10 @@ fn resolve_comment_input(args: &CommentInputArgs) -> Result<Option<String>> {
             anyhow!("no editor configured; set $EDITOR or pass --comment/--comment-file")
         })?;
         let editor = EditorInput::new(command);
-        let value = editor.capture(None)?;
+        let mut value = editor.capture(template)?;
+        if strip_template_headers {
+            value = strip_leading_template_metadata(&value);
+        }
         let value = normalize_multiline(&value);
         if value.is_empty() && !args.allow_empty {
             return Err(anyhow!(
@@ -557,6 +598,22 @@ fn resolve_labels(args: &LabelInputArgs) -> Result<Vec<String>> {
 
 fn normalize_multiline(value: &str) -> String {
     value.trim_end().to_string()
+}
+
+fn strip_leading_template_metadata(value: &str) -> String {
+    let mut dropping = true;
+    let mut retained = Vec::new();
+    for line in value.lines() {
+        if dropping && line.trim_start().starts_with('#') {
+            continue;
+        }
+
+        dropping = false;
+        retained.push(line);
+    }
+
+    let joined = retained.join("\n");
+    joined.trim_start_matches('\n').to_string()
 }
 
 fn resolve_editor_command() -> Option<Vec<String>> {
@@ -629,6 +686,116 @@ fn preview_text(value: &str) -> String {
         preview.push('…');
         preview
     }
+}
+
+fn build_comment_editor_template(
+    resource_label: &str,
+    resource_id: &EntityId,
+    title: &str,
+    status: &str,
+    labels: &[String],
+    quoted_body: Option<&str>,
+) -> String {
+    let mut lines = Vec::new();
+    lines.push(format!("# {} {} ({})", resource_label, resource_id, status));
+    if !title.trim().is_empty() {
+        lines.push(format!("# Title: {}", title.trim()));
+    }
+    if !labels.is_empty() {
+        lines.push(format!("# Labels: {}", labels.join(", ")));
+    }
+    lines.push("#".to_string());
+    lines.push(String::new());
+
+    if let Some(body) = quoted_body {
+        if body.is_empty() {
+            lines.push(String::from(">"));
+        } else {
+            for line in body.lines() {
+                lines.push(format!("> {}", line));
+            }
+        }
+        lines.push(String::new());
+    }
+
+    let mut template = lines.join("\n");
+    if !template.ends_with('\n') {
+        template.push('\n');
+    }
+    template
+}
+
+fn print_comment_dry_run(
+    resource: &str,
+    resource_id: &EntityId,
+    body: &str,
+    json: bool,
+) -> Result<()> {
+    if json {
+        let payload = json!({
+            "resource": resource,
+            "resource_id": resource_id.to_string(),
+            "dry_run": true,
+            "body": body,
+            "preview": preview_text(body),
+        });
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        to_writer_pretty(&mut handle, &payload)?;
+        handle.write_all(b"\n")?;
+        return Ok(());
+    }
+
+    println!(
+        "Dry run: comment not saved for {} {}",
+        resource, resource_id
+    );
+    if body.trim().is_empty() {
+        println!(" Body: (empty)");
+    } else {
+        println!(" Body:\n{body}");
+    }
+    Ok(())
+}
+
+fn print_comment_confirmation(
+    resource: &str,
+    resource_id: &EntityId,
+    comment_id: &Uuid,
+    author: &str,
+    created_at: &LamportTimestamp,
+    body: &str,
+    json: bool,
+) -> Result<()> {
+    if json {
+        let payload = json!({
+            "resource": resource,
+            "resource_id": resource_id.to_string(),
+            "comment_id": comment_id.to_string(),
+            "created_at": created_at.to_string(),
+            "author": author,
+            "preview": preview_text(body),
+        });
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        to_writer_pretty(&mut handle, &payload)?;
+        handle.write_all(b"\n")?;
+        return Ok(());
+    }
+
+    println!(
+        "Comment {} recorded on {} {}",
+        comment_id, resource, resource_id
+    );
+    println!(" Author: {}", author);
+    println!(" Created: {}", created_at);
+    let preview = preview_text(body);
+    if preview.is_empty() {
+        println!(" Preview: (empty)");
+    } else {
+        println!(" Preview: {}", preview);
+    }
+    Ok(())
 }
 
 fn print_milestone_create_summary(
@@ -735,6 +902,11 @@ fn command_mile_show(repo: &Path, mile_id: &MileId) -> Result<MileSnapshot> {
     Ok(store.load_mile(mile_id)?)
 }
 
+fn command_issue_show(repo: &Path, issue_id: &IssueId) -> Result<IssueSnapshot> {
+    let store = IssueStore::open_with_mode(repo, LockMode::Read)?;
+    Ok(store.load_issue(issue_id)?)
+}
+
 fn command_mile_change_status(
     repo: &Path,
     replica_id: &ReplicaId,
@@ -769,7 +941,7 @@ fn run_milestone_create(
     } = args;
 
     let description = resolve_description_input(&common.description)?;
-    let comment = resolve_comment_input(&common.comment)?;
+    let comment = resolve_comment_input(&common.comment, None, false)?;
     let labels = resolve_labels(&common.labels)?;
 
     let replica_id = resolve_replica(replica);
@@ -811,7 +983,7 @@ fn run_issue_create(
     } = args;
 
     let description = resolve_description_input(&common.description)?;
-    let comment = resolve_comment_input(&common.comment)?;
+    let comment = resolve_comment_input(&common.comment, None, false)?;
     let labels = resolve_labels(&common.labels)?;
 
     let replica_id = resolve_replica(replica);
@@ -835,6 +1007,214 @@ fn run_issue_create(
     )?;
     print_issue_create_summary(&snapshot, comment.is_some(), json)?;
     Ok(())
+}
+
+fn run_comment_milestone(
+    repo: &Path,
+    replica: Option<&str>,
+    author: Option<&str>,
+    email: Option<&str>,
+    args: CommentTargetArgs,
+) -> Result<()> {
+    let CommentTargetArgs {
+        id,
+        input,
+        quote,
+        json,
+        dry_run,
+    } = args;
+
+    let mile_id = parse_entity_id(&id)?;
+    let snapshot = command_mile_show(repo, &mile_id)?;
+
+    let quoted_body = if let Some(value) = quote {
+        let comment_id = Uuid::parse_str(&value)
+            .map_err(|err| anyhow!("invalid comment id '{value}': {err}"))?;
+        let comment = snapshot
+            .comments
+            .iter()
+            .find(|comment| comment.id == comment_id)
+            .ok_or_else(|| anyhow!("comment {} not found on milestone {}", comment_id, mile_id))?;
+        Some(comment.body.clone())
+    } else {
+        None
+    };
+
+    let labels: Vec<String> = snapshot.labels.iter().cloned().collect();
+    let template = build_comment_editor_template(
+        "Milestone",
+        &mile_id,
+        &snapshot.title,
+        &snapshot.status.to_string(),
+        &labels,
+        quoted_body.as_deref(),
+    );
+    let has_template = !template.is_empty();
+    let comment_text = resolve_comment_input(
+        &input,
+        if has_template {
+            Some(template.as_str())
+        } else {
+            None
+        },
+        has_template,
+    )?;
+    let body = comment_text.unwrap_or_default();
+    if body.is_empty() && !input.allow_empty {
+        return Err(anyhow!(
+            "comment body is empty; provide content or pass --allow-empty"
+        ));
+    }
+
+    if dry_run {
+        print_comment_dry_run("milestone", &mile_id, &body, json)?;
+        return Ok(());
+    }
+
+    let replica_id = resolve_replica(replica);
+    let identity = resolve_identity(repo, &replica_id, author, email)?;
+    let store = MileStore::open_with_mode(repo, LockMode::Write)?;
+    let outcome = store.append_comment(AppendCommentInput {
+        mile_id: mile_id.clone(),
+        replica_id: replica_id.clone(),
+        author: identity.signature.clone(),
+        message: Some(format!("comment milestone {}", mile_id)),
+        comment_id: None,
+        body: body.clone(),
+    })?;
+
+    let comment = outcome
+        .snapshot
+        .comments
+        .iter()
+        .find(|comment| comment.id == outcome.comment_id)
+        .ok_or_else(|| {
+            anyhow!(
+                "comment {} not found in updated milestone snapshot",
+                outcome.comment_id
+            )
+        })?;
+
+    if !outcome.created {
+        eprintln!(
+            "warning: comment {} already exists on milestone {}",
+            outcome.comment_id, mile_id
+        );
+    }
+
+    print_comment_confirmation(
+        "milestone",
+        &mile_id,
+        &outcome.comment_id,
+        &comment.author,
+        &comment.created_at,
+        &comment.body,
+        json,
+    )
+}
+
+fn run_comment_issue(
+    repo: &Path,
+    replica: Option<&str>,
+    author: Option<&str>,
+    email: Option<&str>,
+    args: CommentTargetArgs,
+) -> Result<()> {
+    let CommentTargetArgs {
+        id,
+        input,
+        quote,
+        json,
+        dry_run,
+    } = args;
+
+    let issue_id = parse_entity_id(&id)?;
+    let snapshot = command_issue_show(repo, &issue_id)?;
+
+    let quoted_body = if let Some(value) = quote {
+        let comment_id = Uuid::parse_str(&value)
+            .map_err(|err| anyhow!("invalid comment id '{value}': {err}"))?;
+        let comment = snapshot
+            .comments
+            .iter()
+            .find(|comment| comment.id == comment_id)
+            .ok_or_else(|| anyhow!("comment {} not found on issue {}", comment_id, issue_id))?;
+        Some(comment.body.clone())
+    } else {
+        None
+    };
+
+    let labels: Vec<String> = snapshot.labels.iter().cloned().collect();
+    let template = build_comment_editor_template(
+        "Issue",
+        &issue_id,
+        &snapshot.title,
+        &snapshot.status.to_string(),
+        &labels,
+        quoted_body.as_deref(),
+    );
+    let has_template = !template.is_empty();
+    let comment_text = resolve_comment_input(
+        &input,
+        if has_template {
+            Some(template.as_str())
+        } else {
+            None
+        },
+        has_template,
+    )?;
+    let body = comment_text.unwrap_or_default();
+    if body.is_empty() && !input.allow_empty {
+        return Err(anyhow!(
+            "comment body is empty; provide content or pass --allow-empty"
+        ));
+    }
+
+    if dry_run {
+        print_comment_dry_run("issue", &issue_id, &body, json)?;
+        return Ok(());
+    }
+
+    let replica_id = resolve_replica(replica);
+    let identity = resolve_identity(repo, &replica_id, author, email)?;
+    let store = IssueStore::open_with_mode(repo, LockMode::Write)?;
+    let outcome = store.append_comment(AppendIssueCommentInput {
+        issue_id: issue_id.clone(),
+        replica_id: replica_id.clone(),
+        author: identity.signature.clone(),
+        message: Some(format!("comment issue {}", issue_id)),
+        comment_id: None,
+        body: body.clone(),
+    })?;
+
+    let comment = outcome
+        .snapshot
+        .comments
+        .iter()
+        .find(|comment| comment.id == outcome.comment_id)
+        .ok_or_else(|| {
+            anyhow!(
+                "comment {} not found in updated issue snapshot",
+                outcome.comment_id
+            )
+        })?;
+
+    if !outcome.created {
+        eprintln!(
+            "warning: comment {} already exists on issue {}",
+            outcome.comment_id, issue_id
+        );
+    }
+
+    print_comment_confirmation(
+        "issue",
+        &issue_id,
+        &outcome.comment_id,
+        &comment.author,
+        &comment.created_at,
+        &comment.body,
+        json,
+    )
 }
 
 fn run_mile_list(repo: &Path, args: MileListArgs) -> Result<()> {
@@ -918,6 +1298,23 @@ fn handle_protect_command(
 ) -> Result<()> {
     match command {
         ProtectCommand::Identity(args) => run_identity_protect(repo, replica, author, email, args)?,
+    }
+
+    Ok(())
+}
+
+fn handle_comment_command(
+    repo: &Path,
+    replica: Option<&str>,
+    author: Option<&str>,
+    email: Option<&str>,
+    command: CommentCommand,
+) -> Result<()> {
+    match command {
+        CommentCommand::Milestone(args) => {
+            run_comment_milestone(repo, replica, author, email, args)?
+        }
+        CommentCommand::Issue(args) => run_comment_issue(repo, replica, author, email, args)?,
     }
 
     Ok(())
@@ -1608,14 +2005,14 @@ mod tests {
         let file = NamedTempFile::new()?;
         let mut args = CommentInputArgs::default();
         args.comment_file = Some(file.path().to_path_buf());
-        let err = resolve_comment_input(&args).expect_err("missing allow-empty");
+        let err = resolve_comment_input(&args, None, false).expect_err("missing allow-empty");
         assert!(
             err.to_string()
                 .contains("comment file produced empty content")
         );
 
         args.allow_empty = true;
-        let comment = resolve_comment_input(&args)?;
+        let comment = resolve_comment_input(&args, None, false)?;
         assert!(comment.is_none());
         Ok(())
     }
@@ -1718,6 +2115,141 @@ mod tests {
         assert_eq!(snapshot.status, IssueStatus::Draft);
         assert_eq!(snapshot.comments.len(), 1);
         assert_eq!(snapshot.comments[0].body, "Investigate failure");
+        Ok(())
+    }
+
+    #[test]
+    fn milestone_comment_via_body_flag() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        Repository::init_bare(temp.path())?;
+        let replica = ReplicaId::new("replica-comment");
+
+        let snapshot = command_mile_create(
+            temp.path(),
+            &replica,
+            "tester <tester@example.com>",
+            "Milestone",
+            None,
+            None,
+            &[],
+            None,
+            MileStatus::Open,
+        )?;
+
+        let mut comment_args = CommentTargetArgs::default();
+        comment_args.id = snapshot.id.to_string();
+        comment_args.input.comment = Some("Follow-up from CLI".into());
+        comment_args.input.no_editor = true;
+
+        run_comment_milestone(
+            temp.path(),
+            Some("replica-comment"),
+            Some("Tester"),
+            Some("tester@example.com"),
+            comment_args,
+        )?;
+
+        let store = MileStore::open_with_mode(temp.path(), LockMode::Read)?;
+        let updated = store.load_mile(&snapshot.id)?;
+        assert_eq!(updated.comments.len(), 1);
+        assert_eq!(updated.comments[0].body, "Follow-up from CLI");
+        Ok(())
+    }
+
+    #[test]
+    fn issue_comment_via_editor_with_quote() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        Repository::init_bare(temp.path())?;
+        let replica = ReplicaId::new("replica-editor");
+
+        let snapshot = command_issue_create(
+            temp.path(),
+            &replica,
+            "tester <tester@example.com>",
+            "Issue",
+            None,
+            Some("Seed comment"),
+            &[],
+            None,
+            IssueStatus::Open,
+        )?;
+        let quoted_id = snapshot.comments.first().expect("initial comment").id;
+
+        let editor_path = temp.path().join("editor.sh");
+        fs::write(&editor_path, "#!/bin/sh\necho \"Editor reply\" > \"$1\"\n")?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&editor_path)?.permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&editor_path, perms)?;
+        }
+        let previous_editor = std::env::var("EDITOR").ok();
+        unsafe {
+            std::env::set_var("EDITOR", &editor_path);
+        }
+
+        let mut comment_args = CommentTargetArgs::default();
+        comment_args.id = snapshot.id.to_string();
+        comment_args.input.editor = true;
+        comment_args.input.no_editor = false;
+        comment_args.quote = Some(quoted_id.to_string());
+
+        let result = run_comment_issue(
+            temp.path(),
+            Some("replica-editor"),
+            Some("Tester"),
+            Some("tester@example.com"),
+            comment_args,
+        );
+
+        unsafe {
+            if let Some(value) = previous_editor {
+                std::env::set_var("EDITOR", value);
+            } else {
+                std::env::remove_var("EDITOR");
+            }
+        }
+
+        result?;
+
+        let store = IssueStore::open_with_mode(temp.path(), LockMode::Read)?;
+        let updated = store.load_issue(&snapshot.id)?;
+        assert_eq!(updated.comments.len(), 2);
+        assert_eq!(updated.comments.last().unwrap().body, "Editor reply");
+        Ok(())
+    }
+
+    #[test]
+    fn comment_requires_body_without_allow_empty_flag() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        Repository::init_bare(temp.path())?;
+        let replica = ReplicaId::new("replica-empty");
+
+        let snapshot = command_issue_create(
+            temp.path(),
+            &replica,
+            "tester <tester@example.com>",
+            "Issue",
+            None,
+            None,
+            &[],
+            None,
+            IssueStatus::Open,
+        )?;
+
+        let mut comment_args = CommentTargetArgs::default();
+        comment_args.id = snapshot.id.to_string();
+        comment_args.input.no_editor = true;
+
+        let result = run_comment_issue(
+            temp.path(),
+            Some("replica-empty"),
+            Some("Tester"),
+            Some("tester@example.com"),
+            comment_args,
+        );
+        assert!(result.is_err());
         Ok(())
     }
 
