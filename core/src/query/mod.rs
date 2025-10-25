@@ -11,6 +11,7 @@ use nom::sequence::{delimited, preceded};
 
 use crate::clock::{LamportTimestamp, ReplicaId};
 use crate::model::{IssueDetails, MilestoneDetails};
+use crate::repo::CacheGenerationSnapshot;
 
 #[derive(Debug, thiserror::Error)]
 pub enum QueryError {
@@ -43,6 +44,8 @@ pub enum QueryError {
     },
     #[error("invalid cursor `{0}`")]
     InvalidCursor(String),
+    #[error("cursor targets stale generation {expected}, current {actual:?}")]
+    StaleGeneration { expected: u64, actual: Option<u64> },
     #[error("failed to parse literal `{literal}` as timestamp")]
     InvalidTimestamp { literal: String },
 }
@@ -346,18 +349,38 @@ pub enum SortDirection {
 #[derive(Debug, Clone)]
 pub struct PageCursor {
     pub offset: usize,
+    pub generation: Option<u64>,
 }
 
 impl PageCursor {
     pub fn encode(&self) -> String {
-        format!("{}", self.offset)
+        match self.generation {
+            Some(generation) => format!("{generation}:{}", self.offset),
+            None => format!("{}", self.offset),
+        }
     }
 
     pub fn parse(value: &str) -> QueryResult<Self> {
-        let offset = value
-            .parse::<usize>()
-            .map_err(|_| QueryError::InvalidCursor(value.to_string()))?;
-        Ok(Self { offset })
+        if let Some((generation, offset)) = value.split_once(':') {
+            let generation = generation
+                .parse::<u64>()
+                .map_err(|_| QueryError::InvalidCursor(value.to_string()))?;
+            let offset = offset
+                .parse::<usize>()
+                .map_err(|_| QueryError::InvalidCursor(value.to_string()))?;
+            Ok(Self {
+                offset,
+                generation: Some(generation),
+            })
+        } else {
+            let offset = value
+                .parse::<usize>()
+                .map_err(|_| QueryError::InvalidCursor(value.to_string()))?;
+            Ok(Self {
+                offset,
+                generation: None,
+            })
+        }
     }
 }
 
@@ -373,6 +396,7 @@ pub struct QueryRequest {
 pub struct QueryResponse<T> {
     pub items: Vec<T>,
     pub next_cursor: Option<String>,
+    pub generation: Option<CacheGenerationSnapshot>,
 }
 
 pub struct QueryEngine {
@@ -384,7 +408,12 @@ impl QueryEngine {
         Self { schema }
     }
 
-    pub fn execute<R, I>(&self, records: I, request: &QueryRequest) -> QueryResult<QueryResponse<R>>
+    pub fn execute<R, I>(
+        &self,
+        records: I,
+        request: &QueryRequest,
+        generation: Option<&CacheGenerationSnapshot>,
+    ) -> QueryResult<QueryResponse<R>>
     where
         R: Clone + QueryRecord,
         I: IntoIterator<Item = R>,
@@ -395,6 +424,18 @@ impl QueryEngine {
 
         for spec in &request.sort {
             self.schema.ensure_sortable(&spec.field)?;
+        }
+
+        if let Some(cursor) = &request.cursor {
+            if let Some(expected_generation) = cursor.generation {
+                let actual_generation = generation.map(|snapshot| snapshot.generation);
+                if actual_generation != Some(expected_generation) {
+                    return Err(QueryError::StaleGeneration {
+                        expected: expected_generation,
+                        actual: actual_generation,
+                    });
+                }
+            }
         }
 
         let mut items: Vec<R> = records.into_iter().collect();
@@ -419,6 +460,7 @@ impl QueryEngine {
         let total = items.len();
         let offset = request.cursor.as_ref().map(|c| c.offset).unwrap_or(0);
         let limit = request.limit.unwrap_or(50);
+        let generation_snapshot = generation.cloned();
 
         let slice = items
             .into_iter()
@@ -430,6 +472,7 @@ impl QueryEngine {
             Some(
                 PageCursor {
                     offset: offset + slice.len(),
+                    generation: generation.map(|snapshot| snapshot.generation),
                 }
                 .encode(),
             )
@@ -440,6 +483,7 @@ impl QueryEngine {
         Ok(QueryResponse {
             items: slice,
             next_cursor,
+            generation: generation_snapshot,
         })
     }
 
@@ -1019,7 +1063,7 @@ mod tests {
             cursor: None,
         };
         let issues = vec![sample_issue()];
-        let response = engine.execute(issues.clone(), &request).unwrap();
+        let response = engine.execute(issues.clone(), &request, None).unwrap();
         assert_eq!(response.items.len(), 1);
 
         let closed = parse_query("(= status \"closed\")").unwrap();
@@ -1030,7 +1074,7 @@ mod tests {
             limit: Some(10),
             cursor: None,
         };
-        let response = engine.execute(issues, &request).unwrap();
+        let response = engine.execute(issues, &request, None).unwrap();
         assert!(response.items.is_empty());
     }
 
@@ -1055,9 +1099,72 @@ mod tests {
         };
 
         let response = engine
-            .execute(vec![first.clone(), second.clone()], &request)
+            .execute(vec![first.clone(), second.clone()], &request, None)
             .unwrap();
         assert_eq!(response.items[0].title, second.title);
         assert_eq!(response.items[1].title, first.title);
+    }
+
+    #[test]
+    fn cursor_roundtrips_generation() {
+        let cursor = PageCursor {
+            offset: 42,
+            generation: Some(7),
+        };
+        let encoded = cursor.encode();
+        assert_eq!(encoded, "7:42");
+        let parsed = PageCursor::parse(&encoded).expect("parse cursor");
+        assert_eq!(parsed.offset, 42);
+        assert_eq!(parsed.generation, Some(7));
+    }
+
+    #[test]
+    fn execute_rejects_stale_generation_cursor() {
+        let schema = issue_schema();
+        let engine = QueryEngine::new(schema.clone());
+        let cursor = PageCursor {
+            offset: 0,
+            generation: Some(3),
+        };
+        let request = QueryRequest {
+            filter: None,
+            sort: vec![],
+            limit: Some(10),
+            cursor: Some(cursor),
+        };
+        let generation = CacheGenerationSnapshot {
+            generation: 4,
+            created_at: 0,
+            base_clock: None,
+        };
+        let result = engine.execute(vec![sample_issue()], &request, Some(&generation));
+        assert!(matches!(
+            result,
+            Err(QueryError::StaleGeneration {
+                expected: 3,
+                actual: Some(4)
+            })
+        ));
+    }
+
+    #[test]
+    fn next_cursor_includes_generation_when_available() {
+        let schema = issue_schema();
+        let engine = QueryEngine::new(schema);
+        let issues = vec![sample_issue(), sample_issue(), sample_issue()];
+        let request = QueryRequest {
+            filter: None,
+            sort: vec![],
+            limit: Some(2),
+            cursor: None,
+        };
+        let generation = CacheGenerationSnapshot {
+            generation: 11,
+            created_at: 123,
+            base_clock: None,
+        };
+        let response = engine.execute(issues, &request, Some(&generation)).unwrap();
+        assert_eq!(response.generation.as_ref().map(|g| g.generation), Some(11));
+        assert_eq!(response.next_cursor.as_deref(), Some("11:2"));
     }
 }

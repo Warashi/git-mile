@@ -243,6 +243,10 @@ pub trait CacheRepository: Send + Sync {
 
     fn invalidate(&self, namespace: CacheNamespace, entity_id: &EntityId) -> Result<()>;
 
+    fn generation(&self, _namespace: CacheNamespace) -> Result<Option<CacheGenerationSnapshot>> {
+        Ok(None)
+    }
+
     fn on_pack_persisted(
         &self,
         _namespace: CacheNamespace,
@@ -556,6 +560,13 @@ impl CacheRepository for PersistentCache {
             let _ = self.db().delete_cf(&cf, key.as_bytes())?;
         }
         Ok(())
+    }
+
+    fn generation(&self, namespace: CacheNamespace) -> Result<Option<CacheGenerationSnapshot>> {
+        self.inner
+            .current_generation(namespace)
+            .map(CacheGenerationSnapshot::from)
+            .map(Some)
     }
 
     fn on_pack_persisted(

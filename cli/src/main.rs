@@ -24,8 +24,8 @@ use git_mile_core::query::{
     prepare_filter,
 };
 use git_mile_core::repo::{
-    CacheConfig, CacheNamespace, CacheRepository, EntityCacheAdapter, PersistentCache,
-    RepositoryCacheHook,
+    CacheConfig, CacheGenerationSnapshot, CacheNamespace, CacheRepository, EntityCacheAdapter,
+    PersistentCache, RepositoryCacheHook,
 };
 use git_mile_core::service::{IssueService, MilestoneService};
 use git_mile_core::{
@@ -509,6 +509,11 @@ struct CacheBundle {
     repository: Arc<dyn CacheRepository>,
 }
 
+struct QueryDataset<T> {
+    records: Vec<T>,
+    generation: Option<CacheGenerationSnapshot>,
+}
+
 fn cache_registry() -> &'static Mutex<HashMap<PathBuf, Arc<dyn CacheRepository>>> {
     static REGISTRY: OnceLock<Mutex<HashMap<PathBuf, Arc<dyn CacheRepository>>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
@@ -556,6 +561,13 @@ impl CacheBundle {
             Arc::clone(&self.repository),
             namespace,
         ))
+    }
+
+    fn generation(&self, namespace: CacheNamespace) -> Option<CacheGenerationSnapshot> {
+        self.repository
+            .generation(namespace)
+            .ok()
+            .and_then(|snapshot| snapshot)
     }
 }
 
@@ -605,10 +617,13 @@ fn execute_milestone_query(
     schema: &QuerySchema,
     request: &QueryRequest,
 ) -> Result<QueryResponse<CoreMilestoneDetails>> {
-    let records = load_milestone_details(repo)?;
+    let QueryDataset {
+        records,
+        generation,
+    } = load_milestone_details(repo)?;
     let engine = QueryEngine::new(schema.clone());
     engine
-        .execute(records, request)
+        .execute(records, request, generation.as_ref())
         .map_err(|err| anyhow!("query execution failed: {err}"))
 }
 
@@ -617,15 +632,21 @@ fn execute_issue_query(
     schema: &QuerySchema,
     request: &QueryRequest,
 ) -> Result<QueryResponse<CoreIssueDetails>> {
-    let records = load_issue_details(repo)?;
+    let QueryDataset {
+        records,
+        generation,
+    } = load_issue_details(repo)?;
     let engine = QueryEngine::new(schema.clone());
     engine
-        .execute(records, request)
+        .execute(records, request, generation.as_ref())
         .map_err(|err| anyhow!("query execution failed: {err}"))
 }
 
-fn load_milestone_details(repo: &Path) -> Result<Vec<CoreMilestoneDetails>> {
+fn load_milestone_details(repo: &Path) -> Result<QueryDataset<CoreMilestoneDetails>> {
     let cache = CacheBundle::open(repo);
+    let generation = cache
+        .as_ref()
+        .and_then(|bundle| bundle.generation(CacheNamespace::Milestones));
     let summaries = {
         let store = if let Some(bundle) = cache.as_ref() {
             MileStore::open_with_cache(
@@ -651,11 +672,17 @@ fn load_milestone_details(repo: &Path) -> Result<Vec<CoreMilestoneDetails>> {
     for summary in summaries {
         details.push(service.get_with_comments(&summary.id)?);
     }
-    Ok(details)
+    Ok(QueryDataset {
+        records: details,
+        generation,
+    })
 }
 
-fn load_issue_details(repo: &Path) -> Result<Vec<CoreIssueDetails>> {
+fn load_issue_details(repo: &Path) -> Result<QueryDataset<CoreIssueDetails>> {
     let cache = CacheBundle::open(repo);
+    let generation = cache
+        .as_ref()
+        .and_then(|bundle| bundle.generation(CacheNamespace::Issues));
     let summaries = {
         let store = if let Some(bundle) = cache.as_ref() {
             IssueStore::open_with_cache(
@@ -677,7 +704,10 @@ fn load_issue_details(repo: &Path) -> Result<Vec<CoreIssueDetails>> {
     for summary in summaries {
         details.push(service.get_with_comments(&summary.id)?);
     }
-    Ok(details)
+    Ok(QueryDataset {
+        records: details,
+        generation,
+    })
 }
 
 fn command_init(repo: &Path) -> Result<()> {
@@ -1226,8 +1256,8 @@ fn command_issue_details(repo: &Path, issue_id: &IssueId) -> Result<IssueDetails
 }
 
 fn command_issue_details_list(repo: &Path) -> Result<Vec<IssueDetailsView>> {
-    let details = load_issue_details(repo)?;
-    Ok(details.into_iter().map(IssueDetailsView::from).collect())
+    let QueryDataset { records, .. } = load_issue_details(repo)?;
+    Ok(records.into_iter().map(IssueDetailsView::from).collect())
 }
 
 #[cfg(test)]
@@ -1879,6 +1909,10 @@ fn run_milestone_list(repo: &Path, args: MilestoneListArgs) -> Result<()> {
             let payload = json!({
                 "items": milestones,
                 "next_cursor": response.next_cursor,
+                "generation": response
+                    .generation
+                    .as_ref()
+                    .map(|snapshot| snapshot.generation),
             });
             let stdout = io::stdout();
             let mut handle = stdout.lock();
@@ -1890,11 +1924,17 @@ fn run_milestone_list(repo: &Path, args: MilestoneListArgs) -> Result<()> {
             if let Some(cursor) = response.next_cursor {
                 println!("\nNext cursor: {cursor}");
             }
+            if let Some(generation) = response.generation.as_ref() {
+                println!("Pinned generation: {}", generation.generation);
+            }
         }
         OutputFormat::Raw => {
             print_list_raw(&milestones, columns.as_deref())?;
             if let Some(cursor) = response.next_cursor {
                 println!("\nNext cursor: {cursor}");
+            }
+            if let Some(generation) = response.generation.as_ref() {
+                println!("Pinned generation: {}", generation.generation);
             }
         }
     }
@@ -1961,6 +2001,10 @@ fn run_issue_list(repo: &Path, args: IssueListArgs) -> Result<()> {
             let payload = json!({
                 "items": issues,
                 "next_cursor": response.next_cursor,
+                "generation": response
+                    .generation
+                    .as_ref()
+                    .map(|snapshot| snapshot.generation),
             });
             let stdout = io::stdout();
             let mut handle = stdout.lock();
@@ -1972,11 +2016,17 @@ fn run_issue_list(repo: &Path, args: IssueListArgs) -> Result<()> {
             if let Some(cursor) = response.next_cursor {
                 println!("\nNext cursor: {cursor}");
             }
+            if let Some(generation) = response.generation.as_ref() {
+                println!("Pinned generation: {}", generation.generation);
+            }
         }
         OutputFormat::Raw => {
             print_list_raw(&issues, columns.as_deref())?;
             if let Some(cursor) = response.next_cursor {
                 println!("\nNext cursor: {cursor}");
+            }
+            if let Some(generation) = response.generation.as_ref() {
+                println!("Pinned generation: {}", generation.generation);
             }
         }
     }
