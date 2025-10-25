@@ -9,6 +9,7 @@ Rust workspace for experimenting with Git powered workflows.
 ## Documentation
 - [Persistence design](docs/persistence.md)
 - [Identity lifecycle](docs/identity.md)
+- [Concurrency and locking](docs/concurrency.md)
 
 ## CLI Usage
 The `git-mile` binary exposes mile and identity workflows alongside debugging utilities:
@@ -39,6 +40,11 @@ git-mile entity-debug list
 ```
 
 Global flags `--repo`, `--replica`, `--author`, and `--email` apply to every command; when omitted the CLI resolves values from the ambient Git configuration and host environment.
+
+Concurrent invocations coordinate via a repository lock: read-only commands
+share a read lock, while commands that mutate repository state wait for an
+exclusive write lock. See [Concurrency and locking](docs/concurrency.md) for
+details.
 
 ## Tooling
 - `cargo fmt-all` / `cargo fmt --all --check` to enforce Rustfmt with edition 2024 settings.
