@@ -382,6 +382,7 @@ dependencies = [
  "git2",
  "git_mile_core",
  "serde_json",
+ "shlex",
  "tempfile",
 ]
 

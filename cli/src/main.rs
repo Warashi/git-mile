@@ -1,11 +1,14 @@
+use std::collections::BTreeSet;
 use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::str::FromStr;
 
 use anyhow::{Context, Result, anyhow};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use git_mile_core::issue::{CreateIssueInput, IssueSnapshot, IssueStatus, IssueStore};
 use git_mile_core::{
     AddProtectionInput, AdoptIdentityInput, ChangeStatusInput, ChangeStatusOutcome,
     CreateIdentityInput, CreateMileInput, EntityId, EntitySnapshot, EntityStore, EntitySummary,
@@ -14,7 +17,8 @@ use git_mile_core::{
     ProtectionKind, ReplicaId, app_version,
 };
 use git2::{Config, ErrorCode, Repository};
-use serde_json::to_writer_pretty;
+use serde_json::{json, to_writer_pretty};
+use tempfile::NamedTempFile;
 
 fn main() {
     if let Err(err) = run() {
@@ -163,15 +167,70 @@ enum Commands {
     EntityDebug(EntityArgs),
 }
 
-#[derive(Parser)]
-struct MileCreateArgs {
-    title: String,
-    #[arg(long)]
+#[derive(Args, Default)]
+struct DescriptionInputArgs {
+    #[arg(long, value_name = "TEXT")]
     description: Option<String>,
+    #[arg(long = "description-file", value_name = "PATH")]
+    description_file: Option<PathBuf>,
+}
+
+#[derive(Args, Default)]
+struct CommentInputArgs {
+    #[arg(long, value_name = "TEXT")]
+    comment: Option<String>,
+    #[arg(long = "comment-file", value_name = "PATH")]
+    comment_file: Option<PathBuf>,
+    #[arg(long)]
+    editor: bool,
+    #[arg(long = "no-editor")]
+    no_editor: bool,
+    #[arg(long = "allow-empty")]
+    allow_empty: bool,
+}
+
+#[derive(Args, Default)]
+struct LabelInputArgs {
+    #[arg(long = "label", value_name = "NAME")]
+    labels: Vec<String>,
+    #[arg(long = "label-file", value_name = "PATH")]
+    label_files: Vec<PathBuf>,
+}
+
+#[derive(Args, Default)]
+struct CreateCommonArgs {
+    #[command(flatten)]
+    description: DescriptionInputArgs,
+    #[command(flatten)]
+    comment: CommentInputArgs,
+    #[command(flatten)]
+    labels: LabelInputArgs,
+}
+
+#[derive(Parser)]
+struct MilestoneCreateArgs {
+    title: String,
+    #[command(flatten)]
+    common: CreateCommonArgs,
     #[arg(long)]
     message: Option<String>,
     #[arg(long)]
     draft: bool,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Parser)]
+struct IssueCreateArgs {
+    title: String,
+    #[command(flatten)]
+    common: CreateCommonArgs,
+    #[arg(long)]
+    message: Option<String>,
+    #[arg(long)]
+    draft: bool,
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Parser)]
@@ -198,7 +257,9 @@ struct StatusArgs {
 
 #[derive(Subcommand)]
 enum CreateCommand {
-    Mile(MileCreateArgs),
+    #[command(alias = "mile")]
+    Milestone(MilestoneCreateArgs),
+    Issue(IssueCreateArgs),
     Identity(IdentityCreateArgs),
 }
 
@@ -338,6 +399,8 @@ fn command_mile_create(
     author: &str,
     title: &str,
     description: Option<&str>,
+    initial_comment: Option<&str>,
+    labels: &[String],
     message: Option<String>,
     initial_status: MileStatus,
 ) -> Result<MileSnapshot> {
@@ -349,9 +412,317 @@ fn command_mile_create(
         title: title.to_string(),
         description: description.map(|value| value.to_string()),
         initial_status,
-        initial_comment: None,
-        labels: vec![],
+        initial_comment: initial_comment.map(|value| value.to_string()),
+        labels: labels.to_vec(),
     })?)
+}
+
+fn command_issue_create(
+    repo: &Path,
+    replica_id: &ReplicaId,
+    author: &str,
+    title: &str,
+    description: Option<&str>,
+    initial_comment: Option<&str>,
+    labels: &[String],
+    message: Option<String>,
+    initial_status: IssueStatus,
+) -> Result<IssueSnapshot> {
+    let store = IssueStore::open_with_mode(repo, LockMode::Write)?;
+    Ok(store.create_issue(CreateIssueInput {
+        replica_id: replica_id.clone(),
+        author: author.to_string(),
+        message,
+        title: title.to_string(),
+        description: description.map(|value| value.to_string()),
+        initial_status,
+        initial_comment: initial_comment.map(|value| value.to_string()),
+        labels: labels.to_vec(),
+    })?)
+}
+
+fn resolve_description_input(args: &DescriptionInputArgs) -> Result<Option<String>> {
+    match (&args.description, &args.description_file) {
+        (Some(_), Some(_)) => Err(anyhow!(
+            "specify either --description or --description-file, not both"
+        )),
+        (Some(value), None) => {
+            let value = normalize_multiline(value);
+            if value.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(value))
+            }
+        }
+        (None, Some(path)) => {
+            let data = fs::read_to_string(path)
+                .with_context(|| format!("failed to read description file {}", path.display()))?;
+            let value = normalize_multiline(&data);
+            if value.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(value))
+            }
+        }
+        (None, None) => Ok(None),
+    }
+}
+
+fn resolve_comment_input(args: &CommentInputArgs) -> Result<Option<String>> {
+    let mut provided = 0;
+    if args.comment.is_some() {
+        provided += 1;
+    }
+    if args.comment_file.is_some() {
+        provided += 1;
+    }
+    if args.editor {
+        provided += 1;
+    }
+
+    if provided > 1 {
+        return Err(anyhow!(
+            "specify at most one of --comment, --comment-file, or --editor"
+        ));
+    }
+
+    if let Some(value) = &args.comment {
+        let value = normalize_multiline(value);
+        if value.is_empty() && !args.allow_empty {
+            return Err(anyhow!(
+                "comment is empty; pass --allow-empty to submit an empty comment"
+            ));
+        }
+        return Ok(if value.is_empty() { None } else { Some(value) });
+    }
+
+    if let Some(path) = &args.comment_file {
+        let data = fs::read_to_string(path)
+            .with_context(|| format!("failed to read comment file {}", path.display()))?;
+        let value = normalize_multiline(&data);
+        if value.is_empty() && !args.allow_empty {
+            return Err(anyhow!(
+                "comment file produced empty content; pass --allow-empty to continue"
+            ));
+        }
+        return Ok(if value.is_empty() { None } else { Some(value) });
+    }
+
+    let editor_command = resolve_editor_command();
+    let should_launch_editor =
+        args.editor || (editor_command.is_some() && !args.no_editor && provided == 0);
+
+    if should_launch_editor {
+        let command = editor_command.ok_or_else(|| {
+            anyhow!("no editor configured; set $EDITOR or pass --comment/--comment-file")
+        })?;
+        let editor = EditorInput::new(command);
+        let value = editor.capture(None)?;
+        let value = normalize_multiline(&value);
+        if value.is_empty() && !args.allow_empty {
+            return Err(anyhow!(
+                "editor session produced empty content; pass --allow-empty to continue"
+            ));
+        }
+        return Ok(if value.is_empty() { None } else { Some(value) });
+    }
+
+    Ok(None)
+}
+
+fn resolve_labels(args: &LabelInputArgs) -> Result<Vec<String>> {
+    let mut labels = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for label in &args.labels {
+        let normalized = label.trim();
+        if !normalized.is_empty() && seen.insert(normalized.to_ascii_lowercase()) {
+            labels.push(normalized.to_string());
+        }
+    }
+
+    for path in &args.label_files {
+        let data = fs::read_to_string(path)
+            .with_context(|| format!("failed to read label file {}", path.display()))?;
+        for line in data.lines() {
+            let normalized = line.trim();
+            if !normalized.is_empty() && seen.insert(normalized.to_ascii_lowercase()) {
+                labels.push(normalized.to_string());
+            }
+        }
+    }
+
+    Ok(labels)
+}
+
+fn normalize_multiline(value: &str) -> String {
+    value.trim_end().to_string()
+}
+
+fn resolve_editor_command() -> Option<Vec<String>> {
+    let candidates = ["GIT_MILE_EDITOR", "VISUAL", "EDITOR"];
+    for key in candidates {
+        if let Ok(raw) = env::var(key) {
+            if raw.trim().is_empty() {
+                continue;
+            }
+            if let Some(parts) = shlex::split(&raw) {
+                if !parts.is_empty() {
+                    return Some(parts);
+                }
+            } else {
+                // Fallback: treat as single command without shlex parsing.
+                return Some(vec![raw]);
+            }
+        }
+    }
+    None
+}
+
+struct EditorInput {
+    command: Vec<String>,
+}
+
+impl EditorInput {
+    fn new(command: Vec<String>) -> Self {
+        Self { command }
+    }
+
+    fn capture(&self, template: Option<&str>) -> Result<String> {
+        let mut file = NamedTempFile::new().context("failed to create temp file for editor")?;
+        if let Some(value) = template {
+            file.write_all(value.as_bytes())
+                .context("failed to write editor template")?;
+            file.flush().context("failed to flush editor template")?;
+        }
+        let path = file.path().to_path_buf();
+
+        let (program, args) = self
+            .command
+            .split_first()
+            .ok_or_else(|| anyhow!("editor command not specified"))?;
+        let status = Command::new(program)
+            .args(args)
+            .arg(&path)
+            .status()
+            .with_context(|| format!("failed to launch editor command {program}"))?;
+        if !status.success() {
+            return Err(anyhow!("editor exited with status {status}"));
+        }
+
+        let output = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read editor output {}", path.display()))?;
+        Ok(output)
+    }
+}
+
+fn preview_text(value: &str) -> String {
+    let first_line = value.lines().next().unwrap_or("").trim();
+    const LIMIT: usize = 80;
+    if first_line.chars().count() <= LIMIT {
+        first_line.to_string()
+    } else {
+        let mut preview = String::new();
+        for ch in first_line.chars().take(LIMIT.saturating_sub(1)) {
+            preview.push(ch);
+        }
+        preview.push('…');
+        preview
+    }
+}
+
+fn print_milestone_create_summary(
+    snapshot: &MileSnapshot,
+    comment_provided: bool,
+    json: bool,
+) -> Result<()> {
+    if json {
+        let payload = json!({
+            "id": snapshot.id.to_string(),
+            "title": snapshot.title,
+            "description": snapshot.description,
+            "labels": snapshot.labels.iter().cloned().collect::<Vec<_>>(),
+            "initial_comment": comment_provided,
+        });
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        to_writer_pretty(&mut handle, &payload)?;
+        handle.write_all(b"\n")?;
+        return Ok(());
+    }
+
+    println!("Created milestone {}", snapshot.id);
+    println!(" Title: {}", snapshot.title);
+    match &snapshot.description {
+        Some(value) if !value.trim().is_empty() => {
+            println!(" Description: {}", preview_text(value));
+        }
+        Some(_) => println!(" Description: (empty)"),
+        None => println!(" Description: (none)"),
+    }
+    if snapshot.labels.is_empty() {
+        println!(" Labels: (none)");
+    } else {
+        let labels = snapshot
+            .labels
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!(" Labels: {labels}");
+    }
+    println!(
+        " Initial comment: {}",
+        if comment_provided { "saved" } else { "none" }
+    );
+    Ok(())
+}
+
+fn print_issue_create_summary(
+    snapshot: &IssueSnapshot,
+    comment_provided: bool,
+    json: bool,
+) -> Result<()> {
+    if json {
+        let payload = json!({
+            "id": snapshot.id.to_string(),
+            "title": snapshot.title,
+            "description": snapshot.description,
+            "labels": snapshot.labels.iter().cloned().collect::<Vec<_>>(),
+            "initial_comment": comment_provided,
+        });
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        to_writer_pretty(&mut handle, &payload)?;
+        handle.write_all(b"\n")?;
+        return Ok(());
+    }
+
+    println!("Created issue {}", snapshot.id);
+    println!(" Title: {}", snapshot.title);
+    match &snapshot.description {
+        Some(value) if !value.trim().is_empty() => {
+            println!(" Description: {}", preview_text(value));
+        }
+        Some(_) => println!(" Description: (empty)"),
+        None => println!(" Description: (none)"),
+    }
+    if snapshot.labels.is_empty() {
+        println!(" Labels: (none)");
+    } else {
+        let labels = snapshot
+            .labels
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!(" Labels: {labels}");
+    }
+    println!(
+        " Initial comment: {}",
+        if comment_provided { "saved" } else { "none" }
+    );
+    Ok(())
 }
 
 fn command_mile_list(repo: &Path) -> Result<Vec<MileSummary>> {
@@ -382,23 +753,28 @@ fn command_mile_change_status(
     })?)
 }
 
-fn run_mile_create(
+fn run_milestone_create(
     repo: &Path,
     replica: Option<&str>,
     author: Option<&str>,
     email: Option<&str>,
-    args: MileCreateArgs,
+    args: MilestoneCreateArgs,
 ) -> Result<()> {
-    let MileCreateArgs {
+    let MilestoneCreateArgs {
         title,
-        description,
+        common,
         message,
         draft,
+        json,
     } = args;
+
+    let description = resolve_description_input(&common.description)?;
+    let comment = resolve_comment_input(&common.comment)?;
+    let labels = resolve_labels(&common.labels)?;
 
     let replica_id = resolve_replica(replica);
     let identity = resolve_identity(repo, &replica_id, author, email)?;
-    let message = message.or_else(|| Some(format!("create mile {}", title)));
+    let message = message.or_else(|| Some(format!("create milestone {}", title)));
 
     let snapshot = command_mile_create(
         repo,
@@ -406,6 +782,8 @@ fn run_mile_create(
         &identity.signature,
         &title,
         description.as_deref(),
+        comment.as_deref(),
+        &labels,
         message,
         if draft {
             MileStatus::Draft
@@ -413,7 +791,49 @@ fn run_mile_create(
             MileStatus::Open
         },
     )?;
-    println!("{}", snapshot.id);
+    print_milestone_create_summary(&snapshot, comment.is_some(), json)?;
+    Ok(())
+}
+
+fn run_issue_create(
+    repo: &Path,
+    replica: Option<&str>,
+    author: Option<&str>,
+    email: Option<&str>,
+    args: IssueCreateArgs,
+) -> Result<()> {
+    let IssueCreateArgs {
+        title,
+        common,
+        message,
+        draft,
+        json,
+    } = args;
+
+    let description = resolve_description_input(&common.description)?;
+    let comment = resolve_comment_input(&common.comment)?;
+    let labels = resolve_labels(&common.labels)?;
+
+    let replica_id = resolve_replica(replica);
+    let identity = resolve_identity(repo, &replica_id, author, email)?;
+    let message = message.or_else(|| Some(format!("create issue {}", title)));
+
+    let snapshot = command_issue_create(
+        repo,
+        &replica_id,
+        &identity.signature,
+        &title,
+        description.as_deref(),
+        comment.as_deref(),
+        &labels,
+        message,
+        if draft {
+            IssueStatus::Draft
+        } else {
+            IssueStatus::Open
+        },
+    )?;
+    print_issue_create_summary(&snapshot, comment.is_some(), json)?;
     Ok(())
 }
 
@@ -452,7 +872,8 @@ fn handle_create_command(
     command: CreateCommand,
 ) -> Result<()> {
     match command {
-        CreateCommand::Mile(args) => run_mile_create(repo, replica, author, email, args)?,
+        CreateCommand::Milestone(args) => run_milestone_create(repo, replica, author, email, args)?,
+        CreateCommand::Issue(args) => run_issue_create(repo, replica, author, email, args)?,
         CreateCommand::Identity(args) => run_identity_create(repo, replica, author, email, args)?,
     }
 
@@ -1117,6 +1538,8 @@ mod tests {
             "Initial Mile",
             Some("details"),
             None,
+            &[],
+            None,
             MileStatus::Open,
         )?;
 
@@ -1140,6 +1563,8 @@ mod tests {
             "Initial Mile",
             None,
             None,
+            &[],
+            None,
             MileStatus::Open,
         )?;
 
@@ -1162,6 +1587,137 @@ mod tests {
             None,
         )?;
         assert!(!repeat.changed);
+        Ok(())
+    }
+
+    #[test]
+    fn description_input_rejects_multiple_sources() {
+        let args = DescriptionInputArgs {
+            description: Some("inline".into()),
+            description_file: Some(PathBuf::from("ignored")),
+        };
+        let err = resolve_description_input(&args).expect_err("expected conflict");
+        assert!(
+            err.to_string()
+                .contains("specify either --description or --description-file")
+        );
+    }
+
+    #[test]
+    fn comment_file_requires_allow_empty() -> Result<()> {
+        let file = NamedTempFile::new()?;
+        let mut args = CommentInputArgs::default();
+        args.comment_file = Some(file.path().to_path_buf());
+        let err = resolve_comment_input(&args).expect_err("missing allow-empty");
+        assert!(
+            err.to_string()
+                .contains("comment file produced empty content")
+        );
+
+        args.allow_empty = true;
+        let comment = resolve_comment_input(&args)?;
+        assert!(comment.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn labels_collect_from_flags_and_files() -> Result<()> {
+        let file = NamedTempFile::new()?;
+        fs::write(file.path(), "alpha\nbeta\nAlpha\n")?;
+
+        let mut args = LabelInputArgs::default();
+        args.labels = vec!["gamma".into(), "alpha".into()];
+        args.label_files = vec![file.path().to_path_buf()];
+
+        let labels = resolve_labels(&args)?;
+        assert_eq!(labels, vec!["gamma", "alpha", "beta"]);
+        Ok(())
+    }
+
+    #[test]
+    fn milestone_create_supports_extended_flags() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        Repository::init_bare(temp.path())?;
+
+        let description_file = temp.path().join("description.md");
+        fs::write(&description_file, "Milestone details\n")?;
+        let comment_file = temp.path().join("comment.txt");
+        fs::write(&comment_file, "Initial notes\n")?;
+        let label_file = temp.path().join("labels.txt");
+        fs::write(&label_file, "alpha\nbeta\n")?;
+
+        let mut common = CreateCommonArgs::default();
+        common.description.description_file = Some(description_file);
+        common.comment.comment_file = Some(comment_file);
+        common.comment.no_editor = true;
+        common.labels.labels = vec!["gamma".into()];
+        common.labels.label_files = vec![label_file];
+
+        run_milestone_create(
+            temp.path(),
+            Some("replica-a"),
+            Some("Tester"),
+            Some("tester@example.com"),
+            MilestoneCreateArgs {
+                title: "Milestone A".into(),
+                common,
+                message: None,
+                draft: false,
+                json: false,
+            },
+        )?;
+
+        let store = MileStore::open_with_mode(temp.path(), LockMode::Read)?;
+        let miles = store.list_miles()?;
+        assert_eq!(miles.len(), 1);
+        let snapshot = store.load_mile(&miles[0].id)?;
+        assert_eq!(snapshot.description.as_deref(), Some("Milestone details"));
+        assert_eq!(
+            snapshot.labels.iter().cloned().collect::<Vec<_>>(),
+            vec!["alpha", "beta", "gamma"]
+        );
+        assert_eq!(snapshot.comments.len(), 1);
+        assert_eq!(snapshot.comments[0].body, "Initial notes");
+        Ok(())
+    }
+
+    #[test]
+    fn issue_create_supports_extended_flags() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        Repository::init_bare(temp.path())?;
+
+        let mut common = CreateCommonArgs::default();
+        common.description.description = Some("Issue details".into());
+        common.comment.comment = Some("Investigate failure".into());
+        common.labels.labels = vec!["core".into(), "bug".into()];
+        common.comment.no_editor = true;
+
+        run_issue_create(
+            temp.path(),
+            Some("replica-b"),
+            Some("Tester"),
+            Some("tester@example.com"),
+            IssueCreateArgs {
+                title: "Issue A".into(),
+                common,
+                message: None,
+                draft: true,
+                json: true,
+            },
+        )?;
+
+        let store = IssueStore::open_with_mode(temp.path(), LockMode::Read)?;
+        let issues = store.list_issues()?;
+        assert_eq!(issues.len(), 1);
+        let snapshot = store.load_issue(&issues[0].id)?;
+        assert_eq!(snapshot.description.as_deref(), Some("Issue details"));
+        assert_eq!(
+            snapshot.labels.iter().cloned().collect::<Vec<_>>(),
+            vec!["bug", "core"]
+        );
+        assert_eq!(snapshot.status, IssueStatus::Draft);
+        assert_eq!(snapshot.comments.len(), 1);
+        assert_eq!(snapshot.comments[0].body, "Investigate failure");
         Ok(())
     }
 
@@ -1292,16 +1848,21 @@ mod tests {
             })?;
         }
 
-        run_mile_create(
+        run_milestone_create(
             repo,
             Some(replica.as_str()),
             None,
             None,
-            MileCreateArgs {
+            MilestoneCreateArgs {
                 title: "Identity Mile".into(),
-                description: None,
+                common: {
+                    let mut common = CreateCommonArgs::default();
+                    common.comment.no_editor = true;
+                    common
+                },
                 message: None,
                 draft: false,
+                json: false,
             },
         )?;
 
