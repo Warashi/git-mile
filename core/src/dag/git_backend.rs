@@ -58,7 +58,8 @@ impl EntityStore {
         };
 
         self.cache.invalidate_entity(&entity_id)?;
-        self.cache.on_pack_persisted(&entity_id, &result.inserted)?;
+        self.cache
+            .on_pack_persisted(&entity_id, &result.inserted, &result.clock_snapshot)?;
 
         Ok(result)
     }

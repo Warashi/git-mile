@@ -29,7 +29,10 @@ pub use mile::{
 pub use model::{
     Comment, CommentParent, IssueDetails, LabelEvent, LabelOperation, Markdown, MilestoneDetails,
 };
-pub use repo::{LockMode, NoopCache, RepositoryCacheHook, RepositoryLock, RepositoryLockGuard};
+pub use repo::{
+    CacheGenerationSnapshot, LockMode, NoopCache, RepositoryCacheHook, RepositoryLock,
+    RepositoryLockGuard,
+};
 
 pub const APP_NAME: &str = "git-mile";
 
