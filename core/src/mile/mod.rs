@@ -14,7 +14,7 @@ use crate::dag::{
 use crate::error::{Error, Result};
 use crate::repo::{LockMode, RepositoryCacheHook};
 
-const EVENT_VERSION: u8 = 2;
+const EVENT_VERSION: u8 = 3;
 
 /// Identifier alias for miles backed by the entity store.
 pub type MileId = EntityId;

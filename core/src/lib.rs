@@ -4,7 +4,9 @@ pub mod error;
 pub mod identity;
 pub mod issue;
 pub mod mile;
+pub mod model;
 pub mod repo;
+pub mod service;
 
 pub use clock::{LamportClock, LamportTimestamp, ReplicaId};
 pub use dag::{
@@ -22,6 +24,9 @@ pub use mile::{
     CreateMileInput, LabelId, MileComment, MileCommentAppended, MileEvent, MileEventKind, MileId,
     MileLabelAttached, MileLabelDetached, MileSnapshot, MileStatus, MileStatusChanged, MileStore,
     MileSummary, UpdateLabelsInput, UpdateLabelsOutcome,
+};
+pub use model::{
+    Comment, CommentParent, IssueDetails, LabelEvent, LabelOperation, Markdown, MilestoneDetails,
 };
 pub use repo::{LockMode, NoopCache, RepositoryCacheHook, RepositoryLock, RepositoryLockGuard};
 
