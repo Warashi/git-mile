@@ -124,7 +124,9 @@ impl From<CoreIssueDetails> for IssueDetailsView {
 
         let comment_views: Vec<CommentView> = comments.into_iter().map(CommentView::from).collect();
         let comment_count = comment_views.len();
-        let last_commented_at = comment_views.last().map(|comment| comment.created_at.clone());
+        let last_commented_at = comment_views
+            .last()
+            .map(|comment| comment.created_at.clone());
         let latest_comment_excerpt = comment_views
             .last()
             .map(|comment| make_preview(&comment.body, PREVIEW_LIMIT));
@@ -178,7 +180,9 @@ impl From<CoreMilestoneDetails> for MilestoneDetailsView {
 
         let comment_views: Vec<CommentView> = comments.into_iter().map(CommentView::from).collect();
         let comment_count = comment_views.len();
-        let last_commented_at = comment_views.last().map(|comment| comment.created_at.clone());
+        let last_commented_at = comment_views
+            .last()
+            .map(|comment| comment.created_at.clone());
         let latest_comment_excerpt = comment_views
             .last()
             .map(|comment| make_preview(&comment.body, PREVIEW_LIMIT));

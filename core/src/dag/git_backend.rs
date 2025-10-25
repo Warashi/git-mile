@@ -57,19 +57,23 @@ impl EntityStore {
             clock_snapshot: entity.clock.clone(),
         };
 
-        self.cache.invalidate_entity(&entity_id);
-        self.cache.on_pack_persisted(&entity_id, &result.inserted);
+        self.cache.invalidate_entity(&entity_id)?;
+        self.cache.on_pack_persisted(&entity_id, &result.inserted)?;
 
         Ok(result)
     }
 
     pub fn load_entity(&self, entity_id: &EntityId) -> Result<EntitySnapshot> {
+        if let Some(snapshot) = self.cache.try_get_snapshot(entity_id)? {
+            return Ok(snapshot);
+        }
+
         let entity = self
             .backend
             .load_entity(entity_id)?
             .ok_or_else(|| Error::validation(format!("entity {} not found", entity_id)))?;
         let snapshot = self.backend.snapshot_from_entity(entity)?;
-        self.cache.on_entity_loaded(entity_id, &snapshot);
+        self.cache.on_entity_loaded(entity_id, &snapshot)?;
         Ok(snapshot)
     }
 
@@ -130,7 +134,7 @@ impl EntityStore {
         self.backend
             .write_entity(&mut entity, "resolve entity conflicts")?;
 
-        self.cache.invalidate_entity(entity_id);
+        self.cache.invalidate_entity(entity_id)?;
 
         Ok(MergeOutcome {
             heads: entity.sorted_heads(),
@@ -143,6 +147,7 @@ pub struct PackPersistResult {
     pub clock_snapshot: LamportTimestamp,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EntitySnapshot {
     pub entity_id: EntityId,
     pub clock_snapshot: LamportTimestamp,

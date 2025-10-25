@@ -10,6 +10,10 @@ pub enum Error {
     Serialization(#[from] serde_json::Error),
     #[error(transparent)]
     Io(#[from] io::Error),
+    #[error(transparent)]
+    Persistence(#[from] rocksdb::Error),
+    #[error(transparent)]
+    Cbor(#[from] serde_cbor::Error),
     #[error("validation error: {0}")]
     Validation(String),
     #[error("conflict: {0}")]

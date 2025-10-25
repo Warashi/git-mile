@@ -5,12 +5,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::clock::LamportTimestamp;
-use crate::issue::{
-    IssueEventKind, IssueId, IssueSnapshot, IssueStatus, LabelId as IssueLabelId,
-};
-use crate::mile::{
-    LabelId as MileLabelId, MileEventKind, MileId, MileSnapshot, MileStatus,
-};
+use crate::issue::{IssueEventKind, IssueId, IssueSnapshot, IssueStatus, LabelId as IssueLabelId};
+use crate::mile::{LabelId as MileLabelId, MileEventKind, MileId, MileSnapshot, MileStatus};
 
 /// Shared identifier type for comments written against issues or milestones.
 pub type CommentId = Uuid;

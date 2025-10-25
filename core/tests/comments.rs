@@ -1,6 +1,6 @@
+use git_mile_core::clock::ReplicaId;
 use git_mile_core::issue::{AppendIssueCommentInput, CreateIssueInput, IssueStatus, IssueStore};
 use git_mile_core::mile::{AppendCommentInput, CreateMileInput, MileStatus, MileStore};
-use git_mile_core::clock::ReplicaId;
 
 #[test]
 fn issue_snapshot_roundtrips_description_comments_and_labels() {
@@ -99,5 +99,8 @@ fn milestone_comments_remain_in_lamport_order() {
         .collect();
     let mut sorted = timestamps.clone();
     sorted.sort();
-    assert_eq!(timestamps, sorted, "comments should remain in Lamport order");
+    assert_eq!(
+        timestamps, sorted,
+        "comments should remain in Lamport order"
+    );
 }

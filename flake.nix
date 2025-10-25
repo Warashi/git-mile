@@ -28,8 +28,13 @@
             packages = [
               nixfmt
               just
+              llvmPackages.libclang
+              clang
               (rust-bin.fromRustupToolchainFile ./rust-toolchain.toml)
             ];
+            shellHook = ''
+              export LIBCLANG_PATH=${llvmPackages.libclang.lib}/lib
+            '';
           };
       }
     );

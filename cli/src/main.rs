@@ -1,10 +1,11 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
+use std::sync::{Arc, Mutex, OnceLock};
 
 mod view;
 
@@ -14,6 +15,11 @@ use git_mile_core::issue::{
     AppendIssueCommentInput, CreateIssueInput, IssueId, IssueSnapshot, IssueStatus, IssueStore,
     UpdateIssueLabelsInput,
 };
+use git_mile_core::model::LabelOperation;
+use git_mile_core::repo::{
+    CacheConfig, CacheNamespace, CacheRepository, EntityCacheAdapter, PersistentCache,
+    RepositoryCacheHook,
+};
 use git_mile_core::service::{IssueService, MilestoneService};
 use git_mile_core::{
     AddProtectionInput, AdoptIdentityInput, AppendCommentInput, ChangeStatusInput,
@@ -22,12 +28,11 @@ use git_mile_core::{
     LamportTimestamp, LockMode, MergeOutcome, MergeStrategy, MileId, MileSnapshot, MileStatus,
     MileStore, MileSummary, OperationId, ProtectionKind, ReplicaId, UpdateLabelsInput, app_version,
 };
-use git_mile_core::model::LabelOperation;
-use view::{IssueDetailsView, MilestoneDetailsView};
 use git2::{Config, ErrorCode, Repository};
 use serde_json::{json, to_writer_pretty};
 use tempfile::NamedTempFile;
 use uuid::Uuid;
+use view::{IssueDetailsView, MilestoneDetailsView};
 
 fn main() {
     if let Err(err) = run() {
@@ -473,6 +478,60 @@ struct Identity {
     signature: String,
 }
 
+struct CacheBundle {
+    repository: Arc<dyn CacheRepository>,
+}
+
+fn cache_registry() -> &'static Mutex<HashMap<PathBuf, Arc<dyn CacheRepository>>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<PathBuf, Arc<dyn CacheRepository>>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+impl CacheBundle {
+    fn open(repo: &Path) -> Option<Self> {
+        let config = CacheConfig::for_repo(repo)?;
+        let cache_path = config.path.clone();
+
+        if let Ok(guard) = cache_registry().lock() {
+            if let Some(existing) = guard.get(&cache_path) {
+                return Some(Self {
+                    repository: existing.clone(),
+                });
+            }
+        }
+
+        match PersistentCache::open(config) {
+            Ok(cache) => {
+                let repository: Arc<dyn CacheRepository> = Arc::new(cache);
+                if let Ok(mut guard) = cache_registry().lock() {
+                    let entry = guard
+                        .entry(cache_path)
+                        .or_insert_with(|| repository.clone());
+                    Some(Self {
+                        repository: entry.clone(),
+                    })
+                } else {
+                    Some(Self { repository })
+                }
+            }
+            Err(err) => {
+                eprintln!(
+                    "warning: persistent cache initialization failed for {}: {err}",
+                    repo.display()
+                );
+                None
+            }
+        }
+    }
+
+    fn adapter(&self, namespace: CacheNamespace) -> Arc<dyn RepositoryCacheHook> {
+        Arc::new(EntityCacheAdapter::new(
+            Arc::clone(&self.repository),
+            namespace,
+        ))
+    }
+}
+
 fn command_init(repo: &Path) -> Result<()> {
     match Repository::open(repo) {
         Ok(_) => {
@@ -507,7 +566,16 @@ fn command_mile_create(
     message: Option<String>,
     initial_status: MileStatus,
 ) -> Result<MileSnapshot> {
-    let store = MileStore::open_with_mode(repo, LockMode::Write)?;
+    let cache = CacheBundle::open(repo);
+    let store = if let Some(bundle) = cache.as_ref() {
+        MileStore::open_with_cache(
+            repo,
+            LockMode::Write,
+            bundle.adapter(CacheNamespace::Milestones),
+        )?
+    } else {
+        MileStore::open_with_mode(repo, LockMode::Write)?
+    };
     Ok(store.create_mile(CreateMileInput {
         replica_id: replica_id.clone(),
         author: author.to_string(),
@@ -531,7 +599,16 @@ fn command_issue_create(
     message: Option<String>,
     initial_status: IssueStatus,
 ) -> Result<IssueSnapshot> {
-    let store = IssueStore::open_with_mode(repo, LockMode::Write)?;
+    let cache = CacheBundle::open(repo);
+    let store = if let Some(bundle) = cache.as_ref() {
+        IssueStore::open_with_cache(
+            repo,
+            LockMode::Write,
+            bundle.adapter(CacheNamespace::Issues),
+        )?
+    } else {
+        IssueStore::open_with_mode(repo, LockMode::Write)?
+    };
     Ok(store.create_issue(CreateIssueInput {
         replica_id: replica_id.clone(),
         author: author.to_string(),
@@ -962,22 +1039,57 @@ fn print_issue_create_summary(
 }
 
 fn command_mile_list(repo: &Path) -> Result<Vec<MileSummary>> {
-    let store = MileStore::open_with_mode(repo, LockMode::Read)?;
+    let cache = CacheBundle::open(repo);
+    let store = if let Some(bundle) = cache.as_ref() {
+        MileStore::open_with_cache(
+            repo,
+            LockMode::Read,
+            bundle.adapter(CacheNamespace::Milestones),
+        )?
+    } else {
+        MileStore::open_with_mode(repo, LockMode::Read)?
+    };
     Ok(store.list_miles()?)
 }
 
 fn command_mile_details(repo: &Path, mile_id: &MileId) -> Result<MilestoneDetailsView> {
-    let service = MilestoneService::open_with_mode(repo, LockMode::Read)?;
+    let cache = CacheBundle::open(repo);
+    let service = if let Some(bundle) = cache.as_ref() {
+        MilestoneService::open_with_cache(
+            repo,
+            LockMode::Read,
+            bundle.adapter(CacheNamespace::Milestones),
+        )?
+    } else {
+        MilestoneService::open_with_mode(repo, LockMode::Read)?
+    };
     let details = service.get_with_comments(mile_id)?;
     Ok(details.into())
 }
 
 fn command_mile_details_list(repo: &Path) -> Result<Vec<MilestoneDetailsView>> {
+    let cache = CacheBundle::open(repo);
     let summaries = {
-        let store = MileStore::open_with_mode(repo, LockMode::Read)?;
+        let store = if let Some(bundle) = cache.as_ref() {
+            MileStore::open_with_cache(
+                repo,
+                LockMode::Read,
+                bundle.adapter(CacheNamespace::Milestones),
+            )?
+        } else {
+            MileStore::open_with_mode(repo, LockMode::Read)?
+        };
         store.list_miles()?
     };
-    let service = MilestoneService::open_with_mode(repo, LockMode::Read)?;
+    let service = if let Some(bundle) = cache.as_ref() {
+        MilestoneService::open_with_cache(
+            repo,
+            LockMode::Read,
+            bundle.adapter(CacheNamespace::Milestones),
+        )?
+    } else {
+        MilestoneService::open_with_mode(repo, LockMode::Read)?
+    };
     let mut views = Vec::with_capacity(summaries.len());
     for summary in summaries {
         let detail = service.get_with_comments(&summary.id)?;
@@ -987,17 +1099,35 @@ fn command_mile_details_list(repo: &Path) -> Result<Vec<MilestoneDetailsView>> {
 }
 
 fn command_issue_details(repo: &Path, issue_id: &IssueId) -> Result<IssueDetailsView> {
-    let service = IssueService::open_with_mode(repo, LockMode::Read)?;
+    let cache = CacheBundle::open(repo);
+    let service = if let Some(bundle) = cache.as_ref() {
+        IssueService::open_with_cache(repo, LockMode::Read, bundle.adapter(CacheNamespace::Issues))?
+    } else {
+        IssueService::open_with_mode(repo, LockMode::Read)?
+    };
     let details = service.get_with_comments(issue_id)?;
     Ok(details.into())
 }
 
 fn command_issue_details_list(repo: &Path) -> Result<Vec<IssueDetailsView>> {
+    let cache = CacheBundle::open(repo);
     let summaries = {
-        let store = IssueStore::open_with_mode(repo, LockMode::Read)?;
+        let store = if let Some(bundle) = cache.as_ref() {
+            IssueStore::open_with_cache(
+                repo,
+                LockMode::Read,
+                bundle.adapter(CacheNamespace::Issues),
+            )?
+        } else {
+            IssueStore::open_with_mode(repo, LockMode::Read)?
+        };
         store.list_issues()?
     };
-    let service = IssueService::open_with_mode(repo, LockMode::Read)?;
+    let service = if let Some(bundle) = cache.as_ref() {
+        IssueService::open_with_cache(repo, LockMode::Read, bundle.adapter(CacheNamespace::Issues))?
+    } else {
+        IssueService::open_with_mode(repo, LockMode::Read)?
+    };
     let mut views = Vec::with_capacity(summaries.len());
     for summary in summaries {
         let detail = service.get_with_comments(&summary.id)?;
@@ -1012,7 +1142,6 @@ fn command_mile_show(repo: &Path, mile_id: &MileId) -> Result<MileSnapshot> {
     Ok(store.load_mile(mile_id)?)
 }
 
-
 fn command_mile_change_status(
     repo: &Path,
     replica_id: &ReplicaId,
@@ -1021,7 +1150,16 @@ fn command_mile_change_status(
     status: MileStatus,
     message: Option<String>,
 ) -> Result<ChangeStatusOutcome> {
-    let store = MileStore::open_with_mode(repo, LockMode::Write)?;
+    let cache = CacheBundle::open(repo);
+    let store = if let Some(bundle) = cache.as_ref() {
+        MileStore::open_with_cache(
+            repo,
+            LockMode::Write,
+            bundle.adapter(CacheNamespace::Milestones),
+        )?
+    } else {
+        MileStore::open_with_mode(repo, LockMode::Write)?
+    };
     Ok(store.change_status(ChangeStatusInput {
         mile_id: mile_id.clone(),
         replica_id: replica_id.clone(),
@@ -1179,7 +1317,16 @@ fn run_comment_milestone(
 
     let replica_id = resolve_replica(replica);
     let identity = resolve_identity(repo, &replica_id, author, email)?;
-    let store = MileStore::open_with_mode(repo, LockMode::Write)?;
+    let cache = CacheBundle::open(repo);
+    let store = if let Some(bundle) = cache.as_ref() {
+        MileStore::open_with_cache(
+            repo,
+            LockMode::Write,
+            bundle.adapter(CacheNamespace::Milestones),
+        )?
+    } else {
+        MileStore::open_with_mode(repo, LockMode::Write)?
+    };
     let outcome = store.append_comment(AppendCommentInput {
         mile_id: mile_id.clone(),
         replica_id: replica_id.clone(),
@@ -1283,7 +1430,16 @@ fn run_comment_issue(
 
     let replica_id = resolve_replica(replica);
     let identity = resolve_identity(repo, &replica_id, author, email)?;
-    let store = IssueStore::open_with_mode(repo, LockMode::Write)?;
+    let cache = CacheBundle::open(repo);
+    let store = if let Some(bundle) = cache.as_ref() {
+        IssueStore::open_with_cache(
+            repo,
+            LockMode::Write,
+            bundle.adapter(CacheNamespace::Issues),
+        )?
+    } else {
+        IssueStore::open_with_mode(repo, LockMode::Write)?
+    };
     let outcome = store.append_comment(AppendIssueCommentInput {
         issue_id: issue_id.clone(),
         replica_id: replica_id.clone(),
@@ -1343,7 +1499,16 @@ fn run_label_milestone(
 
     let replica_id = resolve_replica(replica);
     let identity = resolve_identity(repo, &replica_id, author, email)?;
-    let store = MileStore::open_with_mode(repo, LockMode::Write)?;
+    let cache = CacheBundle::open(repo);
+    let store = if let Some(bundle) = cache.as_ref() {
+        MileStore::open_with_cache(
+            repo,
+            LockMode::Write,
+            bundle.adapter(CacheNamespace::Milestones),
+        )?
+    } else {
+        MileStore::open_with_mode(repo, LockMode::Write)?
+    };
     let outcome = store.update_labels(UpdateLabelsInput {
         mile_id: mile_id.clone(),
         replica_id: replica_id.clone(),
@@ -1388,7 +1553,16 @@ fn run_label_issue(
 
     let replica_id = resolve_replica(replica);
     let identity = resolve_identity(repo, &replica_id, author, email)?;
-    let store = IssueStore::open_with_mode(repo, LockMode::Write)?;
+    let cache = CacheBundle::open(repo);
+    let store = if let Some(bundle) = cache.as_ref() {
+        IssueStore::open_with_cache(
+            repo,
+            LockMode::Write,
+            bundle.adapter(CacheNamespace::Issues),
+        )?
+    } else {
+        IssueStore::open_with_mode(repo, LockMode::Write)?
+    };
     let outcome = store.update_labels(UpdateIssueLabelsInput {
         issue_id: issue_id.clone(),
         replica_id: replica_id.clone(),
@@ -1555,11 +1729,7 @@ fn run_milestone_list(repo: &Path, args: MilestoneListArgs) -> Result<()> {
         json,
     } = args;
 
-    let resolved_format = if json {
-        OutputFormat::Json
-    } else {
-        format
-    };
+    let resolved_format = if json { OutputFormat::Json } else { format };
 
     let legacy_mode = std::env::var("GIT_MILE_LIST_LEGACY")
         .ok()
@@ -1618,11 +1788,7 @@ fn run_issue_list(repo: &Path, args: IssueListArgs) -> Result<()> {
         json,
     } = args;
 
-    let resolved_format = if json {
-        OutputFormat::Json
-    } else {
-        format
-    };
+    let resolved_format = if json { OutputFormat::Json } else { format };
 
     let mut issues = command_issue_details_list(repo)?;
     if !all {
@@ -2285,10 +2451,9 @@ fn render_column<T: ListRecord>(column: ListColumn, record: &T) -> String {
         ListColumn::Title => record.title().to_string(),
         ListColumn::Status => record.status_str(),
         ListColumn::Labels => format_label_summary(record.labels()),
-        ListColumn::Comments => format_comment_summary(
-            record.comment_count(),
-            record.last_commented_at(),
-        ),
+        ListColumn::Comments => {
+            format_comment_summary(record.comment_count(), record.last_commented_at())
+        }
         ListColumn::Updated => record.updated_at().to_string(),
     }
 }
@@ -2420,10 +2585,7 @@ fn format_label_summary(labels: &[String]) -> String {
     rendered.join(", ")
 }
 
-fn format_comment_summary(
-    count: usize,
-    last_commented_at: Option<&LamportTimestamp>,
-) -> String {
+fn format_comment_summary(count: usize, last_commented_at: Option<&LamportTimestamp>) -> String {
     match last_commented_at {
         Some(timestamp) => format!("{count} ({timestamp})"),
         None => format!("{count}"),
@@ -2462,10 +2624,7 @@ fn print_milestone_details(details: &MilestoneDetailsView, limit: Option<usize>)
     }
 
     println!();
-    println!(
-        "Comments ({} total):",
-        details.comment_count
-    );
+    println!("Comments ({} total):", details.comment_count);
     if details.comments.is_empty() {
         println!("  (none)");
     } else {
@@ -2504,10 +2663,7 @@ fn print_milestone_details(details: &MilestoneDetailsView, limit: Option<usize>)
                 LabelOperation::Add => '+',
                 LabelOperation::Remove => '-',
             };
-            println!(
-                "    {} {} {}",
-                event.timestamp, symbol, event.label
-            );
+            println!("    {} {} {}", event.timestamp, symbol, event.label);
         }
     }
 }
@@ -2799,11 +2955,13 @@ mod tests {
         assert!(details.labels.contains(&"beta".to_string()));
         assert!(details.labels.contains(&"gamma".to_string()));
         assert!(!details.labels.contains(&"alpha".to_string()));
-        assert!(details
-            .latest_comment_excerpt
-            .as_deref()
-            .unwrap_or("")
-            .contains("Second comment"));
+        assert!(
+            details
+                .latest_comment_excerpt
+                .as_deref()
+                .unwrap_or("")
+                .contains("Second comment")
+        );
         assert_eq!(details.label_events.len(), 2);
         assert_eq!(details.label_events[0].label, "alpha");
         assert_eq!(details.label_events[1].label, "gamma");
