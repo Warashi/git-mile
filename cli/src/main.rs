@@ -3189,15 +3189,22 @@ mod tests {
     fn mcp_server_stub_starts() -> Result<()> {
         let temp = tempfile::tempdir()?;
         Repository::init_bare(temp.path())?;
-        run_mcp_server(
+        let error = run_mcp_server(
             temp.path(),
             McpServerArgs {
                 log_level: McpLogLevel::Trace,
-                handshake_timeout: 5,
-                idle_shutdown: Some(10),
+                handshake_timeout: 1,
+                idle_shutdown: Some(1),
                 protocol: McpProtocolVersion::V1,
             },
-        )?;
+        )
+        .expect_err("expected handshake to time out without a client connection");
+        assert!(
+            error
+                .to_string()
+                .contains("failed to initialize MCP server"),
+            "unexpected error: {error}"
+        );
         Ok(())
     }
 
