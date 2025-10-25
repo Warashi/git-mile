@@ -3,6 +3,9 @@ name = "git_mile_core"
 version.workspace = true
 edition.workspace = true
 
+[features]
+property-tests = ["proptest"]
+
 [dependencies]
 git2 = { version = "0.19", features = ["vendored-openssl"] }
 hex = "0.4"
@@ -21,6 +24,7 @@ async-trait = "0.1"
 tokio = { version = "1.38", features = ["rt-multi-thread", "macros", "sync", "time"] }
 metrics = "0.22"
 metrics-exporter-prometheus = "0.13"
+proptest = { version = "1.5", optional = true }
 
 [dev-dependencies]
 tempfile = "3.10"
