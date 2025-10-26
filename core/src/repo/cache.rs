@@ -24,16 +24,28 @@ const GENERATION_KEY_PREFIX: &str = "generation";
 /// Hook trait invoked around repository read/write events.
 pub trait RepositoryCacheHook: Send + Sync {
     /// Attempt to retrieve a cached snapshot before hitting the backing store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the hook fails to load or deserialize the cached snapshot.
     fn try_get_snapshot(&self, _entity_id: &EntityId) -> Result<Option<EntitySnapshot>> {
         Ok(None)
     }
 
     /// Store the snapshot after it is loaded from the backing store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the hook fails to persist the snapshot.
     fn on_entity_loaded(&self, _entity_id: &EntityId, _snapshot: &EntitySnapshot) -> Result<()> {
         Ok(())
     }
 
     /// Notify the hook that a pack was persisted for the given entity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the hook cannot record the persisted pack information.
     fn on_pack_persisted(
         &self,
         _entity_id: &EntityId,
@@ -44,6 +56,10 @@ pub trait RepositoryCacheHook: Send + Sync {
     }
 
     /// Invalidate any cached state for the given entity identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the hook cannot purge the cached entity state.
     fn invalidate_entity(&self, _entity_id: &EntityId) -> Result<()> {
         Ok(())
     }
@@ -232,12 +248,22 @@ struct CacheJournalEntry {
 
 /// Abstract repository used to persist cached entity snapshots.
 pub trait CacheRepository: Send + Sync {
+    /// Retrieve a cached entity snapshot for the given namespace and identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the repository cannot read from the underlying storage.
     fn get(
         &self,
         namespace: CacheNamespace,
         entity_id: &EntityId,
     ) -> Result<CacheLoadOutcome<EntitySnapshot>>;
 
+    /// Persist a snapshot for the given namespace and identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the repository cannot write the snapshot to the underlying storage.
     fn put(
         &self,
         namespace: CacheNamespace,
@@ -245,12 +271,27 @@ pub trait CacheRepository: Send + Sync {
         snapshot: &EntitySnapshot,
     ) -> Result<()>;
 
+    /// Remove any cached snapshot for the specified entity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the repository cannot delete the cached entity data.
     fn invalidate(&self, namespace: CacheNamespace, entity_id: &EntityId) -> Result<()>;
 
+    /// Fetch the current cache generation for the given namespace if available.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the repository cannot load generation metadata.
     fn generation(&self, _namespace: CacheNamespace) -> Result<Option<CacheGenerationSnapshot>> {
         Ok(None)
     }
 
+    /// Handle notification that a pack was persisted for an entity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the repository cannot record the pack persistence metadata.
     fn on_pack_persisted(
         &self,
         _namespace: CacheNamespace,
@@ -280,6 +321,11 @@ struct PersistentCacheInner {
 
 impl PersistentCache {
     /// Open (or create) a persistent cache using the provided configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the cache directory cannot be prepared or when the RocksDB instance
+    /// fails to open with the requested column families.
     pub fn open(config: CacheConfig) -> Result<Self> {
         ensure_cache_directory(&config.path, config.version)?;
 
@@ -344,6 +390,12 @@ impl PersistentCache {
         &self.inner.db
     }
 
+    /// Fetch the current generation metadata for the given namespace.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the generation information cannot be read from RocksDB or when the
+    /// current epoch time is unavailable.
     pub fn generation(&self, namespace: CacheNamespace) -> Result<CacheGenerationSnapshot> {
         self.inner
             .current_generation(namespace)

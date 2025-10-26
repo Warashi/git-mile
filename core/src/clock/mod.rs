@@ -114,6 +114,11 @@ impl LamportClock {
         LamportTimestamp::new(self.counter, self.replica_id.clone())
     }
 
+    /// Advance the clock and return the new timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the counter would overflow the maximum representable value.
     pub fn tick(&mut self) -> Result<LamportTimestamp> {
         self.counter = self.counter.checked_add(1).ok_or(Error::ClockOverflow)?;
         Ok(self.snapshot())

@@ -42,6 +42,11 @@ pub struct RepositoryLock;
 
 impl RepositoryLock {
     /// Acquire a shared or exclusive lock for the repository. Blocks until the lock is available.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the lock file cannot be created or when the OS-level lock operation
+    /// fails.
     pub fn acquire(repo_path: &Path, mode: LockMode) -> io::Result<RepositoryLockGuard> {
         let (file, path) = Self::open_lock_file(repo_path)?;
         match mode {
@@ -52,6 +57,11 @@ impl RepositoryLock {
     }
 
     /// Attempt to acquire the lock without blocking.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the lock file cannot be created or when the non-blocking lock
+    /// operation fails with an unexpected error.
     pub fn try_acquire(repo_path: &Path, mode: LockMode) -> io::Result<RepositoryLockGuard> {
         let (file, path) = Self::open_lock_file(repo_path)?;
         let result = match mode {

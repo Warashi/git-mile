@@ -250,16 +250,33 @@ pub struct IssueStore {
 }
 
 impl IssueStore {
+    /// Open the issue store for the given repository.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the repository cannot be accessed or its metadata cannot be loaded.
     pub fn open(repo_path: impl AsRef<Path>) -> Result<Self> {
         let entities = EntityStore::open(repo_path)?;
         Ok(Self { entities })
     }
 
+    /// Open the issue store using the specified repository lock mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the repository cannot be accessed or the requested lock cannot be
+    /// acquired.
     pub fn open_with_mode(repo_path: impl AsRef<Path>, mode: LockMode) -> Result<Self> {
         let entities = EntityStore::open_with_mode(repo_path, mode)?;
         Ok(Self { entities })
     }
 
+    /// Open the issue store with a cache hook used to accelerate entity lookups.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the repository cannot be accessed or when the cache initialization
+    /// fails.
     pub fn open_with_cache(
         repo_path: impl AsRef<Path>,
         mode: LockMode,
@@ -269,6 +286,11 @@ impl IssueStore {
         Ok(Self { entities })
     }
 
+    /// Create a new issue and persist the initial operation pack.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the operation pack cannot be constructed, persisted, or reloaded.
     pub fn create_issue(&self, input: CreateIssueInput) -> Result<IssueSnapshot> {
         let CreateIssueInput {
             replica_id,
@@ -318,11 +340,23 @@ impl IssueStore {
         build_issue_snapshot(snapshot)
     }
 
+    /// Load an issue snapshot by its identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying entity cannot be read or the snapshot reconstruction
+    /// fails validation.
     pub fn load_issue(&self, issue_id: &IssueId) -> Result<IssueSnapshot> {
         let snapshot = self.entities.load_entity(issue_id)?;
         build_issue_snapshot(snapshot)
     }
 
+    /// Retrieve all issues known to the store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying entities cannot be listed or when a snapshot fails to
+    /// deserialize.
     pub fn list_issues(&self) -> Result<Vec<IssueSummary>> {
         let summaries = self.entities.list_entities()?;
         let mut issues = Vec::with_capacity(summaries.len());
@@ -349,6 +383,12 @@ impl IssueStore {
         Ok(issues)
     }
 
+    /// Change the status of an existing issue.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the issue cannot be loaded, conflicts remain unresolved, or the
+    /// resulting operation pack cannot be persisted.
     pub fn change_status(&self, input: IssueChangeStatusInput) -> Result<IssueChangeStatusOutcome> {
         let IssueChangeStatusInput {
             issue_id,
@@ -399,6 +439,12 @@ impl IssueStore {
         })
     }
 
+    /// Append a comment to the issue timeline.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the issue cannot be loaded, the comment payload fails validation, or
+    /// the resulting operation pack cannot be persisted.
     pub fn append_comment(
         &self,
         input: AppendIssueCommentInput,
@@ -466,6 +512,12 @@ impl IssueStore {
         })
     }
 
+    /// Reconcile the labels attached to an issue.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the issue cannot be loaded or when the label update operations fail to
+    /// persist.
     pub fn update_labels(&self, input: UpdateIssueLabelsInput) -> Result<UpdateIssueLabelsOutcome> {
         let UpdateIssueLabelsInput {
             issue_id,

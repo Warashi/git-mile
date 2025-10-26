@@ -59,11 +59,25 @@ impl SyncHookRegistry {
         }
     }
 
+    /// Register a sync hook to run during the specified phase.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal hook registry mutex has been poisoned.
     pub fn register(&self, phase: SyncPhase, hook: Arc<dyn SyncHook>) {
         let mut guard = self.hooks.lock().expect("sync hook registry poisoned");
         guard.entry(phase).or_default().push(hook);
     }
 
+    /// Run all hooks registered for the context's phase.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any hook fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal hook registry mutex has been poisoned.
     pub async fn dispatch(&self, ctx: &SyncContext) -> Result<()> {
         let hooks = {
             let guard = self.hooks.lock().expect("sync hook registry poisoned");
@@ -144,6 +158,15 @@ struct BackgroundSyncWorkerInner {
 }
 
 impl BackgroundSyncWorker {
+    /// Spawn a background worker that applies index deltas asynchronously.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the runtime cannot be created or the worker thread fails to start.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the worker handle mutex has been poisoned.
     pub fn spawn(buffer: usize) -> Result<Self> {
         let (sender, receiver) = mpsc::channel(buffer);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -172,6 +195,15 @@ impl BackgroundSyncWorker {
         Ok(Self { inner })
     }
 
+    /// Enqueue an index delta for asynchronous processing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the delta cannot be enqueued or when internal communication fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the status map mutex has been poisoned.
     pub fn enqueue_delta(&self, delta: IndexDelta) -> Result<oneshot::Receiver<Result<()>>> {
         let key = delta.key();
         let namespace_label = delta.namespace.as_str();
@@ -210,6 +242,11 @@ impl BackgroundSyncWorker {
         self.inner.queue_depth.load(Ordering::SeqCst)
     }
 
+    /// Return a snapshot of the current task statuses.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the status map mutex has been poisoned.
     pub fn status_snapshot(&self) -> HashMap<String, SyncTaskStatus> {
         self.inner
             .statuses

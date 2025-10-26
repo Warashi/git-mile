@@ -16,18 +16,34 @@ pub struct IssueService {
 }
 
 impl IssueService {
+    /// Open the issue service for the given repository.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying issue store cannot be opened.
     pub fn open(repo_path: impl AsRef<Path>) -> Result<Self> {
         Ok(Self {
             store: IssueStore::open(repo_path)?,
         })
     }
 
+    /// Open the issue service using the specified repository lock mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying store cannot be opened with the requested lock mode.
     pub fn open_with_mode(repo_path: impl AsRef<Path>, mode: LockMode) -> Result<Self> {
         Ok(Self {
             store: IssueStore::open_with_mode(repo_path, mode)?,
         })
     }
 
+    /// Open the issue service with a cache hook used to accelerate entity lookups.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying store cannot be opened or the cache initialization
+    /// fails.
     pub fn open_with_cache(
         repo_path: impl AsRef<Path>,
         mode: LockMode,
@@ -38,6 +54,12 @@ impl IssueService {
         })
     }
 
+    /// Create a new issue with the provided payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying store fails to persist the issue or when the output
+    /// snapshot cannot be reconstructed.
     pub fn create(&self, payload: CreatePayload) -> Result<IssueDetails> {
         let snapshot = self.store.create_issue(CreateIssueInput {
             replica_id: payload.replica_id,
@@ -53,6 +75,12 @@ impl IssueService {
         Ok(IssueDetails::from_snapshot(snapshot))
     }
 
+    /// Append a comment to an issue and return the updated details.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the issue cannot be loaded, the comment cannot be persisted, or the
+    /// resulting snapshot does not contain the appended comment.
     pub fn append_comment(&self, payload: AppendCommentPayload) -> Result<AppendCommentResult> {
         let outcome = self.store.append_comment(AppendIssueCommentInput {
             issue_id: payload.issue_id.clone(),
@@ -83,6 +111,11 @@ impl IssueService {
         })
     }
 
+    /// Update the set of labels attached to an issue.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the issue cannot be loaded or when the label updates fail to persist.
     pub fn update_labels(&self, payload: LabelUpdatePayload) -> Result<LabelUpdateResult> {
         let outcome = self.store.update_labels(UpdateIssueLabelsInput {
             issue_id: payload.issue_id,
@@ -102,6 +135,11 @@ impl IssueService {
         })
     }
 
+    /// Load an issue with all associated comments.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the issue cannot be loaded or the snapshot reconstruction fails.
     pub fn get_with_comments(&self, issue_id: &IssueId) -> Result<IssueDetails> {
         let snapshot = self.store.load_issue(issue_id)?;
         Ok(IssueDetails::from_snapshot(snapshot))

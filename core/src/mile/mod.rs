@@ -250,16 +250,33 @@ pub struct MileStore {
 }
 
 impl MileStore {
+    /// Open the milestone store for the given repository.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the repository cannot be accessed or its metadata cannot be loaded.
     pub fn open(repo_path: impl AsRef<Path>) -> Result<Self> {
         let entities = EntityStore::open(repo_path)?;
         Ok(Self { entities })
     }
 
+    /// Open the milestone store using the specified repository lock mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the repository cannot be accessed or the requested lock cannot be
+    /// acquired.
     pub fn open_with_mode(repo_path: impl AsRef<Path>, mode: LockMode) -> Result<Self> {
         let entities = EntityStore::open_with_mode(repo_path, mode)?;
         Ok(Self { entities })
     }
 
+    /// Open the milestone store with a cache hook used to accelerate entity lookups.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the repository cannot be accessed or when the cache initialization
+    /// fails.
     pub fn open_with_cache(
         repo_path: impl AsRef<Path>,
         mode: LockMode,
@@ -269,6 +286,11 @@ impl MileStore {
         Ok(Self { entities })
     }
 
+    /// Create a new milestone and persist the initial operation pack.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the operation pack cannot be constructed, persisted, or reloaded.
     pub fn create_mile(&self, input: CreateMileInput) -> Result<MileSnapshot> {
         let CreateMileInput {
             replica_id,
@@ -318,11 +340,23 @@ impl MileStore {
         build_mile_snapshot(snapshot)
     }
 
+    /// Load a milestone snapshot by its identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying entity cannot be read or the snapshot reconstruction
+    /// fails validation.
     pub fn load_mile(&self, mile_id: &MileId) -> Result<MileSnapshot> {
         let snapshot = self.entities.load_entity(mile_id)?;
         build_mile_snapshot(snapshot)
     }
 
+    /// Retrieve all milestones known to the store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying entities cannot be listed or when a snapshot fails to
+    /// deserialize.
     pub fn list_miles(&self) -> Result<Vec<MileSummary>> {
         let summaries = self.entities.list_entities()?;
         let mut miles = Vec::with_capacity(summaries.len());
@@ -349,6 +383,12 @@ impl MileStore {
         Ok(miles)
     }
 
+    /// Change the status of an existing milestone.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the milestone cannot be loaded, conflicts remain unresolved, or the
+    /// resulting operation pack cannot be persisted.
     pub fn change_status(&self, input: ChangeStatusInput) -> Result<ChangeStatusOutcome> {
         let ChangeStatusInput {
             mile_id,
@@ -399,6 +439,12 @@ impl MileStore {
         })
     }
 
+    /// Append a comment to the milestone timeline.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the milestone cannot be loaded, the comment payload fails validation,
+    /// or the resulting operation pack cannot be persisted.
     pub fn append_comment(&self, input: AppendCommentInput) -> Result<AppendCommentOutcome> {
         let AppendCommentInput {
             mile_id,
@@ -463,6 +509,12 @@ impl MileStore {
         })
     }
 
+    /// Reconcile the labels attached to a milestone.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the milestone cannot be loaded or when the label update operations
+    /// fail to persist.
     pub fn update_labels(&self, input: UpdateLabelsInput) -> Result<UpdateLabelsOutcome> {
         let UpdateLabelsInput {
             mile_id,

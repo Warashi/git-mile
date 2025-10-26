@@ -16,18 +16,34 @@ pub struct MilestoneService {
 }
 
 impl MilestoneService {
+    /// Open the milestone service for the given repository.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying milestone store cannot be opened.
     pub fn open(repo_path: impl AsRef<Path>) -> Result<Self> {
         Ok(Self {
             store: MileStore::open(repo_path)?,
         })
     }
 
+    /// Open the milestone service using the specified repository lock mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying store cannot be opened with the requested lock mode.
     pub fn open_with_mode(repo_path: impl AsRef<Path>, mode: LockMode) -> Result<Self> {
         Ok(Self {
             store: MileStore::open_with_mode(repo_path, mode)?,
         })
     }
 
+    /// Open the milestone service with a cache hook used to accelerate entity lookups.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying store cannot be opened or the cache initialization
+    /// fails.
     pub fn open_with_cache(
         repo_path: impl AsRef<Path>,
         mode: LockMode,
@@ -38,6 +54,12 @@ impl MilestoneService {
         })
     }
 
+    /// Create a new milestone with the provided payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying store fails to persist the milestone or when the output
+    /// snapshot cannot be reconstructed.
     pub fn create(&self, payload: CreatePayload) -> Result<MilestoneDetails> {
         let snapshot = self.store.create_mile(CreateMileInput {
             replica_id: payload.replica_id,
@@ -53,6 +75,12 @@ impl MilestoneService {
         Ok(MilestoneDetails::from_snapshot(snapshot))
     }
 
+    /// Append a comment to a milestone and return the updated details.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the milestone cannot be loaded, the comment cannot be persisted, or
+    /// the resulting snapshot does not contain the appended comment.
     pub fn append_comment(&self, payload: AppendCommentPayload) -> Result<AppendCommentResult> {
         let outcome = self.store.append_comment(AppendCommentInput {
             mile_id: payload.milestone_id.clone(),
@@ -83,6 +111,12 @@ impl MilestoneService {
         })
     }
 
+    /// Update the set of labels attached to a milestone.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the milestone cannot be loaded or when the label updates fail to
+    /// persist.
     pub fn update_labels(&self, payload: LabelUpdatePayload) -> Result<LabelUpdateResult> {
         let outcome = self.store.update_labels(UpdateLabelsInput {
             mile_id: payload.milestone_id.clone(),
@@ -101,6 +135,12 @@ impl MilestoneService {
         })
     }
 
+    /// Change the status of a milestone.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the milestone cannot be loaded or when the status change operation
+    /// fails to persist.
     pub fn change_status(&self, payload: ChangeStatusPayload) -> Result<ChangeStatusResult> {
         let outcome = self.store.change_status(ChangeStatusInput {
             mile_id: payload.milestone_id.clone(),
@@ -116,6 +156,11 @@ impl MilestoneService {
         })
     }
 
+    /// Load a milestone with all associated comments.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the milestone cannot be loaded or the snapshot reconstruction fails.
     pub fn get_with_comments(&self, milestone_id: &MileId) -> Result<MilestoneDetails> {
         let snapshot = self.store.load_mile(milestone_id)?;
         Ok(MilestoneDetails::from_snapshot(snapshot))

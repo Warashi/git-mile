@@ -203,16 +203,33 @@ pub struct IdentityStore {
 }
 
 impl IdentityStore {
+    /// Open the identity store for the given repository.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the repository cannot be accessed or its metadata cannot be loaded.
     pub fn open(repo_path: impl AsRef<Path>) -> Result<Self> {
         let entities = EntityStore::open(repo_path)?;
         Ok(Self { entities })
     }
 
+    /// Open the identity store using the specified repository lock mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the repository cannot be accessed or the requested lock cannot be
+    /// acquired.
     pub fn open_with_mode(repo_path: impl AsRef<Path>, mode: LockMode) -> Result<Self> {
         let entities = EntityStore::open_with_mode(repo_path, mode)?;
         Ok(Self { entities })
     }
 
+    /// Open the identity store with a cache hook used to accelerate entity lookups.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the repository cannot be accessed or when the cache initialization
+    /// fails.
     pub fn open_with_cache(
         repo_path: impl AsRef<Path>,
         mode: LockMode,
@@ -222,6 +239,12 @@ impl IdentityStore {
         Ok(Self { entities })
     }
 
+    /// Create a new identity and persist the corresponding operation pack.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store fails to build or persist the operations, or when the final
+    /// snapshot cannot be reconstructed.
     pub fn create_identity(&self, input: CreateIdentityInput) -> Result<IdentitySnapshot> {
         let CreateIdentityInput {
             replica_id,
@@ -296,11 +319,23 @@ impl IdentityStore {
         build_identity_snapshot(snapshot)
     }
 
+    /// Load a single identity snapshot by its identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying entity cannot be read or the snapshot reconstruction
+    /// fails validation.
     pub fn load_identity(&self, identity_id: &IdentityId) -> Result<IdentitySnapshot> {
         let snapshot = self.entities.load_entity(identity_id)?;
         build_identity_snapshot(snapshot)
     }
 
+    /// Retrieve all identities known to the store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying entities cannot be listed or when a snapshot fails to
+    /// deserialize.
     pub fn list_identities(&self) -> Result<Vec<IdentitySummary>> {
         let summaries = self.entities.list_entities()?;
         let mut identities = Vec::with_capacity(summaries.len());
@@ -328,6 +363,12 @@ impl IdentityStore {
         Ok(identities)
     }
 
+    /// Adopt a pending identity for the specified replica.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the identity cannot be loaded, is in an unexpected state, or when the
+    /// adoption operation fails to persist.
     pub fn adopt_identity(&self, input: AdoptIdentityInput) -> Result<AdoptIdentityOutcome> {
         let AdoptIdentityInput {
             identity_id,
@@ -384,6 +425,12 @@ impl IdentityStore {
         })
     }
 
+    /// Add a protection rule to an identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the identity cannot be loaded, the protection operation fails
+    /// validation, or the resulting pack cannot be persisted.
     pub fn add_protection(&self, input: AddProtectionInput) -> Result<AddProtectionOutcome> {
         let AddProtectionInput {
             identity_id,
@@ -448,6 +495,12 @@ impl IdentityStore {
         })
     }
 
+    /// Find the identity adopted by the given replica, if any.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the repository cannot be queried or when the retrieved snapshot fails
+    /// to deserialize.
     pub fn find_adopted_by_replica(&self, replica: &ReplicaId) -> Result<Option<IdentitySnapshot>> {
         let summaries = self.entities.list_entities()?;
         let mut latest: Option<IdentitySnapshot> = None;

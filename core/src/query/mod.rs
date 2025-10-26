@@ -158,6 +158,12 @@ impl QuerySchema {
         self.fields.get(name)
     }
 
+    /// Validate that the provided query expression conforms to the schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the expression references unknown fields, uses unsupported operators,
+    /// or violates logical arity rules.
     pub fn validate_expr(&self, expr: &QueryExpr) -> QueryResult<()> {
         match expr {
             QueryExpr::Comparison(comp) => {
@@ -202,6 +208,11 @@ impl QuerySchema {
         }
     }
 
+    /// Ensure that the given field can be used as a sort key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the field is unknown or has not been marked as sortable.
     pub fn ensure_sortable(&self, field: &str) -> QueryResult<()> {
         let metadata = self
             .field(field)
@@ -361,6 +372,11 @@ impl PageCursor {
         }
     }
 
+    /// Parse a page cursor encoded with [`PageCursor::encode`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the cursor string is malformed or contains non-numeric segments.
     pub fn parse(value: &str) -> QueryResult<Self> {
         if let Some((generation, offset)) = value.split_once(':') {
             let generation = generation
@@ -409,6 +425,12 @@ impl QueryEngine {
         Self { schema }
     }
 
+    /// Execute the query request against the provided records.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the filter or sort specifications fail validation or when the provided
+    /// cursor references a stale cache generation.
     pub fn execute<R, I>(
         &self,
         records: I,
@@ -730,6 +752,11 @@ enum SExpr {
     List(Vec<SExpr>),
 }
 
+/// Parse the textual query expression into an abstract syntax tree.
+///
+/// # Errors
+///
+/// Returns an error when the input is empty or cannot be tokenized into a valid expression.
 pub fn parse_query(input: &str) -> QueryResult<QueryExpr> {
     let start = Instant::now();
     let (_, expr) = delimited(multispace0, parse_sexpr, multispace0)(input)
@@ -941,6 +968,11 @@ pub fn issue_schema() -> QuerySchema {
         .build()
 }
 
+/// Parse and validate an optional filter string against the provided schema.
+///
+/// # Errors
+///
+/// Returns an error when the filter string cannot be parsed or fails schema validation.
 pub fn prepare_filter(schema: &QuerySchema, input: Option<&str>) -> QueryResult<Option<QueryExpr>> {
     match input {
         Some(raw) if !raw.trim().is_empty() => {
@@ -952,6 +984,11 @@ pub fn prepare_filter(schema: &QuerySchema, input: Option<&str>) -> QueryResult<
     }
 }
 
+/// Parse CLI-style sort specifications (`field[:asc|desc]`) into structured definitions.
+///
+/// # Errors
+///
+/// Returns an error when a token is malformed or references an unknown sort direction.
 pub fn parse_sort_specs(input: &[String]) -> QueryResult<Vec<SortSpec>> {
     let mut specs = Vec::with_capacity(input.len());
     for token in input {

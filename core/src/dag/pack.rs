@@ -13,6 +13,11 @@ use super::entity::{EntityId, OperationId};
 pub struct BlobRef(String);
 
 impl BlobRef {
+    /// Create a blob reference from a hexadecimal digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the provided digest is not a 64-character hexadecimal string.
     pub fn new(digest: impl AsRef<str>) -> Result<Self> {
         let digest = digest.as_ref();
         if digest.len() != 64 || !digest.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -118,6 +123,12 @@ pub struct OperationPack {
 }
 
 impl OperationPack {
+    /// Build a validated operation pack.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the pack fails validation, such as containing duplicate operations or
+    /// missing referenced blobs.
     pub fn new(
         entity_id: EntityId,
         clock_snapshot: LamportTimestamp,
@@ -135,6 +146,12 @@ impl OperationPack {
         Ok(pack)
     }
 
+    /// Validate the internal consistency of the pack.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when duplicate operations are present, dependencies are unordered, or
+    /// referenced blobs are missing.
     pub fn validate(&self) -> Result<()> {
         self.ensure_unique_operations()?;
         self.ensure_topological_order()?;

@@ -434,6 +434,12 @@ fn map_join_error(err: JoinError) -> McpError {
     McpError::internal_error("internal server task failure", None)
 }
 
+/// Run the MCP server over stdio until the client disconnects or the idle timeout elapses.
+///
+/// # Errors
+///
+/// Returns an error when the handshake times out, initialization fails, or the server loop
+/// encounters an unrecoverable error.
 pub async fn run_stdio_server(config: StdioServerConfig) -> Result<()> {
     info!(
         "starting git-mile MCP stdio server (handshake_timeout={:?}, idle_timeout={:?})",

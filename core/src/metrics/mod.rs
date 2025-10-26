@@ -4,6 +4,11 @@ use metrics_exporter_prometheus::{BuildError, PrometheusBuilder, PrometheusHandl
 
 static PROMETHEUS_HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
 
+/// Install the global Prometheus recorder used for exporting metrics.
+///
+/// # Errors
+///
+/// Returns an error when the Prometheus exporter cannot be initialized.
 pub fn init_prometheus() -> Result<(), BuildError> {
     if PROMETHEUS_HANDLE.get().is_some() {
         return Ok(());

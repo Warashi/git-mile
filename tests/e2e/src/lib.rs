@@ -34,6 +34,11 @@ impl TestRepository {
     }
 }
 
+/// Create a repository fixture populated with an issue and a milestone.
+///
+/// # Errors
+///
+/// Returns an error when the repository cannot be created or seeded with the initial data.
 pub fn create_repository_fixture() -> Result<TestRepository> {
     let temp = tempfile::tempdir().context("failed to create temp dir")?;
     Repository::init_bare(temp.path()).context("failed to init bare repo")?;
@@ -92,6 +97,12 @@ pub enum Response {
 }
 
 impl McpHarness {
+    /// Spawn a `git-mile` MCP server process and connect to it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the process cannot be started or any of the stdio handles cannot be
+    /// captured.
     pub fn spawn(repo_path: &Path) -> Result<Self> {
         let mut cmd = Command::cargo_bin("git-mile")?;
         cmd.arg("mcp-server")
@@ -132,6 +143,11 @@ impl McpHarness {
         })
     }
 
+    /// Send the MCP `initialize` request and wait for the response.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request cannot be sent or the server rejects the initialization.
     pub fn initialize(&mut self) -> Result<Response> {
         let params = json!({
             "protocolVersion": "2024-11-05",
@@ -155,11 +171,21 @@ impl McpHarness {
         }
     }
 
+    /// Request the list of tools exposed by the MCP server.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request cannot be sent or the response cannot be parsed.
     pub fn list_tools(&mut self) -> Result<Response> {
         let params = Value::Object(Map::new());
         self.request("tools/list", Some(params))
     }
 
+    /// Invoke a specific MCP tool with the provided arguments.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request cannot be sent or the response cannot be parsed.
     pub fn call_tool(&mut self, name: &str, arguments: Value) -> Result<Response> {
         let params = json!({
             "name": name,
@@ -168,6 +194,11 @@ impl McpHarness {
         self.request("tools/call", Some(params))
     }
 
+    /// Shut down the MCP server gracefully and return its exit status.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the shutdown request fails or the process does not exit cleanly.
     pub fn shutdown(mut self) -> Result<ExitStatus> {
         let response = self.request("shutdown", Some(Value::Null))?;
         match response {
@@ -187,6 +218,11 @@ impl McpHarness {
         Ok(status)
     }
 
+    /// Terminate the MCP server without sending a shutdown request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the process status or stderr logs cannot be collected.
     pub fn abort(mut self) -> Result<Option<ExitStatus>> {
         self.close_stdin();
         let status = self.wait_for_exit(Duration::from_secs(5)).ok();

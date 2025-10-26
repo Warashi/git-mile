@@ -21,15 +21,31 @@ pub struct EntityStore {
 }
 
 impl EntityStore {
+    /// Open the entity store using a write lock on the repository.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the repository cannot be accessed or opened.
     pub fn open(repo_path: impl AsRef<Path>) -> Result<Self> {
         Self::open_with_mode(repo_path, LockMode::Write)
     }
 
+    /// Open the entity store with the specified repository lock mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the repository cannot be accessed or when the lock acquisition fails.
     pub fn open_with_mode(repo_path: impl AsRef<Path>, mode: LockMode) -> Result<Self> {
         let cache: Arc<dyn RepositoryCacheHook> = Arc::new(NoopCache);
         Self::open_with_cache(repo_path, mode, cache)
     }
 
+    /// Open the entity store with a custom cache hook.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the repository backend cannot be initialized or the repository lock
+    /// cannot be acquired.
     pub fn open_with_cache(
         repo_path: impl AsRef<Path>,
         mode: LockMode,
@@ -45,6 +61,12 @@ impl EntityStore {
         })
     }
 
+    /// Persist an operation pack into the repository.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the backing Git repository cannot be read or written, or when cache
+    /// hooks fail.
     pub fn persist_pack(&self, pack: OperationPack) -> Result<PackPersistResult> {
         let entity_id = pack.entity_id.clone();
         let mut entity = self.backend.load_or_default(entity_id.clone())?;
@@ -64,6 +86,12 @@ impl EntityStore {
         Ok(result)
     }
 
+    /// Load the full snapshot for an entity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the entity cannot be retrieved from the repository or the snapshot
+    /// reconstruction fails.
     pub fn load_entity(&self, entity_id: &EntityId) -> Result<EntitySnapshot> {
         if let Some(snapshot) = self.cache.try_get_snapshot(entity_id)? {
             return Ok(snapshot);
@@ -78,10 +106,21 @@ impl EntityStore {
         Ok(snapshot)
     }
 
+    /// List all entity summaries stored in the repository.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the repository contents cannot be enumerated.
     pub fn list_entities(&self) -> Result<Vec<EntitySummary>> {
         self.backend.list_entities()
     }
 
+    /// Resolve conflicts between divergent entity heads using the provided strategy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the entity cannot be loaded, when the strategy is invalid, or when the
+    /// resulting state cannot be written back to the repository.
     pub fn resolve_conflicts(
         &self,
         entity_id: &EntityId,
