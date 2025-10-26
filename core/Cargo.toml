@@ -14,7 +14,7 @@ serde_bytes = "0.11"
 sha2 = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-thiserror = "1.0"
+thiserror = "2.0"
 uuid = { version = "1", features = ["v4", "serde"] }
 fs2 = "0.4"
 rocksdb = "0.22"
@@ -23,8 +23,8 @@ crc32fast = "1.4"
 nom = "7"
 async-trait = "0.1"
 tokio = { version = "1.38", features = ["rt-multi-thread", "macros", "sync", "time"] }
-metrics = "0.22"
-metrics-exporter-prometheus = "0.13"
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.17", default-features = false }
 proptest = { version = "1.5", optional = true }
 rmcp = { version = "0.8", features = ["server", "macros", "transport-io"] }
 schemars = "1.0"

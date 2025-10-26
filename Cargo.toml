@@ -8,3 +8,6 @@ version = "0.1.0"
 
 [workspace.dependencies]
 git_mile_core = { path = "core" }
+
+[patch.crates-io]
+indexmap = { git = "https://github.com/indexmap-rs/indexmap", tag = "2.6.0" }
