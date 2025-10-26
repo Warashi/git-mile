@@ -135,6 +135,56 @@ Flags:
 > output is planned for a follow-up milestone; in the meantime `git mile list issue --json`
 > surfaces equivalent structured data.
 
+## MCP Integration Mode
+
+`git mile mcp-server` exposes the core query engine over the Model Context
+Protocol (MCP) so that external clients such as Claude Desktop can drive the
+same list/show flows as the CLI.
+
+### Quick start
+
+```bash
+# launch the stdio MCP server for the current repository
+git mile mcp-server --repo $(pwd) --log-level info --handshake-timeout 30
+```
+
+1. Start the server in the repository you want the client to inspect.
+2. Point your MCP-compatible client at the `git-mile` binary and pass the
+   working directory (many clients expose this as `command` + `args` or
+   `cwd`).
+3. Trigger a `git_mile.list` or `git_mile.show` action inside the client to
+   confirm the connection.
+
+The server emits structured logs on stderr and stays alive until the client
+requests shutdown or the optional idle timeout elapses.
+
+### Flags and configuration
+
+- `--log-level <trace|debug|info|warn|error>` tunes the tracing output.
+- `--handshake-timeout <SECONDS>` aborts initialization if the client does not
+  send `initialize` within the allotted time.
+- `--idle-shutdown <SECONDS>` optionally stops the server after a period with no
+  in-flight requests.
+- `--protocol v1` selects the current MCP protocol surface.
+
+See `docs/reference/mcp-server.md` for full flag details.
+
+### External clients
+
+Detailed setup guides for Claude Desktop, Cursor, and other MCP clients live in
+`docs/reference/mcp-clients.md`. Each guide documents the required command
+template, expected environment variables, and known quirks.
+
+### Known constraints
+
+- Only a single client connection is supported per server instance today.
+- Requests are processed sequentially; long-running queries block subsequent
+  calls until they finish.
+- The server shares the repository lock with the CLI. Avoid running mutating
+  commands in parallel with an MCP session.
+- Windows terminals must forward CTRL+C to terminate both the CLI wrapper and
+  the spawned MCP server process.
+
 ## Troubleshooting
 
 * When an editor produces empty content, re-run with `--allow-empty` or provide
