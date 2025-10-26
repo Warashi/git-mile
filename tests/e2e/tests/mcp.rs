@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use git_mile_e2e::{McpHarness, Response, create_repository_fixture};
 use serde_json::{Value, json};
 
-fn extract_content(result: Value) -> Result<Value> {
+fn extract_content(result: &Value) -> Result<Value> {
     let content = result
         .get("content")
         .and_then(Value::as_array)
@@ -57,7 +57,7 @@ fn list_flow_returns_fixture_data() -> Result<()> {
         Response::Error(err) => return Err(anyhow!("git_mile.list returned error: {err:?}")),
     };
 
-    let list_json = extract_content(payload)?;
+    let list_json = extract_content(&payload)?;
     let items = list_json
         .get("items")
         .and_then(Value::as_array)
@@ -103,7 +103,7 @@ fn show_flow_matches_expected_id() -> Result<()> {
         Response::Result(value) => value,
         Response::Error(err) => return Err(anyhow!("git_mile.show returned error: {err:?}")),
     };
-    let show_json = extract_content(payload)?;
+    let show_json = extract_content(&payload)?;
     assert_eq!(
         show_json.get("id").and_then(Value::as_str),
         Some(milestone_id.as_str())
