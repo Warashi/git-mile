@@ -23,10 +23,12 @@ impl Markdown {
         Self(value.into())
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         self.0.as_str()
     }
 
+    #[must_use]
     pub fn into_string(self) -> String {
         self.0
     }
