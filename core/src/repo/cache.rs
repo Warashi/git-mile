@@ -92,11 +92,12 @@ impl CacheNamespace {
         CacheNamespace::Identities,
     ];
 
-    pub fn as_str(self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         self.cf_name()
     }
 
-    fn cf_name(self) -> &'static str {
+    const fn cf_name(self) -> &'static str {
         match self {
             CacheNamespace::Issues => "issues",
             CacheNamespace::Milestones => "milestones",
@@ -107,7 +108,7 @@ impl CacheNamespace {
         }
     }
 
-    fn default_policy(self) -> CachePolicy {
+    const fn default_policy(self) -> CachePolicy {
         let ttl = match self {
             CacheNamespace::Issues | CacheNamespace::Milestones | CacheNamespace::Bridges => {
                 Duration::from_secs(60 * 60 * 24)
@@ -372,7 +373,7 @@ impl PersistentCache {
         inner.initialize_generations()?;
 
         if !inner.maintenance_interval.is_zero() {
-            start_maintenance(inner.clone())?;
+            start_maintenance(&inner)?;
         }
 
         Ok(Self { inner })
@@ -677,7 +678,7 @@ fn ensure_cache_directory(path: &Path, version: u32) -> Result<()> {
     Ok(())
 }
 
-fn start_maintenance(inner: Arc<PersistentCacheInner>) -> Result<()> {
+fn start_maintenance(inner: &Arc<PersistentCacheInner>) -> Result<()> {
     let db = Arc::clone(&inner.db);
     let shutdown = Arc::clone(&inner.shutdown);
     let interval = inner.maintenance_interval;
@@ -816,6 +817,7 @@ impl CacheMetrics {
         self.inner.rebuilds.fetch_add(1, Ordering::Relaxed);
     }
 
+    #[must_use]
     pub fn snapshot(&self) -> CacheMetricsSnapshot {
         CacheMetricsSnapshot {
             hits: self.inner.hits.load(Ordering::Relaxed),
@@ -853,10 +855,12 @@ impl EntityCacheAdapter {
         }
     }
 
-    pub fn namespace(&self) -> CacheNamespace {
+    #[must_use]
+    pub const fn namespace(&self) -> CacheNamespace {
         self.namespace
     }
 
+    #[must_use]
     pub fn metrics(&self) -> CacheMetricsSnapshot {
         self.metrics.snapshot()
     }
