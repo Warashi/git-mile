@@ -31,9 +31,9 @@ pub enum IdentityStatus {
 impl std::fmt::Display for IdentityStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let label = match self {
-            IdentityStatus::PendingAdoption => "pending_adoption",
-            IdentityStatus::Adopted => "adopted",
-            IdentityStatus::Protected => "protected",
+            Self::PendingAdoption => "pending_adoption",
+            Self::Adopted => "adopted",
+            Self::Protected => "protected",
         };
         f.write_str(label)
     }
@@ -282,13 +282,13 @@ impl IdentityStore {
 
         if adopt_immediately {
             let signature = initial_signature
-                .clone()
-                .unwrap_or_else(|| format!("{display_name} <{email}>"));
+                .as_ref()
+                .map_or_else(|| format!("{display_name} <{email}>"), Clone::clone);
             let (operation, blob) = build_operation(
                 &mut clock,
                 mem::take(&mut parents),
                 IdentityEventKind::Adopted(IdentityAdopted {
-                    replica_id: replica_id.clone(),
+                    replica_id,
                     signature,
                 }),
                 author.clone(),
@@ -392,8 +392,7 @@ impl IdentityStore {
         let identity_snapshot = build_identity_snapshot(snapshot)?;
         if identity_snapshot.status != IdentityStatus::PendingAdoption {
             return Err(Error::validation(format!(
-                "identity {} already adopted",
-                identity_id
+                "identity {identity_id} already adopted"
             )));
         }
 
@@ -470,7 +469,7 @@ impl IdentityStore {
             });
         }
 
-        let mut clock = LamportClock::with_state(replica_id.clone(), counter);
+        let mut clock = LamportClock::with_state(replica_id, counter);
         let (operation, blob) = build_operation(
             &mut clock,
             heads,
