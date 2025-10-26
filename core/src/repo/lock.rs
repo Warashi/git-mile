@@ -17,7 +17,7 @@ pub struct RepositoryLockGuard {
 }
 
 impl RepositoryLockGuard {
-    fn new(file: File, path: PathBuf, mode: LockMode) -> Self {
+    const fn new(file: File, path: PathBuf, mode: LockMode) -> Self {
         Self { file, path, mode }
     }
 
