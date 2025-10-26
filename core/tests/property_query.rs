@@ -19,7 +19,7 @@ fn make_issue(index: usize, status: IssueStatus) -> IssueDetails {
     let id = IssueId::new();
     let replica = ReplicaId::new("property-query");
     let created = LamportTimestamp::new((index as u64) + 1, replica.clone());
-    let updated = LamportTimestamp::new((index as u64) + 2, replica.clone());
+    let updated = LamportTimestamp::new((index as u64) + 2, replica);
     let comment = Comment {
         id: git_mile_core::model::CommentId::new_v4(),
         parent: CommentParent::Issue(id.clone()),
@@ -41,7 +41,7 @@ fn make_issue(index: usize, status: IssueStatus) -> IssueDetails {
         labels,
         comments: vec![comment],
         label_events: Vec::new(),
-        created_at: created.clone(),
+        created_at: created,
         updated_at: updated.clone(),
         clock_snapshot: updated,
     }
@@ -57,7 +57,7 @@ proptest! {
             .collect();
 
         let schema = issue_schema();
-        let engine = QueryEngine::new(schema.clone());
+        let engine = QueryEngine::new(schema);
         let filter = parse_query(&format!("(= status \"{}\")", target)).expect("parse filter");
         let request = QueryRequest {
             filter: Some(filter),
