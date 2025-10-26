@@ -808,11 +808,10 @@ mod tests {
     #[test]
     fn create_mile_persists_initial_event() {
         let (_tmp, store) = init_store();
-        let replica = ReplicaId::new("replica-a");
 
         let snapshot = store
             .create_mile(CreateMileInput {
-                replica_id: replica.clone(),
+                replica_id: ReplicaId::new("replica-a"),
                 author: "tester".into(),
                 message: Some("create".into()),
                 title: "Initial Mile".into(),
@@ -839,11 +838,10 @@ mod tests {
     #[test]
     fn create_mile_captures_initial_comment_and_labels() {
         let (_tmp, store) = init_store();
-        let replica = ReplicaId::new("replica-a");
 
         let snapshot = store
             .create_mile(CreateMileInput {
-                replica_id: replica.clone(),
+                replica_id: ReplicaId::new("replica-a"),
                 author: "tester".into(),
                 message: None,
                 title: "Initial Mile".into(),
@@ -897,7 +895,7 @@ mod tests {
         let outcome = store
             .change_status(ChangeStatusInput {
                 mile_id: snapshot.id.clone(),
-                replica_id: replica.clone(),
+                replica_id: replica,
                 author: "tester".into(),
                 message: Some("open".into()),
                 status: MileStatus::Open,
@@ -930,7 +928,7 @@ mod tests {
         let outcome = store
             .change_status(ChangeStatusInput {
                 mile_id: snapshot.id.clone(),
-                replica_id: replica.clone(),
+                replica_id: replica,
                 author: "tester".into(),
                 message: None,
                 status: MileStatus::Open,
@@ -962,7 +960,7 @@ mod tests {
         let outcome = store
             .append_comment(AppendCommentInput {
                 mile_id: snapshot.id.clone(),
-                replica_id: replica.clone(),
+                replica_id: replica,
                 author: "tester".into(),
                 message: Some("comment".into()),
                 comment_id: None,
@@ -1021,7 +1019,7 @@ mod tests {
         let second = store
             .append_comment(AppendCommentInput {
                 mile_id: snapshot.id.clone(),
-                replica_id: replica.clone(),
+                replica_id: replica,
                 author: "tester".into(),
                 message: None,
                 comment_id: Some(comment_id),
@@ -1056,7 +1054,7 @@ mod tests {
         let outcome = store
             .update_labels(UpdateLabelsInput {
                 mile_id: snapshot.id.clone(),
-                replica_id: replica.clone(),
+                replica_id: replica,
                 author: "tester".into(),
                 message: Some("update labels".into()),
                 add: vec!["beta".into(), "gamma".into()],
@@ -1101,7 +1099,7 @@ mod tests {
         let outcome = store
             .update_labels(UpdateLabelsInput {
                 mile_id: snapshot.id.clone(),
-                replica_id: replica.clone(),
+                replica_id: replica,
                 author: "tester".into(),
                 message: None,
                 add: vec!["alpha".into()],
@@ -1141,7 +1139,7 @@ mod tests {
         let store = MileStore::open(temp.path()).expect("open mile store");
         let mile = store
             .create_mile(CreateMileInput {
-                replica_id: replica.clone(),
+                replica_id: replica,
                 author: "tester <tester@example.com>".into(),
                 message: None,
                 title: "Initial Mile".into(),
