@@ -21,14 +21,17 @@ pub struct TestRepository {
 }
 
 impl TestRepository {
+    #[must_use]
     pub fn path(&self) -> &Path {
         self.temp.path()
     }
 
+    #[must_use]
     pub fn milestone_id(&self) -> String {
         self.milestone_id.to_string()
     }
 
+    #[must_use]
     pub fn issue_id(&self) -> String {
         self.issue_id.to_string()
     }
@@ -187,11 +190,10 @@ impl McpHarness {
     ///
     /// Returns an error when the request cannot be sent or the response cannot be parsed.
     pub fn call_tool(&mut self, name: &str, arguments: Value) -> Result<Response> {
-        let params = json!({
-            "name": name,
-            "arguments": arguments
-        });
-        self.request("tools/call", Some(params))
+        let mut params = Map::new();
+        params.insert("name".into(), Value::String(name.to_string()));
+        params.insert("arguments".into(), arguments);
+        self.request("tools/call", Some(Value::Object(params)))
     }
 
     /// Shut down the MCP server gracefully and return its exit status.
