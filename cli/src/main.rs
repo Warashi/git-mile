@@ -79,7 +79,7 @@ fn run() -> Result<()> {
             email.as_deref(),
             command,
         )?,
-        Commands::McpServer(args) => run_mcp_server(&repo, args)?,
+        Commands::McpServer(args) => run_mcp_server(&repo, &args)?,
         Commands::Show(args) => {
             let ShowArgs {
                 mile_id,
@@ -169,7 +169,7 @@ fn run() -> Result<()> {
             email.as_deref(),
             command,
         )?,
-        Commands::Metrics { command } => handle_metrics_command(command)?,
+        Commands::Metrics { command } => handle_metrics_command(&command)?,
         Commands::EntityDebug(entity_args) => handle_entity_debug(&repo, entity_args)?,
     }
 
@@ -1711,12 +1711,12 @@ fn run_label_milestone(
     replica: Option<&str>,
     author: Option<&str>,
     email: Option<&str>,
-    args: LabelTargetArgs,
+    args: &LabelTargetArgs,
 ) -> Result<()> {
     let mile_id = parse_entity_id(&args.id)?;
     let details = command_mile_details(repo, &mile_id)?;
     let current_labels: BTreeSet<String> = details.labels.iter().cloned().collect();
-    let delta = compute_label_delta(&args, &current_labels)?;
+    let delta = compute_label_delta(args, &current_labels)?;
     let json = args.json;
 
     if delta.add.is_empty() && delta.remove.is_empty() {
@@ -1765,12 +1765,12 @@ fn run_label_issue(
     replica: Option<&str>,
     author: Option<&str>,
     email: Option<&str>,
-    args: LabelTargetArgs,
+    args: &LabelTargetArgs,
 ) -> Result<()> {
     let issue_id = parse_entity_id(&args.id)?;
     let details = command_issue_details(repo, &issue_id)?;
     let current_labels: BTreeSet<String> = details.labels.iter().cloned().collect();
-    let delta = compute_label_delta(&args, &current_labels)?;
+    let delta = compute_label_delta(args, &current_labels)?;
     let json = args.json;
 
     if delta.add.is_empty() && delta.remove.is_empty() {
@@ -1939,7 +1939,7 @@ fn print_label_result(
     Ok(())
 }
 
-fn handle_metrics_command(command: MetricsCommand) -> Result<()> {
+fn handle_metrics_command(command: &MetricsCommand) -> Result<()> {
     match command {
         MetricsCommand::Dump => {
             let snapshot = git_mile_core::metrics::render_prometheus()
@@ -2182,7 +2182,7 @@ fn handle_list_command(
     match command {
         ListCommand::Milestone(args) => run_milestone_list(repo, args)?,
         ListCommand::Issue(args) => run_issue_list(repo, args)?,
-        ListCommand::Identity(args) => run_identity_list(repo, replica, author, email, args)?,
+        ListCommand::Identity(args) => run_identity_list(repo, replica, author, email, &args)?,
     }
 
     Ok(())
@@ -2233,14 +2233,11 @@ fn handle_comment_command(
     Ok(())
 }
 
-fn run_mcp_server(repo: &Path, args: McpServerArgs) -> Result<()> {
-    let McpServerArgs {
-        log_level,
-        handshake_timeout,
-        idle_shutdown,
-        protocol,
-    } = args;
-
+fn run_mcp_server(repo: &Path, args: &McpServerArgs) -> Result<()> {
+    let log_level = args.log_level;
+    let handshake_timeout = args.handshake_timeout;
+    let idle_shutdown = args.idle_shutdown;
+    let protocol = args.protocol;
     if handshake_timeout == 0 {
         bail!("--handshake-timeout must be greater than 0");
     }
@@ -2286,8 +2283,8 @@ fn handle_label_command(
     command: LabelCommand,
 ) -> Result<()> {
     match command {
-        LabelCommand::Milestone(args) => run_label_milestone(repo, replica, author, email, args)?,
-        LabelCommand::Issue(args) => run_label_issue(repo, replica, author, email, args)?,
+        LabelCommand::Milestone(args) => run_label_milestone(repo, replica, author, email, &args)?,
+        LabelCommand::Issue(args) => run_label_issue(repo, replica, author, email, &args)?,
     }
 
     Ok(())
@@ -2358,9 +2355,9 @@ fn run_identity_list(
     _replica: Option<&str>,
     _author: Option<&str>,
     _email: Option<&str>,
-    args: IdentityListArgs,
+    args: &IdentityListArgs,
 ) -> Result<()> {
-    let IdentityListArgs { format } = args;
+    let format = args.format;
     let store = IdentityStore::open_with_mode(repo, LockMode::Read)?;
     let identities = store.list_identities()?;
 
@@ -3231,15 +3228,13 @@ mod tests {
     fn mcp_server_stub_starts() -> Result<()> {
         let temp = tempfile::tempdir()?;
         Repository::init_bare(temp.path())?;
-        let error = run_mcp_server(
-            temp.path(),
-            McpServerArgs {
-                log_level: McpLogLevel::Trace,
-                handshake_timeout: 1,
-                idle_shutdown: Some(1),
-                protocol: McpProtocolVersion::V1,
-            },
-        )
+        let args = McpServerArgs {
+            log_level: McpLogLevel::Trace,
+            handshake_timeout: 1,
+            idle_shutdown: Some(1),
+            protocol: McpProtocolVersion::V1,
+        };
+        let error = run_mcp_server(temp.path(), &args)
         .expect_err("expected handshake to time out without a client connection");
         assert!(
             error
@@ -3384,7 +3379,7 @@ mod tests {
             Some("replica-cli"),
             Some("Tester"),
             Some("tester@example.com"),
-            label_args,
+            &label_args,
         )?;
 
         let details = command_mile_details(temp.path(), &snapshot.id)?;
@@ -3449,7 +3444,7 @@ mod tests {
             Some("replica-cli"),
             Some("Tester"),
             Some("tester@example.com"),
-            label_args,
+            &label_args,
         )?;
 
         let details = command_issue_details_list(temp.path())?
@@ -3801,7 +3796,7 @@ mod tests {
             Some("replica-label-milestone"),
             Some("Tester"),
             Some("tester@example.com"),
-            label_args,
+            &label_args,
         )?;
 
         let store = MileStore::open_with_mode(temp.path(), LockMode::Read)?;
@@ -3841,7 +3836,7 @@ mod tests {
             Some("replica-label-issue"),
             Some("Tester"),
             Some("tester@example.com"),
-            label_args,
+            &label_args,
         )?;
 
         let store = IssueStore::open_with_mode(temp.path(), LockMode::Read)?;
@@ -4013,7 +4008,7 @@ mod tests {
             Some("replica-label-conflict"),
             Some("Tester"),
             Some("tester@example.com"),
-            label_args,
+            &label_args,
         );
         assert!(result.is_err());
         Ok(())
