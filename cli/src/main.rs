@@ -52,6 +52,8 @@ fn main() {
     }
 }
 
+// Dispatching the CLI subcommands in a single match keeps parsing and execution adjacent.
+#[allow(clippy::too_many_lines)]
 fn run() -> Result<()> {
     let Cli {
         repo,
@@ -102,7 +104,7 @@ fn run() -> Result<()> {
         Commands::Open(args) => {
             let replica_id = resolve_replica(replica.as_deref());
             let identity =
-                resolve_identity(&repo, &replica_id, author.as_deref(), email.as_deref())?;
+                resolve_identity(&repo, &replica_id, author.as_deref(), email.as_deref());
             let mile_id = parse_entity_id(&args.mile_id)?;
             let outcome = command_mile_change_status(
                 &repo,
@@ -111,7 +113,7 @@ fn run() -> Result<()> {
                 &mile_id,
                 MileStatus::Open,
                 args.message
-                    .clone()
+                    
                     .or_else(|| Some("open mile".to_string())),
             )?;
             if outcome.changed {
@@ -123,7 +125,7 @@ fn run() -> Result<()> {
         Commands::Close(args) => {
             let replica_id = resolve_replica(replica.as_deref());
             let identity =
-                resolve_identity(&repo, &replica_id, author.as_deref(), email.as_deref())?;
+                resolve_identity(&repo, &replica_id, author.as_deref(), email.as_deref());
             let mile_id = parse_entity_id(&args.mile_id)?;
             let outcome = command_mile_change_status(
                 &repo,
@@ -132,7 +134,7 @@ fn run() -> Result<()> {
                 &mile_id,
                 MileStatus::Closed,
                 args.message
-                    .clone()
+                    
                     .or_else(|| Some("close mile".to_string())),
             )?;
             if outcome.changed {
@@ -169,7 +171,7 @@ fn run() -> Result<()> {
             email.as_deref(),
             command,
         )?,
-        Commands::Metrics { command } => handle_metrics_command(&command)?,
+        Commands::Metrics { command } => handle_metrics_command(&command),
         Commands::EntityDebug(entity_args) => handle_entity_debug(&repo, entity_args)?,
     }
 
@@ -343,6 +345,8 @@ struct IssueCreateArgs {
     json: bool,
 }
 
+// Clap exposes each flag as a separate boolean to preserve the existing CLI surface.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Parser)]
 struct MilestoneListArgs {
     #[arg(long)]
@@ -367,6 +371,8 @@ struct MilestoneListArgs {
     legacy_query: bool,
 }
 
+// Clap exposes each flag as a separate boolean to preserve the existing CLI surface.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Parser)]
 struct IssueListArgs {
     #[arg(long)]
@@ -430,11 +436,11 @@ enum McpLogLevel {
 impl From<McpLogLevel> for LevelFilter {
     fn from(level: McpLogLevel) -> Self {
         match level {
-            McpLogLevel::Error => LevelFilter::ERROR,
-            McpLogLevel::Warn => LevelFilter::WARN,
-            McpLogLevel::Info => LevelFilter::INFO,
-            McpLogLevel::Debug => LevelFilter::DEBUG,
-            McpLogLevel::Trace => LevelFilter::TRACE,
+            McpLogLevel::Error => Self::ERROR,
+            McpLogLevel::Warn => Self::WARN,
+            McpLogLevel::Info => Self::INFO,
+            McpLogLevel::Debug => Self::DEBUG,
+            McpLogLevel::Trace => Self::TRACE,
         }
     }
 }
@@ -577,6 +583,8 @@ enum ResolveStrategy {
 struct Identity {
     signature: String,
 }
+
+const PREVIEW_LIMIT: usize = 80;
 
 struct CacheBundle {
     repository: Arc<dyn CacheRepository>,
@@ -1065,7 +1073,7 @@ struct EditorInput {
 }
 
 impl EditorInput {
-    fn new(command: Vec<String>) -> Self {
+    const fn new(command: Vec<String>) -> Self {
         Self { command }
     }
 
@@ -1099,12 +1107,14 @@ impl EditorInput {
 
 fn preview_text(value: &str) -> String {
     let first_line = value.lines().next().unwrap_or("").trim();
-    const LIMIT: usize = 80;
-    if first_line.chars().count() <= LIMIT {
+    if first_line.chars().count() <= PREVIEW_LIMIT {
         first_line.to_string()
     } else {
         let mut preview = String::new();
-        for ch in first_line.chars().take(LIMIT.saturating_sub(1)) {
+        for ch in first_line
+            .chars()
+            .take(PREVIEW_LIMIT.saturating_sub(1))
+        {
             preview.push(ch);
         }
         preview.push('…');
@@ -1414,7 +1424,7 @@ fn run_milestone_create(
     let labels = resolve_labels(&common.labels)?;
 
     let replica_id = resolve_replica(replica);
-    let identity = resolve_identity(repo, &replica_id, author, email)?;
+    let identity = resolve_identity(repo, &replica_id, author, email);
     let message = message.or_else(|| Some(format!("create milestone {title}")));
 
     let initial_status = if draft {
@@ -1457,7 +1467,7 @@ fn run_issue_create(
     let labels = resolve_labels(&common.labels)?;
 
     let replica_id = resolve_replica(replica);
-    let identity = resolve_identity(repo, &replica_id, author, email)?;
+    let identity = resolve_identity(repo, &replica_id, author, email);
     let message = message.or_else(|| Some(format!("create issue {title}")));
 
     let initial_status = if draft {
@@ -1543,7 +1553,7 @@ fn run_comment_milestone(
     }
 
     let replica_id = resolve_replica(replica);
-    let identity = resolve_identity(repo, &replica_id, author, email)?;
+    let identity = resolve_identity(repo, &replica_id, author, email);
     let cache = CacheBundle::open(repo);
     let store = if let Some(bundle) = cache.as_ref() {
         MileStore::open_with_cache(
@@ -1556,11 +1566,11 @@ fn run_comment_milestone(
     };
     let outcome = store.append_comment(AppendCommentInput {
         mile_id: mile_id.clone(),
-        replica_id: replica_id.clone(),
-        author: identity.signature.clone(),
+        replica_id,
+        author: identity.signature,
         message: Some(format!("comment milestone {mile_id}")),
         comment_id: None,
-        body: body.clone(),
+        body,
     })?;
 
     let comment = outcome
@@ -1656,7 +1666,7 @@ fn run_comment_issue(
     }
 
     let replica_id = resolve_replica(replica);
-    let identity = resolve_identity(repo, &replica_id, author, email)?;
+    let identity = resolve_identity(repo, &replica_id, author, email);
     let cache = CacheBundle::open(repo);
     let store = if let Some(bundle) = cache.as_ref() {
         IssueStore::open_with_cache(
@@ -1669,11 +1679,11 @@ fn run_comment_issue(
     };
     let outcome = store.append_comment(AppendIssueCommentInput {
         issue_id: issue_id.clone(),
-        replica_id: replica_id.clone(),
-        author: identity.signature.clone(),
+        replica_id,
+        author: identity.signature,
         message: Some(format!("comment issue {issue_id}")),
         comment_id: None,
-        body: body.clone(),
+        body,
     })?;
 
     let comment = outcome
@@ -1725,7 +1735,7 @@ fn run_label_milestone(
     }
 
     let replica_id = resolve_replica(replica);
-    let identity = resolve_identity(repo, &replica_id, author, email)?;
+    let identity = resolve_identity(repo, &replica_id, author, email);
     let cache = CacheBundle::open(repo);
     let store = if let Some(bundle) = cache.as_ref() {
         MileStore::open_with_cache(
@@ -1738,11 +1748,11 @@ fn run_label_milestone(
     };
     let outcome = store.update_labels(UpdateLabelsInput {
         mile_id: mile_id.clone(),
-        replica_id: replica_id.clone(),
-        author: identity.signature.clone(),
+        replica_id,
+        author: identity.signature,
         message: Some(format!("label milestone {mile_id}")),
         add: delta.add.clone(),
-        remove: delta.remove.clone(),
+        remove: delta.remove,
     })?;
 
     if !outcome.changed {
@@ -1779,7 +1789,7 @@ fn run_label_issue(
     }
 
     let replica_id = resolve_replica(replica);
-    let identity = resolve_identity(repo, &replica_id, author, email)?;
+    let identity = resolve_identity(repo, &replica_id, author, email);
     let cache = CacheBundle::open(repo);
     let store = if let Some(bundle) = cache.as_ref() {
         IssueStore::open_with_cache(
@@ -1792,11 +1802,11 @@ fn run_label_issue(
     };
     let outcome = store.update_labels(UpdateIssueLabelsInput {
         issue_id: issue_id.clone(),
-        replica_id: replica_id.clone(),
-        author: identity.signature.clone(),
+        replica_id,
+        author: identity.signature,
         message: Some(format!("label issue {issue_id}")),
         add: delta.add.clone(),
-        remove: delta.remove.clone(),
+        remove: delta.remove,
     })?;
 
     if !outcome.changed {
@@ -1939,7 +1949,7 @@ fn print_label_result(
     Ok(())
 }
 
-fn handle_metrics_command(command: &MetricsCommand) -> Result<()> {
+fn handle_metrics_command(command: &MetricsCommand) {
     match command {
         MetricsCommand::Dump => {
             let snapshot = git_mile_core::metrics::render_prometheus()
@@ -1947,8 +1957,6 @@ fn handle_metrics_command(command: &MetricsCommand) -> Result<()> {
             println!("{snapshot}");
         }
     }
-
-    Ok(())
 }
 
 fn format_label_list(labels: &[String]) -> String {
@@ -2225,7 +2233,7 @@ fn handle_comment_command(
 ) -> Result<()> {
     match command {
         CommentCommand::Milestone(args) => {
-            run_comment_milestone(repo, replica, author, email, args)?
+            run_comment_milestone(repo, replica, author, email, args)?;
         }
         CommentCommand::Issue(args) => run_comment_issue(repo, replica, author, email, args)?,
     }
@@ -2315,7 +2323,7 @@ fn run_identity_create(
     }
 
     let replica_id = resolve_replica(replica);
-    let actor = resolve_identity(repo, &replica_id, author, email)?;
+    let actor = resolve_identity(repo, &replica_id, author, email);
     let store = IdentityStore::open_with_mode(repo, LockMode::Write)?;
 
     let mut protections = Vec::new();
@@ -2336,8 +2344,8 @@ fn run_identity_create(
     }
 
     let snapshot = store.create_identity(CreateIdentityInput {
-        replica_id: replica_id.clone(),
-        author: actor.signature.clone(),
+        replica_id,
+        author: actor.signature,
         message,
         display_name,
         email: identity_email,
@@ -2394,23 +2402,27 @@ fn run_identity_adopt(
         message,
     } = args;
     let identity_id = parse_entity_id(&identity_id)?;
+    let identity_label = identity_id.to_string();
     let replica_id = resolve_replica(replica);
-    let actor = resolve_identity(repo, &replica_id, author, email)?;
+    let Identity {
+        signature: author_signature,
+    } = resolve_identity(repo, &replica_id, author, email);
     let store = IdentityStore::open_with_mode(repo, LockMode::Write)?;
     let current = store.load_identity(&identity_id)?;
     let signature =
         signature.unwrap_or_else(|| format!("{} <{}>", current.display_name, current.email));
+    let replica_label = replica_id.to_string();
     let outcome = store.adopt_identity(AdoptIdentityInput {
-        identity_id: identity_id.clone(),
-        replica_id: replica_id.clone(),
-        author: actor.signature.clone(),
+        identity_id,
+        replica_id,
+        author: author_signature,
         message,
         signature,
     })?;
     if outcome.changed {
-        println!("Identity {identity_id} adopted for {replica_id}");
+        println!("Identity {identity_label} adopted for {replica_label}");
     } else {
-        println!("Identity {identity_id} already adopted for {replica_id}");
+        println!("Identity {identity_label} already adopted for {replica_label}");
     }
 
     Ok(())
@@ -2431,8 +2443,11 @@ fn run_identity_protect(
     } = args;
 
     let identity_id = parse_entity_id(&identity_id)?;
+    let identity_label = identity_id.to_string();
     let replica_id = resolve_replica(replica);
-    let actor = resolve_identity(repo, &replica_id, author, email)?;
+    let Identity {
+        signature: author_signature,
+    } = resolve_identity(repo, &replica_id, author, email);
     let store = IdentityStore::open_with_mode(repo, LockMode::Write)?;
 
     let armored_public_key = match armored_key {
@@ -2444,9 +2459,9 @@ fn run_identity_protect(
     };
 
     let outcome = store.add_protection(AddProtectionInput {
-        identity_id: identity_id.clone(),
-        replica_id: replica_id.clone(),
-        author: actor.signature.clone(),
+        identity_id,
+        replica_id,
+        author: author_signature,
         message,
         protection: IdentityProtection {
             kind: ProtectionKind::Pgp,
@@ -2456,9 +2471,9 @@ fn run_identity_protect(
     })?;
 
     if outcome.changed {
-        println!("Protection added to identity {identity_id}");
+        println!("Protection added to identity {identity_label}");
     } else {
-        println!("Protection already registered on identity {identity_id}");
+        println!("Protection already registered on identity {identity_label}");
     }
 
     Ok(())
@@ -2596,7 +2611,7 @@ fn resolve_identity(
     replica_id: &ReplicaId,
     name_override: Option<&str>,
     email_override: Option<&str>,
-) -> Result<Identity> {
+) -> Identity {
     let overrides_present = name_override.is_some() || email_override.is_some();
     let mut name = name_override.map(ToString::to_string);
     let mut email = email_override.map(ToString::to_string);
@@ -2611,7 +2626,7 @@ fn resolve_identity(
             && email.is_none()
             && let Some(signature) = snapshot.signature.clone()
         {
-            return Ok(Identity { signature });
+            return Identity { signature };
         }
 
         if name.is_none() {
@@ -2622,7 +2637,7 @@ fn resolve_identity(
         }
 
         if !overrides_present {
-            identity_signature = snapshot.signature.clone();
+            identity_signature.clone_from(&snapshot.signature);
         }
     }
 
@@ -2652,24 +2667,21 @@ fn resolve_identity(
     let name = name.unwrap_or_else(|| "git-mile".to_string());
     let email = email.unwrap_or_else(|| "git-mile@example.com".to_string());
 
-    let signature = if !overrides_present {
-        identity_signature.map_or_else(
-            || {
-                if email.is_empty() {
-                    name.clone()
-                } else {
-                    format!("{name} <{email}>")
-                }
-            },
-            |signature| signature,
-        )
-    } else if email.is_empty() {
-        name.clone()
+    let signature = if overrides_present {
+        format_signature(&name, &email)
     } else {
-        format!("{name} <{email}>")
+        identity_signature.unwrap_or_else(|| format_signature(&name, &email))
     };
 
-    Ok(Identity { signature })
+    Identity { signature }
+}
+
+fn format_signature(name: &str, email: &str) -> String {
+    if email.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{name} <{email}>")
+    }
 }
 
 fn read_config(config: &Config, key: &str) -> Option<String> {
@@ -3000,11 +3012,11 @@ fn print_milestone_details(details: &MilestoneDetailsView, limit: Option<usize>)
     println!("{title} [{status}]");
     let id = &details.id;
     println!("ID: {id}");
-    if !details.labels.is_empty() {
+    if details.labels.is_empty() {
+        println!("Labels: (none)");
+    } else {
         let labels = details.labels.join(", ");
         println!("Labels: {labels}");
-    } else {
-        println!("Labels: (none)");
     }
 
     println!();
@@ -3183,37 +3195,39 @@ mod tests {
             root_blob.digest().clone(),
             OperationMetadata::new("tester", Some("root".to_string())),
         );
+        let root_id = root_op.id.clone();
         let root_pack = OperationPack::new(
             entity_id.clone(),
             clock.snapshot(),
-            vec![root_op.clone()],
-            vec![root_blob.clone()],
+            vec![root_op],
+            vec![root_blob],
         )?;
         store.persist_pack(root_pack)?;
 
-        let branch_a_blob = OperationBlob::from_bytes(b"a".to_vec());
-        let branch_b_blob = OperationBlob::from_bytes(b"b".to_vec());
+        let alpha_blob = OperationBlob::from_bytes(b"a".to_vec());
+        let beta_blob = OperationBlob::from_bytes(b"b".to_vec());
+        let parent_id = root_id.clone();
         let op_a = Operation::new(
             OperationId::new(clock.tick()?),
-            vec![root_op.id.clone()],
-            branch_a_blob.digest().clone(),
+            vec![parent_id.clone()],
+            alpha_blob.digest().clone(),
             OperationMetadata::new("tester", Some("a".to_string())),
         );
         let op_b = Operation::new(
             OperationId::new(clock.tick()?),
-            vec![root_op.id.clone()],
-            branch_b_blob.digest().clone(),
+            vec![parent_id],
+            beta_blob.digest().clone(),
             OperationMetadata::new("tester", Some("b".to_string())),
         );
         let pack = OperationPack::new(
             entity_id.clone(),
             clock.snapshot(),
             vec![op_a.clone(), op_b.clone()],
-            vec![branch_a_blob, branch_b_blob],
+            vec![alpha_blob, beta_blob],
         )?;
         store.persist_pack(pack)?;
 
-        Ok((temp, entity_id, root_op.id, op_a.id, op_b.id))
+        Ok((temp, entity_id, root_id, op_a.id, op_b.id))
     }
 
     #[test]
@@ -3235,7 +3249,7 @@ mod tests {
             protocol: McpProtocolVersion::V1,
         };
         let error = run_mcp_server(temp.path(), &args)
-        .expect_err("expected handshake to time out without a client connection");
+            .expect_err("expected handshake to time out without a client connection");
         assert!(
             error
                 .to_string()
@@ -4099,7 +4113,7 @@ mod tests {
                 protections: vec![],
             })?;
             store.adopt_identity(AdoptIdentityInput {
-                identity_id: identity.id.clone(),
+                identity_id: identity.id,
                 replica_id: replica.clone(),
                 author: "tester".into(),
                 message: None,
@@ -4107,7 +4121,7 @@ mod tests {
             })?;
         }
 
-        let resolved = resolve_identity(repo, &replica, None, None)?;
+        let resolved = resolve_identity(repo, &replica, None, None);
         assert_eq!(resolved.signature, "Alice <alice@example.com>");
         Ok(())
     }
@@ -4133,7 +4147,7 @@ mod tests {
                 protections: vec![],
             })?;
             store.adopt_identity(AdoptIdentityInput {
-                identity_id: identity.id.clone(),
+                identity_id: identity.id,
                 replica_id: replica.clone(),
                 author: "tester".into(),
                 message: None,
