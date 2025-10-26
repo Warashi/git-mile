@@ -30,6 +30,7 @@ pub struct SyncContext {
 }
 
 impl SyncContext {
+    #[must_use]
     pub fn new(
         repo_path: impl AsRef<Path>,
         phase: SyncPhase,
@@ -53,6 +54,7 @@ pub struct SyncHookRegistry {
 }
 
 impl SyncHookRegistry {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             hooks: Mutex::new(HashMap::new()),
@@ -114,6 +116,7 @@ pub struct IndexDelta {
 }
 
 impl IndexDelta {
+    #[must_use]
     pub fn new(
         namespace: CacheNamespace,
         entity_id: EntityId,
@@ -238,6 +241,7 @@ impl BackgroundSyncWorker {
         Ok(rx)
     }
 
+    #[must_use]
     pub fn queue_depth(&self) -> usize {
         self.inner.queue_depth.load(Ordering::SeqCst)
     }
@@ -247,6 +251,7 @@ impl BackgroundSyncWorker {
     /// # Panics
     ///
     /// Panics if the status map mutex has been poisoned.
+    #[must_use]
     pub fn status_snapshot(&self) -> HashMap<String, SyncTaskStatus> {
         self.inner
             .statuses
