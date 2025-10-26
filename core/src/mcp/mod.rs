@@ -49,7 +49,7 @@ pub struct StdioServerConfig {
 
 impl StdioServerConfig {
     #[must_use]
-    pub fn new(repo_path: PathBuf) -> Self {
+    pub const fn new(repo_path: PathBuf) -> Self {
         Self {
             repo_path,
             handshake_timeout: Duration::from_secs(30),
@@ -58,13 +58,13 @@ impl StdioServerConfig {
     }
 
     #[must_use]
-    pub fn with_handshake_timeout(mut self, timeout: Duration) -> Self {
+    pub const fn with_handshake_timeout(mut self, timeout: Duration) -> Self {
         self.handshake_timeout = timeout;
         self
     }
 
     #[must_use]
-    pub fn with_idle_shutdown(mut self, timeout: Option<Duration>) -> Self {
+    pub const fn with_idle_shutdown(mut self, timeout: Option<Duration>) -> Self {
         self.idle_shutdown = timeout;
         self
     }
