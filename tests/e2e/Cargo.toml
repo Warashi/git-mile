@@ -1,0 +1,15 @@
+[package]
+name = "git-mile-e2e"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+assert_cmd = "2.0"
+git2 = { version = "0.19", features = ["vendored-openssl"] }
+git_mile_core.workspace = true
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempfile = "3.10"
+rmcp = { version = "0.8", default-features = false, features = ["transport-io"] }

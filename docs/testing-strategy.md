@@ -19,3 +19,10 @@
 ## ドキュメント整合性
 
 `docs/` 配下にキャッシュ構成とクエリエンジン、テスト戦略のまとめを追加しました。チーム内レビュー時にはこれらの Markdown を参照し、CI では markdownlint などの静的検査を追加予定です。
+
+## MCP サーバー E2E テスト
+
+- ワークスペースに `tests/e2e` クレートを追加し、`git mile mcp-server` とモッククライアントを使ったエンドツーエンド試験を実装しました。
+- 実行方法: `cargo test -p git-mile-e2e`（MCP ハンドシェイク→list/show フロー→エラーパスをカバー）。
+- テストは実際に CLI バイナリを子プロセスとして起動し、JSON-RPC メッセージを stdio 経由で送受信します。`timeout` を設定しているためハング時も 120 秒で終了します。
+- ローカルでデバッグする場合は `RUST_LOG=git_mile_core::mcp=info cargo test -p git-mile-e2e -- --nocapture` を利用するとサーバーログが確認できます。
