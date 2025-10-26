@@ -18,7 +18,6 @@ impl BlobRef {
     /// # Errors
     ///
     /// Returns an error when the provided digest is not a 64-character hexadecimal string.
-    #[must_use]
     pub fn new(digest: impl AsRef<str>) -> Result<Self> {
         let digest = digest.as_ref();
         if digest.len() != 64 || !digest.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -137,7 +136,6 @@ impl OperationPack {
     ///
     /// Returns an error when the pack fails validation, such as containing duplicate operations or
     /// missing referenced blobs.
-    #[must_use]
     pub fn new(
         entity_id: EntityId,
         clock_snapshot: LamportTimestamp,
