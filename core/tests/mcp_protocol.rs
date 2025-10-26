@@ -106,9 +106,10 @@ fn reference_session_json_is_valid() {
 
     let shutdown_message = &frames[9];
     assert_eq!(shutdown_message.direction, Direction::Server);
-    assert!(shutdown_message
-        .payload
-        .get("result")
-        .map(Value::is_null)
-        .unwrap_or(false));
+    assert!(
+        shutdown_message
+            .payload
+            .get("result")
+            .is_some_and(Value::is_null)
+    );
 }

@@ -366,10 +366,10 @@ pub struct PageCursor {
 
 impl PageCursor {
     pub fn encode(&self) -> String {
-        match self.generation {
-            Some(generation) => format!("{generation}:{}", self.offset),
-            None => format!("{}", self.offset),
-        }
+        self.generation.map_or_else(
+            || format!("{}", self.offset),
+            |generation| format!("{generation}:{}", self.offset),
+        )
     }
 
     /// Parse a page cursor encoded with [`PageCursor::encode`].
@@ -481,7 +481,7 @@ impl QueryEngine {
         }
 
         let total = items.len();
-        let offset = request.cursor.as_ref().map(|c| c.offset).unwrap_or(0);
+        let offset = request.cursor.as_ref().map_or(0, |c| c.offset);
         let limit = request.limit.unwrap_or(50);
         let generation_snapshot = generation.cloned();
 
@@ -1090,7 +1090,9 @@ mod tests {
                 assert_eq!(args.len(), 2);
             }
             QueryExpr::Logical(other) => panic!("expected logical and, got {other:?}"),
-            QueryExpr::Comparison(other) => panic!("expected logical expression, got comparison {other:?}"),
+            QueryExpr::Comparison(other) => {
+                panic!("expected logical expression, got comparison {other:?}")
+            }
         }
     }
 

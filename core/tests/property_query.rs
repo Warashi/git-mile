@@ -58,7 +58,7 @@ proptest! {
 
         let schema = issue_schema();
         let engine = QueryEngine::new(schema);
-        let filter = parse_query(&format!("(= status \"{}\")", target)).expect("parse filter");
+        let filter = parse_query(&format!("(= status \"{target}\")")).expect("parse filter");
         let request = QueryRequest {
             filter: Some(filter),
             sort: vec![],

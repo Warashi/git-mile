@@ -5,6 +5,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
+use std::string::ToString;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -114,9 +115,9 @@ fn run() -> Result<()> {
                     .or_else(|| Some("open mile".to_string())),
             )?;
             if outcome.changed {
-                println!("Mile {} opened", mile_id);
+                println!("Mile {mile_id} opened");
             } else {
-                eprintln!("warning: mile {} already open", mile_id);
+                eprintln!("warning: mile {mile_id} already open");
             }
         }
         Commands::Close(args) => {
@@ -135,9 +136,9 @@ fn run() -> Result<()> {
                     .or_else(|| Some("close mile".to_string())),
             )?;
             if outcome.changed {
-                println!("Mile {} closed", mile_id);
+                println!("Mile {mile_id} closed");
             } else {
-                eprintln!("warning: mile {} already closed", mile_id);
+                eprintln!("warning: mile {mile_id} already closed");
             }
         }
         Commands::Adopt { command } => handle_adopt_command(
@@ -845,9 +846,9 @@ fn command_mile_create(args: CommandMileCreateArgs<'_>) -> Result<MileSnapshot> 
         author: author.to_string(),
         message,
         title: title.to_string(),
-        description: description.map(|value| value.to_string()),
+        description: description.map(ToString::to_string),
         initial_status,
-        initial_comment: initial_comment.map(|value| value.to_string()),
+        initial_comment: initial_comment.map(ToString::to_string),
         labels: labels.to_vec(),
     })?)
 }
@@ -891,9 +892,9 @@ fn command_issue_create(args: CommandIssueCreateArgs<'_>) -> Result<IssueSnapsho
         author: author.to_string(),
         message,
         title: title.to_string(),
-        description: description.map(|value| value.to_string()),
+        description: description.map(ToString::to_string),
         initial_status,
-        initial_comment: initial_comment.map(|value| value.to_string()),
+        initial_comment: initial_comment.map(ToString::to_string),
         labels: labels.to_vec(),
     })?)
 }
@@ -1120,12 +1121,14 @@ fn build_comment_editor_template(
     quoted_body: Option<&str>,
 ) -> String {
     let mut lines = Vec::new();
-    lines.push(format!("# {} {} ({})", resource_label, resource_id, status));
-    if !title.trim().is_empty() {
-        lines.push(format!("# Title: {}", title.trim()));
+    lines.push(format!("# {resource_label} {resource_id} ({status})"));
+    let trimmed_title = title.trim();
+    if !trimmed_title.is_empty() {
+        lines.push(format!("# Title: {trimmed_title}"));
     }
     if !labels.is_empty() {
-        lines.push(format!("# Labels: {}", labels.join(", ")));
+        let joined_labels = labels.join(", ");
+        lines.push(format!("# Labels: {joined_labels}"));
     }
     lines.push("#".to_string());
     lines.push(String::new());
@@ -1135,7 +1138,7 @@ fn build_comment_editor_template(
             lines.push(String::from(">"));
         } else {
             for line in body.lines() {
-                lines.push(format!("> {}", line));
+                lines.push(format!("> {line}"));
             }
         }
         lines.push(String::new());
@@ -1169,10 +1172,7 @@ fn print_comment_dry_run(
         return Ok(());
     }
 
-    println!(
-        "Dry run: comment not saved for {} {}",
-        resource, resource_id
-    );
+    println!("Dry run: comment not saved for {resource} {resource_id}");
     if body.trim().is_empty() {
         println!(" Body: (empty)");
     } else {
@@ -1206,17 +1206,14 @@ fn print_comment_confirmation(
         return Ok(());
     }
 
-    println!(
-        "Comment {} recorded on {} {}",
-        comment_id, resource, resource_id
-    );
-    println!(" Author: {}", author);
-    println!(" Created: {}", created_at);
+    println!("Comment {comment_id} recorded on {resource} {resource_id}");
+    println!(" Author: {author}");
+    println!(" Created: {created_at}");
     let preview = preview_text(body);
     if preview.is_empty() {
         println!(" Preview: (empty)");
     } else {
-        println!(" Preview: {}", preview);
+        println!(" Preview: {preview}");
     }
     Ok(())
 }
@@ -1418,7 +1415,7 @@ fn run_milestone_create(
 
     let replica_id = resolve_replica(replica);
     let identity = resolve_identity(repo, &replica_id, author, email)?;
-    let message = message.or_else(|| Some(format!("create milestone {}", title)));
+    let message = message.or_else(|| Some(format!("create milestone {title}")));
 
     let initial_status = if draft {
         MileStatus::Draft
@@ -1461,7 +1458,7 @@ fn run_issue_create(
 
     let replica_id = resolve_replica(replica);
     let identity = resolve_identity(repo, &replica_id, author, email)?;
-    let message = message.or_else(|| Some(format!("create issue {}", title)));
+    let message = message.or_else(|| Some(format!("create issue {title}")));
 
     let initial_status = if draft {
         IssueStatus::Draft
@@ -1508,7 +1505,7 @@ fn run_comment_milestone(
             .comments
             .iter()
             .find(|comment| comment.id == comment_id)
-            .ok_or_else(|| anyhow!("comment {} not found on milestone {}", comment_id, mile_id))?;
+            .ok_or_else(|| anyhow!("comment {comment_id} not found on milestone {mile_id}"))?;
         Some(comment.body.clone())
     } else {
         None
@@ -1561,7 +1558,7 @@ fn run_comment_milestone(
         mile_id: mile_id.clone(),
         replica_id: replica_id.clone(),
         author: identity.signature.clone(),
-        message: Some(format!("comment milestone {}", mile_id)),
+        message: Some(format!("comment milestone {mile_id}")),
         comment_id: None,
         body: body.clone(),
     })?;
@@ -1621,7 +1618,7 @@ fn run_comment_issue(
             .comments
             .iter()
             .find(|comment| comment.id == comment_id)
-            .ok_or_else(|| anyhow!("comment {} not found on issue {}", comment_id, issue_id))?;
+            .ok_or_else(|| anyhow!("comment {comment_id} not found on issue {issue_id}"))?;
         Some(comment.body.clone())
     } else {
         None
@@ -1674,7 +1671,7 @@ fn run_comment_issue(
         issue_id: issue_id.clone(),
         replica_id: replica_id.clone(),
         author: identity.signature.clone(),
-        message: Some(format!("comment issue {}", issue_id)),
+        message: Some(format!("comment issue {issue_id}")),
         comment_id: None,
         body: body.clone(),
     })?;
@@ -1743,7 +1740,7 @@ fn run_label_milestone(
         mile_id: mile_id.clone(),
         replica_id: replica_id.clone(),
         author: identity.signature.clone(),
-        message: Some(format!("label milestone {}", mile_id)),
+        message: Some(format!("label milestone {mile_id}")),
         add: delta.add.clone(),
         remove: delta.remove.clone(),
     })?;
@@ -1797,7 +1794,7 @@ fn run_label_issue(
         issue_id: issue_id.clone(),
         replica_id: replica_id.clone(),
         author: identity.signature.clone(),
-        message: Some(format!("label issue {}", issue_id)),
+        message: Some(format!("label issue {issue_id}")),
         add: delta.add.clone(),
         remove: delta.remove.clone(),
     })?;
@@ -1905,7 +1902,7 @@ fn print_label_noop(
         return Ok(());
     }
 
-    println!("No label changes needed for {} {}", resource, resource_id);
+    println!("No label changes needed for {resource} {resource_id}");
     println!(" Current: {}", format_label_list(&current));
     Ok(())
 }
@@ -1935,7 +1932,7 @@ fn print_label_result(
         return Ok(());
     }
 
-    println!("Labels updated on {} {}", resource, resource_id);
+    println!("Labels updated on {resource} {resource_id}");
     println!(" Added: {}", format_label_list(added));
     println!(" Removed: {}", format_label_list(removed));
     println!(" Current: {}", format_label_list(&current));
@@ -1980,8 +1977,7 @@ fn run_milestone_list(repo: &Path, args: MilestoneListArgs) -> Result<()> {
 
     let legacy_mode = std::env::var("GIT_MILE_LIST_LEGACY")
         .ok()
-        .map(|value| is_env_truthy(&value))
-        .unwrap_or(false)
+        .is_some_and(|value| is_env_truthy(&value))
         || legacy_query;
 
     if legacy_mode {
@@ -2083,8 +2079,7 @@ fn run_issue_list(repo: &Path, args: IssueListArgs) -> Result<()> {
 
     let legacy_mode = std::env::var("GIT_MILE_LIST_LEGACY")
         .ok()
-        .map(|value| is_env_truthy(&value))
-        .unwrap_or(false)
+        .is_some_and(|value| is_env_truthy(&value))
         || legacy_query;
 
     if legacy_mode {
@@ -2249,7 +2244,9 @@ fn run_mcp_server(repo: &Path, args: McpServerArgs) -> Result<()> {
     if handshake_timeout == 0 {
         bail!("--handshake-timeout must be greater than 0");
     }
-    if let Some(idle) = idle_shutdown && idle == 0 {
+    if let Some(idle) = idle_shutdown
+        && idle == 0
+    {
         bail!("--idle-shutdown must be greater than 0 when specified");
     }
 
@@ -2414,12 +2411,9 @@ fn run_identity_adopt(
         signature,
     })?;
     if outcome.changed {
-        println!("Identity {} adopted for {}", identity_id, replica_id);
+        println!("Identity {identity_id} adopted for {replica_id}");
     } else {
-        println!(
-            "Identity {} already adopted for {}",
-            identity_id, replica_id
-        );
+        println!("Identity {identity_id} already adopted for {replica_id}");
     }
 
     Ok(())
@@ -2465,9 +2459,9 @@ fn run_identity_protect(
     })?;
 
     if outcome.changed {
-        println!("Protection added to identity {}", identity_id);
+        println!("Protection added to identity {identity_id}");
     } else {
-        println!("Protection already registered on identity {}", identity_id);
+        println!("Protection already registered on identity {identity_id}");
     }
 
     Ok(())
@@ -2481,26 +2475,28 @@ fn handle_entity_debug(repo: &Path, args: EntityArgs) -> Result<()> {
                 println!("No entities found");
             } else {
                 for summary in summaries {
-                    println!("{} (heads: {})", summary.entity_id, summary.head_count);
+                    let entity_id = &summary.entity_id;
+                    let head_count = summary.head_count;
+                    println!("{entity_id} (heads: {head_count})");
                 }
             }
         }
         EntityCommand::Show(show) => {
             let entity_id = parse_entity_id(&show.entity)?;
             let snapshot = command_entity_show(repo, &entity_id)?;
-            println!("Entity: {}", entity_id);
-            println!("Clock: {}", snapshot.clock_snapshot);
+            println!("Entity: {entity_id}");
+            let clock_snapshot = &snapshot.clock_snapshot;
+            println!("Clock: {clock_snapshot}");
             println!("Heads:");
             for head in &snapshot.heads {
-                println!("  - {}", head);
+                println!("  - {head}");
             }
-            println!("Operations ({} total):", snapshot.operations.len());
+            let operation_count = snapshot.operations.len();
+            println!("Operations ({operation_count} total):");
             for operation in &snapshot.operations {
-                println!(
-                    "  - {} (parents: {})",
-                    operation.id,
-                    operation.parents.len()
-                );
+                let operation_id = &operation.id;
+                let parent_count = operation.parents.len();
+                println!("  - {operation_id} (parents: {parent_count})");
             }
         }
         EntityCommand::Resolve(resolve) => {
@@ -2509,7 +2505,7 @@ fn handle_entity_debug(repo: &Path, args: EntityArgs) -> Result<()> {
             let outcome = command_entity_resolve(repo, &entity_id, strategy)?;
             println!("Updated heads:");
             for head in outcome.heads {
-                println!("  - {}", head);
+                println!("  - {head}");
             }
         }
     }
@@ -2589,13 +2585,13 @@ fn resolve_replica(value: Option<&str>) -> ReplicaId {
                 .filter(|value| !value.trim().is_empty())
         });
 
-    match host {
-        Some(value) => ReplicaId::new(value),
-        None => {
+    host.map_or_else(
+        || {
             eprintln!("warning: using fallback replica id 'git-mile'");
             ReplicaId::new("git-mile")
-        }
-    }
+        },
+        ReplicaId::new,
+    )
 }
 
 fn resolve_identity(
@@ -2605,8 +2601,8 @@ fn resolve_identity(
     email_override: Option<&str>,
 ) -> Result<Identity> {
     let overrides_present = name_override.is_some() || email_override.is_some();
-    let mut name = name_override.map(|value| value.to_string());
-    let mut email = email_override.map(|value| value.to_string());
+    let mut name = name_override.map(ToString::to_string);
+    let mut email = email_override.map(ToString::to_string);
     let mut identity_signature: Option<String> = None;
 
     if (!overrides_present || name.is_none() || email.is_none())
@@ -2660,13 +2656,16 @@ fn resolve_identity(
     let email = email.unwrap_or_else(|| "git-mile@example.com".to_string());
 
     let signature = if !overrides_present {
-        if let Some(signature) = identity_signature {
-            signature
-        } else if email.is_empty() {
-            name.clone()
-        } else {
-            format!("{name} <{email}>")
-        }
+        identity_signature.map_or_else(
+            || {
+                if email.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{name} <{email}>")
+                }
+            },
+            |signature| signature,
+        )
     } else if email.is_empty() {
         name.clone()
     } else {
@@ -2916,7 +2915,7 @@ fn print_list_raw<T: ListRecord>(records: &[T], columns_spec: Option<&str>) -> R
 }
 
 fn compute_column_widths(rows: &[Vec<String>], headers: &[String]) -> Vec<usize> {
-    let mut widths: Vec<usize> = headers.iter().map(|header| header.len()).collect();
+    let mut widths: Vec<usize> = headers.iter().map(String::len).collect();
     for row in rows {
         for (index, cell) in row.iter().enumerate() {
             if let Some(width) = widths.get_mut(index) {
@@ -2981,10 +2980,10 @@ fn format_label_summary(labels: &[String]) -> String {
 }
 
 fn format_comment_summary(count: usize, last_commented_at: Option<&LamportTimestamp>) -> String {
-    match last_commented_at {
-        Some(timestamp) => format!("{count} ({timestamp})"),
-        None => format!("{count}"),
-    }
+    last_commented_at.map_or_else(
+        || format!("{count}"),
+        |timestamp| format!("{count} ({timestamp})"),
+    )
 }
 
 fn is_env_truthy(value: &str) -> bool {
@@ -2999,10 +2998,14 @@ const DEFAULT_COMMENT_LIMIT: usize = 20;
 fn print_milestone_details(details: &MilestoneDetailsView, limit: Option<usize>) {
     let comment_limit = limit.unwrap_or(DEFAULT_COMMENT_LIMIT);
 
-    println!("{} [{}]", details.title, details.status);
-    println!("ID: {}", details.id);
+    let title = &details.title;
+    let status = &details.status;
+    println!("{title} [{status}]");
+    let id = &details.id;
+    println!("ID: {id}");
     if !details.labels.is_empty() {
-        println!("Labels: {}", details.labels.join(", "));
+        let labels = details.labels.join(", ");
+        println!("Labels: {labels}");
     } else {
         println!("Labels: (none)");
     }
@@ -3019,22 +3022,21 @@ fn print_milestone_details(details: &MilestoneDetailsView, limit: Option<usize>)
     }
 
     println!();
-    println!("Comments ({} total):", details.comment_count);
+    let comment_total = details.comment_count;
+    println!("Comments ({comment_total} total):");
     if details.comments.is_empty() {
         println!("  (none)");
     } else {
         let total = details.comments.len();
         let start = total.saturating_sub(comment_limit);
         if start > 0 {
-            println!("  ... {} older comment(s) omitted ...", start);
+            println!("  ... {start} older comment(s) omitted ...");
         }
         for (index, comment) in details.comments.iter().enumerate().skip(start) {
-            println!(
-                "  #{} [{}] {}",
-                index + 1,
-                comment.created_at,
-                comment.author
-            );
+            let number = index + 1;
+            let created_at = &comment.created_at;
+            let author = &comment.author;
+            println!("  #{number} [{created_at}] {author}");
             for line in render_markdown_lines(&comment.body) {
                 println!("    {line}");
             }
@@ -3043,13 +3045,15 @@ fn print_milestone_details(details: &MilestoneDetailsView, limit: Option<usize>)
     }
 
     println!("Metadata:");
-    println!("  Created: {}", details.created_at);
-    println!("  Updated: {}", details.updated_at);
+    let created_at = &details.created_at;
+    println!("  Created: {created_at}");
+    let updated_at = &details.updated_at;
+    println!("  Updated: {updated_at}");
     if let Some(last) = details.last_commented_at.as_ref() {
-        println!("  Last comment: {}", last);
+        println!("  Last comment: {last}");
     }
     if let Some(initial) = details.initial_comment_id {
-        println!("  Initial comment ID: {}", initial);
+        println!("  Initial comment ID: {initial}");
     }
     if !details.label_events.is_empty() {
         println!("  Label history:");
@@ -3058,7 +3062,9 @@ fn print_milestone_details(details: &MilestoneDetailsView, limit: Option<usize>)
                 LabelOperation::Add => '+',
                 LabelOperation::Remove => '-',
             };
-            println!("    {} {} {}", event.timestamp, symbol, event.label);
+            let timestamp = &event.timestamp;
+            let label = &event.label;
+            println!("    {timestamp} {symbol} {label}");
         }
     }
 }
@@ -3072,19 +3078,30 @@ fn render_markdown_lines(markdown: &str) -> Vec<String> {
             continue;
         }
 
-        let normalized = if let Some(stripped) = trimmed.strip_prefix("### ") {
-            stripped.trim().to_string()
-        } else if let Some(stripped) = trimmed.strip_prefix("## ") {
-            stripped.trim().to_string()
-        } else if let Some(stripped) = trimmed.strip_prefix("# ") {
-            stripped.trim().to_uppercase()
-        } else if let Some(stripped) = trimmed.strip_prefix("- ") {
-            format!("• {}", stripped.trim())
-        } else if let Some(stripped) = trimmed.strip_prefix("* ") {
-            format!("• {}", stripped.trim())
-        } else {
-            trimmed.trim().to_string()
-        };
+        let normalized = trimmed
+            .strip_prefix("### ")
+            .map(|stripped| stripped.trim().to_string())
+            .or_else(|| {
+                trimmed
+                    .strip_prefix("## ")
+                    .map(|stripped| stripped.trim().to_string())
+            })
+            .or_else(|| {
+                trimmed
+                    .strip_prefix("# ")
+                    .map(|stripped| stripped.trim().to_uppercase())
+            })
+            .or_else(|| {
+                trimmed
+                    .strip_prefix("- ")
+                    .map(|stripped| format!("• {}", stripped.trim()))
+            })
+            .or_else(|| {
+                trimmed
+                    .strip_prefix("* ")
+                    .map(|stripped| format!("• {}", stripped.trim()))
+            })
+            .unwrap_or_else(|| trimmed.trim().to_string());
 
         lines.push(normalized);
     }
@@ -3123,8 +3140,7 @@ fn print_identity_table(identities: &[IdentitySummary]) {
         let adopted = identity
             .adopted_by
             .as_ref()
-            .map(|replica| replica.to_string())
-            .unwrap_or_else(|| "-".to_string());
+            .map_or_else(|| "-".to_string(), ToString::to_string);
         println!(
             "{:<40} {:<16} {:<20} {}",
             identity.id, identity.status, adopted, identity.display_name
@@ -3137,8 +3153,7 @@ fn print_identity_raw(identities: &[IdentitySummary]) {
         let adopted = identity
             .adopted_by
             .as_ref()
-            .map(|replica| replica.to_string())
-            .unwrap_or_else(|| "-".to_string());
+            .map_or_else(|| "-".to_string(), ToString::to_string);
         println!(
             "{}\t{}\t{}\t{}",
             identity.id, identity.status, adopted, identity.display_name

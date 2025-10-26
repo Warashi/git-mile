@@ -402,8 +402,7 @@ impl MileStore {
         let heads = snapshot.heads.clone();
         if heads.len() != 1 {
             return Err(Error::conflict(format!(
-                "mile {} has {} heads; resolve conflicts before changing status",
-                mile_id,
+                "mile {mile_id} has {} heads; resolve conflicts before changing status",
                 heads.len()
             )));
         }
@@ -691,12 +690,12 @@ fn build_mile_snapshot(entity: EntitySnapshot) -> Result<MileSnapshot> {
         let value: Value = serde_json::from_slice(data)?;
         let version = value
             .get("version")
-            .and_then(|v| v.as_u64())
+            .and_then(Value::as_u64)
             .and_then(|v| u8::try_from(v).ok());
         let event_type = value
             .get("type")
-            .and_then(|v| v.as_str())
-            .map(|v| v.to_string());
+            .and_then(Value::as_str)
+            .map(str::to_string);
 
         match serde_json::from_value::<StoredEvent>(value.clone()) {
             Ok(record) => Ok(Decoded::Known {
@@ -751,10 +750,7 @@ fn build_mile_snapshot(entity: EntitySnapshot) -> Result<MileSnapshot> {
     }
 
     if events.is_empty() {
-        return Err(Error::validation(format!(
-            "mile {} has no events",
-            entity_id
-        )));
+        return Err(Error::validation(format!("mile {entity_id} has no events")));
     }
 
     let mut title: Option<String> = None;
@@ -809,14 +805,12 @@ fn build_mile_snapshot(entity: EntitySnapshot) -> Result<MileSnapshot> {
 
     let title = title.ok_or_else(|| {
         Error::validation(format!(
-            "mile {} missing creation event in history",
-            entity_id
+            "mile {entity_id} missing creation event in history"
         ))
     })?;
     let status = status.ok_or_else(|| {
         Error::validation(format!(
-            "mile {} missing resolved status in history",
-            entity_id
+            "mile {entity_id} missing resolved status in history"
         ))
     })?;
 
@@ -826,8 +820,7 @@ fn build_mile_snapshot(entity: EntitySnapshot) -> Result<MileSnapshot> {
         .ok_or_else(|| Error::validation("mile history missing creation timestamp"))?;
     let updated_at = events
         .last()
-        .map(|event| event.timestamp.clone())
-        .unwrap_or_else(|| created_at.clone());
+        .map_or_else(|| created_at.clone(), |event| event.timestamp.clone());
 
     Ok(MileSnapshot {
         id: entity_id,

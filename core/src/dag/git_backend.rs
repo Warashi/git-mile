@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::str::{self, FromStr};
+use std::string::ToString;
 use std::sync::Arc;
 
 use git2::{Commit, ErrorCode, FileMode, Oid, Repository, Signature, Tree};
@@ -100,7 +101,7 @@ impl EntityStore {
         let entity = self
             .backend
             .load_entity(entity_id)?
-            .ok_or_else(|| Error::validation(format!("entity {} not found", entity_id)))?;
+            .ok_or_else(|| Error::validation(format!("entity {entity_id} not found")))?;
         let snapshot = self.backend.snapshot_from_entity(entity)?;
         self.cache.on_entity_loaded(entity_id, &snapshot)?;
         Ok(snapshot)
@@ -129,7 +130,7 @@ impl EntityStore {
         let mut entity = self
             .backend
             .load_entity(entity_id)?
-            .ok_or_else(|| Error::validation(format!("entity {} not found", entity_id)))?;
+            .ok_or_else(|| Error::validation(format!("entity {entity_id} not found")))?;
 
         if entity.heads.len() <= 1 {
             return Ok(MergeOutcome {
@@ -152,8 +153,7 @@ impl EntityStore {
                 for head in selected {
                     if !entity.heads.contains(&head) {
                         return Err(Error::validation(format!(
-                            "operation {} is not a current head",
-                            head
+                            "operation {head} is not a current head"
                         )));
                     }
 
@@ -232,10 +232,8 @@ impl GitBackend {
     }
 
     fn load_or_default(&self, entity_id: EntityId) -> Result<StoredEntity> {
-        match self.load_entity(&entity_id)? {
-            Some(entity) => Ok(entity),
-            None => Ok(StoredEntity::new(entity_id)),
-        }
+        self.load_entity(&entity_id)?
+            .map_or_else(|| Ok(StoredEntity::new(entity_id)), Ok)
     }
 
     fn load_entity(&self, entity_id: &EntityId) -> Result<Option<StoredEntity>> {
@@ -350,7 +348,8 @@ impl GitBackend {
         let parent_refs: Vec<&Commit> = parents.iter().collect();
 
         let signature = self.signature()?;
-        let commit_message = format!("{}: {}", message, entity.entity_id);
+        let entity_id = &entity.entity_id;
+        let commit_message = format!("{message}: {entity_id}");
         let commit_oid = self.repo.commit(
             Some(&entity_ref_name(&entity.entity_id)),
             &signature,
@@ -386,8 +385,7 @@ impl GitBackend {
             let restored = OperationBlob::from_bytes(blob.content().to_vec());
             if restored.digest() != &digest {
                 return Err(Error::validation(format!(
-                    "blob digest mismatch for {}",
-                    digest
+                    "blob digest mismatch for {digest}"
                 )));
             }
             blob_vec.push(restored);
@@ -594,7 +592,7 @@ impl GitBackend {
                 operation
                     .parents
                     .iter()
-                    .map(|parent| parent.to_string())
+                    .map(ToString::to_string)
                     .collect::<Vec<_>>()
                     .join("\n")
                     .as_bytes(),
@@ -657,7 +655,7 @@ impl StoredEntity {
 }
 
 fn entity_ref_name(entity_id: &EntityId) -> String {
-    format!("refs/git-mile/entities/{}", entity_id)
+    format!("refs/git-mile/entities/{entity_id}")
 }
 
 fn compute_heads(operations: &BTreeMap<OperationId, Operation>) -> HashSet<OperationId> {

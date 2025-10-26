@@ -4,14 +4,14 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use assert_cmd::cargo::CommandCargoExt;
-use git2::Repository;
 use git_mile_core::clock::ReplicaId;
 use git_mile_core::issue::{CreateIssueInput, IssueId, IssueStatus, IssueStore};
 use git_mile_core::mile::{CreateMileInput, MileId, MileStatus, MileStore};
 use git_mile_core::repo::LockMode;
-use serde_json::{json, Map, Value};
+use git2::Repository;
+use serde_json::{Map, Value, json};
 use tempfile::TempDir;
 
 pub struct TestRepository {
@@ -261,7 +261,7 @@ impl McpHarness {
             .ok_or_else(|| anyhow!("stdin already closed"))?;
         let serialized = serde_json::to_string(payload)?;
         if let Err(err) = serde_json::from_str::<rmcp::model::JsonRpcMessage>(&serialized) {
-            return Err(anyhow!("invalid MCP message {}: {err}", serialized));
+            return Err(anyhow!("invalid MCP message {serialized}: {err}"));
         }
         stdin.write_all(serialized.as_bytes())?;
         stdin.write_all(b"\n")?;
@@ -278,10 +278,10 @@ impl McpHarness {
                 value.get("error"),
             ) {
                 (Some(id), Some(result), _) if id == expected_id => {
-                    return Ok(Response::Result(result.clone()))
+                    return Ok(Response::Result(result.clone()));
                 }
                 (Some(id), _, Some(error)) if id == expected_id => {
-                    return Ok(Response::Error(error.clone()))
+                    return Ok(Response::Error(error.clone()));
                 }
                 _ => continue,
             }

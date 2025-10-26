@@ -382,8 +382,7 @@ impl IdentityStore {
         let heads = snapshot.heads.clone();
         if heads.len() != 1 {
             return Err(Error::conflict(format!(
-                "identity {} has {} heads; resolve conflicts before adopting",
-                identity_id,
+                "identity {identity_id} has {} heads; resolve conflicts before adopting",
                 heads.len()
             )));
         }
@@ -443,8 +442,7 @@ impl IdentityStore {
         let heads = snapshot.heads.clone();
         if heads.len() != 1 {
             return Err(Error::conflict(format!(
-                "identity {} has {} heads; resolve conflicts before adding protection",
-                identity_id,
+                "identity {identity_id} has {} heads; resolve conflicts before adding protection",
                 heads.len()
             )));
         }
@@ -453,8 +451,7 @@ impl IdentityStore {
         let identity_snapshot = build_identity_snapshot(snapshot)?;
         if identity_snapshot.status == IdentityStatus::PendingAdoption {
             return Err(Error::validation(format!(
-                "identity {} must be adopted before protections can be added",
-                identity_id
+                "identity {identity_id} must be adopted before protections can be added"
             )));
         }
 
@@ -516,13 +513,11 @@ impl IdentityStore {
             if identity
                 .adopted_by
                 .as_ref()
-                .map(|value| value == replica)
-                .unwrap_or(false)
+                .is_some_and(|value| value == replica)
             {
                 let is_newer = latest
                     .as_ref()
-                    .map(|current| identity.updated_at > current.updated_at)
-                    .unwrap_or(true);
+                    .is_none_or(|current| identity.updated_at > current.updated_at);
                 if is_newer {
                     latest = Some(identity);
                 }
@@ -614,12 +609,12 @@ fn build_identity_snapshot(entity: EntitySnapshot) -> Result<IdentitySnapshot> {
         let value: Value = serde_json::from_slice(data)?;
         let version = value
             .get("version")
-            .and_then(|v| v.as_u64())
+            .and_then(Value::as_u64)
             .and_then(|v| u8::try_from(v).ok());
         let event_type = value
             .get("type")
-            .and_then(|v| v.as_str())
-            .map(|v| v.to_string());
+            .and_then(Value::as_str)
+            .map(str::to_string);
 
         match serde_json::from_value::<StoredEvent>(value.clone()) {
             Ok(record) => Ok(Decoded::Known {
@@ -674,8 +669,7 @@ fn build_identity_snapshot(entity: EntitySnapshot) -> Result<IdentitySnapshot> {
 
     if events.is_empty() {
         return Err(Error::validation(format!(
-            "identity {} has no events",
-            entity_id
+            "identity {entity_id} has no events"
         )));
     }
 
@@ -692,8 +686,7 @@ fn build_identity_snapshot(entity: EntitySnapshot) -> Result<IdentitySnapshot> {
             IdentityEventKind::Created(data) => {
                 if display_name.is_some() {
                     return Err(Error::validation(format!(
-                        "identity {} has multiple creation events",
-                        entity_id
+                        "identity {entity_id} has multiple creation events"
                     )));
                 }
                 display_name = Some(data.display_name.clone());
@@ -705,8 +698,7 @@ fn build_identity_snapshot(entity: EntitySnapshot) -> Result<IdentitySnapshot> {
             IdentityEventKind::Adopted(data) => {
                 if adopted_by.is_some() {
                     return Err(Error::validation(format!(
-                        "identity {} has multiple adoption events",
-                        entity_id
+                        "identity {entity_id} has multiple adoption events"
                     )));
                 }
                 adopted_by = Some(data.replica_id.clone());
@@ -718,8 +710,7 @@ fn build_identity_snapshot(entity: EntitySnapshot) -> Result<IdentitySnapshot> {
                     && status != Some(IdentityStatus::Protected)
                 {
                     return Err(Error::validation(format!(
-                        "identity {} protection added before adoption",
-                        entity_id
+                        "identity {entity_id} protection added before adoption"
                     )));
                 }
 
@@ -734,17 +725,15 @@ fn build_identity_snapshot(entity: EntitySnapshot) -> Result<IdentitySnapshot> {
 
     let display_name = display_name.ok_or_else(|| {
         Error::validation(format!(
-            "identity {} missing creation event in history",
-            entity_id
+            "identity {entity_id} missing creation event in history"
         ))
     })?;
     let email = email.ok_or_else(|| {
-        Error::validation(format!("identity {} missing email in history", entity_id))
+        Error::validation(format!("identity {entity_id} missing email in history"))
     })?;
     let status = status.ok_or_else(|| {
         Error::validation(format!(
-            "identity {} missing resolved status in history",
-            entity_id
+            "identity {entity_id} missing resolved status in history"
         ))
     })?;
 
@@ -754,8 +743,7 @@ fn build_identity_snapshot(entity: EntitySnapshot) -> Result<IdentitySnapshot> {
         .ok_or_else(|| Error::validation("identity history missing creation timestamp"))?;
     let updated_at = events
         .last()
-        .map(|event| event.timestamp.clone())
-        .unwrap_or_else(|| created_at.clone());
+        .map_or_else(|| created_at.clone(), |event| event.timestamp.clone());
 
     Ok(IdentitySnapshot {
         id: entity_id,

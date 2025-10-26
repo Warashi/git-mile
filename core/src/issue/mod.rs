@@ -402,8 +402,7 @@ impl IssueStore {
         let heads = snapshot.heads.clone();
         if heads.len() != 1 {
             return Err(Error::conflict(format!(
-                "issue {} has {} heads; resolve conflicts before changing status",
-                issue_id,
+                "issue {issue_id} has {} heads; resolve conflicts before changing status",
                 heads.len()
             )));
         }
@@ -694,12 +693,12 @@ fn build_issue_snapshot(entity: EntitySnapshot) -> Result<IssueSnapshot> {
         let value: Value = serde_json::from_slice(data)?;
         let version = value
             .get("version")
-            .and_then(|v| v.as_u64())
+            .and_then(Value::as_u64)
             .and_then(|v| u8::try_from(v).ok());
         let event_type = value
             .get("type")
-            .and_then(|v| v.as_str())
-            .map(|v| v.to_string());
+            .and_then(Value::as_str)
+            .map(str::to_string);
 
         match serde_json::from_value::<StoredEvent>(value.clone()) {
             Ok(record) => Ok(Decoded::Known {
@@ -755,8 +754,7 @@ fn build_issue_snapshot(entity: EntitySnapshot) -> Result<IssueSnapshot> {
 
     if events.is_empty() {
         return Err(Error::validation(format!(
-            "issue {} has no events",
-            entity_id
+            "issue {entity_id} has no events"
         )));
     }
 
@@ -812,14 +810,12 @@ fn build_issue_snapshot(entity: EntitySnapshot) -> Result<IssueSnapshot> {
 
     let title = title.ok_or_else(|| {
         Error::validation(format!(
-            "issue {} missing creation event in history",
-            entity_id
+            "issue {entity_id} missing creation event in history"
         ))
     })?;
     let status = status.ok_or_else(|| {
         Error::validation(format!(
-            "issue {} missing resolved status in history",
-            entity_id
+            "issue {entity_id} missing resolved status in history"
         ))
     })?;
 
@@ -829,8 +825,7 @@ fn build_issue_snapshot(entity: EntitySnapshot) -> Result<IssueSnapshot> {
         .ok_or_else(|| Error::validation("issue history missing creation timestamp"))?;
     let updated_at = events
         .last()
-        .map(|event| event.timestamp.clone())
-        .unwrap_or_else(|| created_at.clone());
+        .map_or_else(|| created_at.clone(), |event| event.timestamp.clone());
 
     Ok(IssueSnapshot {
         id: entity_id,

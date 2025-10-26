@@ -665,8 +665,7 @@ fn ensure_cache_directory(path: &Path, version: u32) -> Result<()> {
             .then(|| fs::read_to_string(&version_file))
             .transpose()?
             .and_then(|contents| contents.trim().parse::<u32>().ok())
-            .map(|stored| stored == version)
-            .unwrap_or(false);
+            .is_some_and(|stored| stored == version);
 
         if !matches_version {
             fs::remove_dir_all(path)?;

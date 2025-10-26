@@ -410,7 +410,9 @@ fn map_query_error(err: QueryError) -> Error {
 }
 
 fn map_initialize_error(err: ServerInitializeError) -> Error {
-    Error::Io(io::Error::other(format!("failed to initialize MCP server: {err}")))
+    Error::Io(io::Error::other(format!(
+        "failed to initialize MCP server: {err}"
+    )))
 }
 
 fn handle_wait_result(result: std::result::Result<QuitReason, JoinError>) -> Result<()> {

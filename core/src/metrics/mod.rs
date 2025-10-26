@@ -20,5 +20,5 @@ pub fn init_prometheus() -> Result<(), BuildError> {
 }
 
 pub fn render_prometheus() -> Option<String> {
-    PROMETHEUS_HANDLE.get().map(|handle| handle.render())
+    PROMETHEUS_HANDLE.get().map(PrometheusHandle::render)
 }

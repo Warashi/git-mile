@@ -1,6 +1,6 @@
-use anyhow::{anyhow, Result};
-use git_mile_e2e::{create_repository_fixture, McpHarness, Response};
-use serde_json::{json, Value};
+use anyhow::{Result, anyhow};
+use git_mile_e2e::{McpHarness, Response, create_repository_fixture};
+use serde_json::{Value, json};
 
 fn extract_content(result: Value) -> Result<Value> {
     let content = result
