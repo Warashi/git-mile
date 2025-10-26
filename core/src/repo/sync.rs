@@ -117,7 +117,7 @@ pub struct IndexDelta {
 
 impl IndexDelta {
     #[must_use]
-    pub fn new(
+    pub const fn new(
         namespace: CacheNamespace,
         entity_id: EntityId,
         generation: u64,
@@ -175,7 +175,7 @@ impl BackgroundSyncWorker {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
         let inner = Arc::new(BackgroundSyncWorkerInner {
-            sender: sender.clone(),
+            sender,
             queue_depth: AtomicUsize::new(0),
             statuses: Mutex::new(HashMap::new()),
             shutdown: Mutex::new(Some(shutdown_tx)),
@@ -220,6 +220,7 @@ impl BackgroundSyncWorker {
         }
 
         self.inner.queue_depth.fetch_add(1, Ordering::SeqCst);
+        #[allow(clippy::cast_precision_loss)]
         metrics::gauge!("sync.queue_depth", "namespace" => namespace_label)
             .set(self.queue_depth() as f64);
 
@@ -231,6 +232,7 @@ impl BackgroundSyncWorker {
 
         if let Err(err) = self.inner.sender.try_send(SyncCommand::Apply(envelope)) {
             self.inner.queue_depth.fetch_sub(1, Ordering::SeqCst);
+            #[allow(clippy::cast_precision_loss)]
             metrics::gauge!("sync.queue_depth", "namespace" => namespace_label)
                 .set(self.queue_depth() as f64);
             return Err(Error::validation(format!(
@@ -278,6 +280,7 @@ impl BackgroundSyncWorkerInner {
                             let key = envelope.delta.key();
                             let result = process_delta(&envelope.delta).await;
                             self.queue_depth.fetch_sub(1, Ordering::SeqCst);
+                            #[allow(clippy::cast_precision_loss)]
                             metrics::gauge!(
                                 "sync.queue_depth",
                                 "namespace" => envelope.delta.namespace.as_str()
@@ -323,11 +326,21 @@ async fn process_delta(delta: &IndexDelta) -> Result<()> {
 
 impl Drop for BackgroundSyncWorkerInner {
     fn drop(&mut self) {
-        if let Some(shutdown) = self.shutdown.lock().expect("sync shutdown poisoned").take() {
+        let shutdown_token = self
+            .shutdown
+            .lock()
+            .expect("sync shutdown poisoned")
+            .take();
+        if let Some(shutdown) = shutdown_token {
             let _ = shutdown.send(());
         }
 
-        if let Some(handle) = self.handle.lock().expect("sync handle poisoned").take() {
+        let join_handle = self
+            .handle
+            .lock()
+            .expect("sync handle poisoned")
+            .take();
+        if let Some(handle) = join_handle {
             let _ = handle.join();
         }
     }
@@ -370,13 +383,11 @@ mod tests {
         let ctx = SyncContext::new("/tmp/repo", SyncPhase::Prepare, None);
         registry.dispatch(&ctx).await.expect("dispatch hooks");
 
-        {
-            let recorded = events.lock().expect("events lock poisoned");
-            assert_eq!(
-                recorded.as_slice(),
-                &[SyncPhase::Prepare, SyncPhase::Prepare]
-            );
-        }
+        let recorded = events.lock().expect("events lock poisoned").clone();
+        assert_eq!(
+            recorded.as_slice(),
+            &[SyncPhase::Prepare, SyncPhase::Prepare]
+        );
     }
 
     fn sample_operation(replica: &str) -> OperationId {

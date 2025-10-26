@@ -122,6 +122,191 @@ pub enum IdentityEventKind {
     },
 }
 
+#[derive(Debug)]
+enum DecodedEvent {
+    Known(StoredEventPayload),
+    Unknown {
+        version: Option<u8>,
+        event_type: Option<String>,
+        raw: Value,
+    },
+}
+
+fn decode_identity_event(data: &[u8]) -> Result<DecodedEvent> {
+    let value: Value = serde_json::from_slice(data)?;
+    let version = value
+        .get("version")
+        .and_then(Value::as_u64)
+        .and_then(|v| u8::try_from(v).ok());
+    let event_type = value
+        .get("type")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    match serde_json::from_value::<StoredEvent>(value.clone()) {
+        Ok(record) => Ok(DecodedEvent::Known(record.payload)),
+        Err(_) => Ok(DecodedEvent::Unknown {
+            version,
+            event_type,
+            raw: value,
+        }),
+    }
+}
+
+#[derive(Default)]
+struct IdentityState {
+    display_name: Option<String>,
+    email: Option<String>,
+    login: Option<String>,
+    status: Option<IdentityStatus>,
+    adopted_by: Option<ReplicaId>,
+    signature: Option<String>,
+    protections: Vec<IdentityProtection>,
+}
+
+impl IdentityState {
+    fn apply_event(&mut self, entity_id: &EntityId, event: &IdentityEvent) -> Result<()> {
+        match &event.payload {
+            IdentityEventKind::Created(data) => {
+                if self.display_name.is_some() {
+                    return Err(Error::validation(format!(
+                        "identity {entity_id} has multiple creation events"
+                    )));
+                }
+                self.display_name = Some(data.display_name.clone());
+                self.email = Some(data.email.clone());
+                self.login.clone_from(&data.login);
+                self.signature.clone_from(&data.initial_signature);
+                self.status = Some(IdentityStatus::PendingAdoption);
+            }
+            IdentityEventKind::Adopted(data) => {
+                if self.adopted_by.is_some() {
+                    return Err(Error::validation(format!(
+                        "identity {entity_id} has multiple adoption events"
+                    )));
+                }
+                self.adopted_by = Some(data.replica_id.clone());
+                self.signature = Some(data.signature.clone());
+                self.status = Some(IdentityStatus::Adopted);
+            }
+            IdentityEventKind::ProtectionAdded(data) => {
+                if self.status != Some(IdentityStatus::Adopted)
+                    && self.status != Some(IdentityStatus::Protected)
+                {
+                    return Err(Error::validation(format!(
+                        "identity {entity_id} protection added before adoption"
+                    )));
+                }
+
+                if !self.protections.contains(&data.protection) {
+                    self.protections.push(data.protection.clone());
+                }
+                self.status = Some(IdentityStatus::Protected);
+            }
+            IdentityEventKind::Unknown { .. } => {}
+        }
+
+        Ok(())
+    }
+
+    fn build_snapshot(
+        self,
+        entity_id: EntityId,
+        events: Vec<IdentityEvent>,
+        clock_snapshot: LamportTimestamp,
+    ) -> Result<IdentitySnapshot> {
+        let display_name = self.display_name.ok_or_else(|| {
+            Error::validation(format!(
+                "identity {entity_id} missing creation event in history"
+            ))
+        })?;
+        let email = self.email.ok_or_else(|| {
+            Error::validation(format!("identity {entity_id} missing email in history"))
+        })?;
+        let status = self.status.ok_or_else(|| {
+            Error::validation(format!(
+                "identity {entity_id} missing resolved status in history"
+            ))
+        })?;
+
+        let created_at = events
+            .first()
+            .map(|event| event.timestamp.clone())
+            .ok_or_else(|| Error::validation("identity history missing creation timestamp"))?;
+        let updated_at = events
+            .last()
+            .map_or_else(|| created_at.clone(), |event| event.timestamp.clone());
+
+        Ok(IdentitySnapshot {
+            id: entity_id,
+            display_name,
+            email,
+            login: self.login,
+            status,
+            adopted_by: self.adopted_by,
+            signature: self.signature,
+            protections: self.protections,
+            created_at,
+            updated_at,
+            clock_snapshot,
+            events,
+        })
+    }
+}
+
+fn collect_identity_events(
+    entity_id: &EntityId,
+    operations: Vec<Operation>,
+    blob_lookup: &HashMap<BlobRef, OperationBlob>,
+) -> Result<Vec<IdentityEvent>> {
+    let mut events = Vec::with_capacity(operations.len());
+    for operation in operations {
+        let blob = blob_lookup.get(&operation.payload).ok_or_else(|| {
+            Error::validation(format!(
+                "missing blob for operation payload {}",
+                operation.payload
+            ))
+        })?;
+
+        let decoded = decode_identity_event(blob.data())?;
+        let timestamp = LamportTimestamp::from(operation.id.clone());
+        let metadata = operation.metadata.clone();
+        let payload = match decoded {
+            DecodedEvent::Known(record) => match record {
+                StoredEventPayload::Created(data) => IdentityEventKind::Created(data),
+                StoredEventPayload::Adopted(data) => IdentityEventKind::Adopted(data),
+                StoredEventPayload::ProtectionAdded(data) => {
+                    IdentityEventKind::ProtectionAdded(data)
+                }
+            },
+            DecodedEvent::Unknown {
+                version,
+                event_type,
+                raw,
+            } => IdentityEventKind::Unknown {
+                version,
+                event_type,
+                raw,
+            },
+        };
+
+        events.push(IdentityEvent {
+            id: operation.id,
+            timestamp,
+            metadata,
+            payload,
+        });
+    }
+
+    if events.is_empty() {
+        return Err(Error::validation(format!(
+            "identity {entity_id} has no events"
+        )));
+    }
+
+    Ok(events)
+}
+
 /// Snapshot describing current state of an identity.
 #[derive(Clone, Debug, Serialize)]
 pub struct IdentitySnapshot {
@@ -550,7 +735,8 @@ fn build_operation(
     let timestamp = clock.tick()?;
     let op_id = OperationId::new(timestamp);
     let metadata = OperationMetadata::new(author, message);
-    let operation = Operation::new(op_id.clone(), parents, blob.digest().clone(), metadata);
+    let payload = blob.digest().clone();
+    let operation = Operation::new(op_id, parents, payload, metadata);
 
     Ok((operation, blob))
 }
@@ -588,172 +774,13 @@ fn build_identity_snapshot(entity: EntitySnapshot) -> Result<IdentitySnapshot> {
         .map(|blob| (blob.digest().clone(), blob))
         .collect();
 
-    #[derive(Debug)]
-    enum Decoded {
-        Known {
-            payload: StoredEventPayload,
-        },
-        Unknown {
-            version: Option<u8>,
-            event_type: Option<String>,
-            raw: Value,
-        },
-    }
-
-    fn decode_event(data: &[u8]) -> Result<Decoded> {
-        let value: Value = serde_json::from_slice(data)?;
-        let version = value
-            .get("version")
-            .and_then(Value::as_u64)
-            .and_then(|v| u8::try_from(v).ok());
-        let event_type = value
-            .get("type")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-
-        match serde_json::from_value::<StoredEvent>(value.clone()) {
-            Ok(record) => Ok(Decoded::Known {
-                payload: record.payload,
-            }),
-            Err(_) => Ok(Decoded::Unknown {
-                version,
-                event_type,
-                raw: value,
-            }),
-        }
-    }
-
-    let mut events = Vec::with_capacity(operations.len());
-    for operation in operations {
-        let blob = blob_lookup.get(&operation.payload).ok_or_else(|| {
-            Error::validation(format!(
-                "missing blob for operation payload {}",
-                operation.payload
-            ))
-        })?;
-
-        let decoded = decode_event(blob.data())?;
-        let timestamp = LamportTimestamp::from(operation.id.clone());
-        let metadata = operation.metadata.clone();
-        let payload = match decoded {
-            Decoded::Known { payload } => match payload {
-                StoredEventPayload::Created(data) => IdentityEventKind::Created(data),
-                StoredEventPayload::Adopted(data) => IdentityEventKind::Adopted(data),
-                StoredEventPayload::ProtectionAdded(data) => {
-                    IdentityEventKind::ProtectionAdded(data)
-                }
-            },
-            Decoded::Unknown {
-                version,
-                event_type,
-                raw,
-            } => IdentityEventKind::Unknown {
-                version,
-                event_type,
-                raw,
-            },
-        };
-
-        events.push(IdentityEvent {
-            id: operation.id,
-            timestamp,
-            metadata,
-            payload,
-        });
-    }
-
-    if events.is_empty() {
-        return Err(Error::validation(format!(
-            "identity {entity_id} has no events"
-        )));
-    }
-
-    let mut display_name: Option<String> = None;
-    let mut email: Option<String> = None;
-    let mut login: Option<String> = None;
-    let mut status: Option<IdentityStatus> = None;
-    let mut adopted_by: Option<ReplicaId> = None;
-    let mut signature: Option<String> = None;
-    let mut protections: Vec<IdentityProtection> = Vec::new();
-
+    let events = collect_identity_events(&entity_id, operations, &blob_lookup)?;
+    let mut state = IdentityState::default();
     for event in &events {
-        match &event.payload {
-            IdentityEventKind::Created(data) => {
-                if display_name.is_some() {
-                    return Err(Error::validation(format!(
-                        "identity {entity_id} has multiple creation events"
-                    )));
-                }
-                display_name = Some(data.display_name.clone());
-                email = Some(data.email.clone());
-                login = data.login.clone();
-                signature = data.initial_signature.clone();
-                status = Some(IdentityStatus::PendingAdoption);
-            }
-            IdentityEventKind::Adopted(data) => {
-                if adopted_by.is_some() {
-                    return Err(Error::validation(format!(
-                        "identity {entity_id} has multiple adoption events"
-                    )));
-                }
-                adopted_by = Some(data.replica_id.clone());
-                signature = Some(data.signature.clone());
-                status = Some(IdentityStatus::Adopted);
-            }
-            IdentityEventKind::ProtectionAdded(data) => {
-                if status != Some(IdentityStatus::Adopted)
-                    && status != Some(IdentityStatus::Protected)
-                {
-                    return Err(Error::validation(format!(
-                        "identity {entity_id} protection added before adoption"
-                    )));
-                }
-
-                if !protections.contains(&data.protection) {
-                    protections.push(data.protection.clone());
-                }
-                status = Some(IdentityStatus::Protected);
-            }
-            IdentityEventKind::Unknown { .. } => {}
-        }
+        state.apply_event(&entity_id, event)?;
     }
 
-    let display_name = display_name.ok_or_else(|| {
-        Error::validation(format!(
-            "identity {entity_id} missing creation event in history"
-        ))
-    })?;
-    let email = email.ok_or_else(|| {
-        Error::validation(format!("identity {entity_id} missing email in history"))
-    })?;
-    let status = status.ok_or_else(|| {
-        Error::validation(format!(
-            "identity {entity_id} missing resolved status in history"
-        ))
-    })?;
-
-    let created_at = events
-        .first()
-        .map(|event| event.timestamp.clone())
-        .ok_or_else(|| Error::validation("identity history missing creation timestamp"))?;
-    let updated_at = events
-        .last()
-        .map_or_else(|| created_at.clone(), |event| event.timestamp.clone());
-
-    Ok(IdentitySnapshot {
-        id: entity_id,
-        display_name,
-        email,
-        login,
-        status,
-        adopted_by,
-        signature,
-        protections,
-        created_at,
-        updated_at,
-        clock_snapshot,
-        events,
-    })
+    state.build_snapshot(entity_id, events, clock_snapshot)
 }
 
 #[cfg(test)]
@@ -771,11 +798,9 @@ mod tests {
     #[test]
     fn create_identity_initial_state() {
         let (_tmp, store) = init_store();
-        let replica = ReplicaId::new("replica-a");
-
         let snapshot = store
             .create_identity(CreateIdentityInput {
-                replica_id: replica.clone(),
+                replica_id: ReplicaId::new("replica-a"),
                 author: "tester <tester@example.com>".into(),
                 message: Some("create identity".into()),
                 display_name: "Alice".into(),
@@ -797,11 +822,11 @@ mod tests {
     #[test]
     fn adopt_identity_updates_status() {
         let (_tmp, store) = init_store();
-        let replica = ReplicaId::new("replica-a");
+        let replica = "replica-a";
 
-        let identity = store
+        let identity_id = store
             .create_identity(CreateIdentityInput {
-                replica_id: replica.clone(),
+                replica_id: ReplicaId::new(replica),
                 author: "tester <tester@example.com>".into(),
                 message: None,
                 display_name: "Alice".into(),
@@ -811,13 +836,14 @@ mod tests {
                 adopt_immediately: false,
                 protections: vec![],
             })
-            .expect("create identity");
+            .expect("create identity")
+            .id;
 
         let signature = "Alice <alice@example.com>".to_string();
         let outcome = store
             .adopt_identity(AdoptIdentityInput {
-                identity_id: identity.id.clone(),
-                replica_id: replica.clone(),
+                identity_id,
+                replica_id: ReplicaId::new(replica),
                 author: "tester <tester@example.com>".into(),
                 message: Some("adopt identity".into()),
                 signature: signature.clone(),
@@ -826,7 +852,10 @@ mod tests {
 
         assert!(outcome.changed);
         assert_eq!(outcome.snapshot.status, IdentityStatus::Adopted);
-        assert_eq!(outcome.snapshot.adopted_by, Some(replica.clone()));
+        assert_eq!(
+            outcome.snapshot.adopted_by.as_ref().map(ReplicaId::as_str),
+            Some(replica)
+        );
         assert_eq!(
             outcome.snapshot.signature.as_deref(),
             Some(signature.as_str())
@@ -836,11 +865,11 @@ mod tests {
     #[test]
     fn duplicate_adoption_is_rejected() {
         let (_tmp, store) = init_store();
-        let replica = ReplicaId::new("replica-a");
+        let replica = "replica-a";
 
-        let identity = store
+        let identity_id = store
             .create_identity(CreateIdentityInput {
-                replica_id: replica.clone(),
+                replica_id: ReplicaId::new(replica),
                 author: "tester <tester@example.com>".into(),
                 message: None,
                 display_name: "Alice".into(),
@@ -850,12 +879,14 @@ mod tests {
                 adopt_immediately: false,
                 protections: vec![],
             })
-            .expect("create identity");
+            .expect("create identity")
+            .id;
 
+        let duplicate_attempt = identity_id.clone();
         store
             .adopt_identity(AdoptIdentityInput {
-                identity_id: identity.id.clone(),
-                replica_id: replica.clone(),
+                identity_id,
+                replica_id: ReplicaId::new(replica),
                 author: "tester <tester@example.com>".into(),
                 message: None,
                 signature: "Alice <alice@example.com>".into(),
@@ -863,8 +894,8 @@ mod tests {
             .expect("adopt identity");
 
         let result = store.adopt_identity(AdoptIdentityInput {
-            identity_id: identity.id.clone(),
-            replica_id: replica.clone(),
+            identity_id: duplicate_attempt,
+            replica_id: ReplicaId::new(replica),
             author: "tester <tester@example.com>".into(),
             message: None,
             signature: "Alice <alice@example.com>".into(),
@@ -876,11 +907,11 @@ mod tests {
     #[test]
     fn protection_requires_adoption() {
         let (_tmp, store) = init_store();
-        let replica = ReplicaId::new("replica-a");
+        let replica = "replica-a";
 
-        let identity = store
+        let identity_id = store
             .create_identity(CreateIdentityInput {
-                replica_id: replica.clone(),
+                replica_id: ReplicaId::new(replica),
                 author: "tester <tester@example.com>".into(),
                 message: None,
                 display_name: "Alice".into(),
@@ -890,11 +921,12 @@ mod tests {
                 adopt_immediately: false,
                 protections: vec![],
             })
-            .expect("create identity");
+            .expect("create identity")
+            .id;
 
         let result = store.add_protection(AddProtectionInput {
-            identity_id: identity.id.clone(),
-            replica_id: replica.clone(),
+            identity_id,
+            replica_id: ReplicaId::new(replica),
             author: "tester <tester@example.com>".into(),
             message: None,
             protection: IdentityProtection {
@@ -910,11 +942,11 @@ mod tests {
     #[test]
     fn duplicate_protection_is_idempotent() {
         let (_tmp, store) = init_store();
-        let replica = ReplicaId::new("replica-a");
+        let replica = "replica-a";
 
-        let identity = store
+        let identity_id = store
             .create_identity(CreateIdentityInput {
-                replica_id: replica.clone(),
+                replica_id: ReplicaId::new(replica),
                 author: "tester <tester@example.com>".into(),
                 message: None,
                 display_name: "Alice".into(),
@@ -924,12 +956,14 @@ mod tests {
                 adopt_immediately: false,
                 protections: vec![],
             })
-            .expect("create identity");
+            .expect("create identity")
+            .id;
 
+        let adopted_id = identity_id.clone();
         store
             .adopt_identity(AdoptIdentityInput {
-                identity_id: identity.id.clone(),
-                replica_id: replica.clone(),
+                identity_id: adopted_id,
+                replica_id: ReplicaId::new(replica),
                 author: "tester <tester@example.com>".into(),
                 message: None,
                 signature: "Alice <alice@example.com>".into(),
@@ -938,8 +972,8 @@ mod tests {
 
         let first = store
             .add_protection(AddProtectionInput {
-                identity_id: identity.id.clone(),
-                replica_id: replica.clone(),
+                identity_id: identity_id.clone(),
+                replica_id: ReplicaId::new(replica),
                 author: "tester <tester@example.com>".into(),
                 message: None,
                 protection: IdentityProtection {
@@ -954,8 +988,8 @@ mod tests {
 
         let second = store
             .add_protection(AddProtectionInput {
-                identity_id: identity.id.clone(),
-                replica_id: replica.clone(),
+                identity_id,
+                replica_id: ReplicaId::new(replica),
                 author: "tester <tester@example.com>".into(),
                 message: None,
                 protection: IdentityProtection {
@@ -989,9 +1023,10 @@ mod tests {
             })
             .expect("create identity A");
 
+        let first_id = first.id;
         store
             .adopt_identity(AdoptIdentityInput {
-                identity_id: first.id.clone(),
+                identity_id: first_id,
                 replica_id: replica.clone(),
                 author: "tester".into(),
                 message: None,
@@ -1013,9 +1048,10 @@ mod tests {
             })
             .expect("create identity B");
 
+        let second_id = second.id;
         store
             .adopt_identity(AdoptIdentityInput {
-                identity_id: second.id.clone(),
+                identity_id: second_id.clone(),
                 replica_id: replica.clone(),
                 author: "tester".into(),
                 message: None,
@@ -1025,7 +1061,7 @@ mod tests {
 
         store
             .add_protection(AddProtectionInput {
-                identity_id: second.id.clone(),
+                identity_id: second_id.clone(),
                 replica_id: replica.clone(),
                 author: "tester".into(),
                 message: None,
@@ -1041,19 +1077,19 @@ mod tests {
             .find_adopted_by_replica(&replica)
             .expect("find adopted")
             .expect("identity present");
-        assert_eq!(resolved.id, second.id);
+        assert_eq!(resolved.id, second_id);
     }
 
     #[test]
     fn list_identities_skips_other_entities() {
         let temp = tempfile::tempdir().expect("create temp dir");
-        let replica = ReplicaId::new("replica-a");
+        let replica = "replica-a";
 
         {
             let mile_store = MileStore::open(temp.path()).expect("open mile store");
             mile_store
                 .create_mile(CreateMileInput {
-                    replica_id: replica.clone(),
+                    replica_id: ReplicaId::new(replica),
                     author: "tester".into(),
                     message: None,
                     title: "First Mile".into(),
@@ -1068,7 +1104,7 @@ mod tests {
         let store = IdentityStore::open(temp.path()).expect("open identity store");
         store
             .create_identity(CreateIdentityInput {
-                replica_id: replica.clone(),
+                replica_id: ReplicaId::new(replica),
                 author: "tester".into(),
                 message: None,
                 display_name: "Alice".into(),

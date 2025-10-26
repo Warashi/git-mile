@@ -6,11 +6,11 @@ use git_mile_core::mile::{AppendCommentInput, CreateMileInput, MileStatus, MileS
 fn issue_snapshot_roundtrips_description_comments_and_labels() {
     let temp = tempfile::tempdir().expect("create temp dir");
     let store = IssueStore::open(temp.path()).expect("open issue store");
-    let replica = ReplicaId::new("fixture-issue");
+    let replica = "fixture-issue";
 
-    let snapshot = store
+    let issue_id = store
         .create_issue(CreateIssueInput {
-            replica_id: replica.clone(),
+            replica_id: ReplicaId::new(replica),
             author: "tester".into(),
             message: Some("create".into()),
             title: "Snapshot Issue".into(),
@@ -19,12 +19,13 @@ fn issue_snapshot_roundtrips_description_comments_and_labels() {
             initial_comment: Some("First comment".into()),
             labels: vec!["alpha".into(), "beta".into()],
         })
-        .expect("create issue");
+        .expect("create issue")
+        .id;
 
     let outcome = store
         .append_comment(AppendIssueCommentInput {
-            issue_id: snapshot.id.clone(),
-            replica_id: replica.clone(),
+            issue_id,
+            replica_id: ReplicaId::new(replica),
             author: "tester".into(),
             message: Some("second".into()),
             comment_id: None,
@@ -49,12 +50,12 @@ fn issue_snapshot_roundtrips_description_comments_and_labels() {
 fn milestone_comments_remain_in_lamport_order() {
     let temp = tempfile::tempdir().expect("create temp dir");
     let store = MileStore::open(temp.path()).expect("open milestone store");
-    let primary = ReplicaId::new("replica-primary");
-    let secondary = ReplicaId::new("replica-secondary");
+    let primary = "replica-primary";
+    let secondary = "replica-secondary";
 
-    let snapshot = store
+    let mile_id = store
         .create_mile(CreateMileInput {
-            replica_id: primary.clone(),
+            replica_id: ReplicaId::new(primary),
             author: "tester".into(),
             message: Some("create".into()),
             title: "Milestone".into(),
@@ -63,12 +64,13 @@ fn milestone_comments_remain_in_lamport_order() {
             initial_comment: Some("Kickoff".into()),
             labels: vec![],
         })
-        .expect("create milestone");
+        .expect("create milestone")
+        .id;
 
     store
         .append_comment(AppendCommentInput {
-            mile_id: snapshot.id.clone(),
-            replica_id: secondary.clone(),
+            mile_id: mile_id.clone(),
+            replica_id: ReplicaId::new(secondary),
             author: "other".into(),
             message: Some("second".into()),
             comment_id: None,
@@ -78,8 +80,8 @@ fn milestone_comments_remain_in_lamport_order() {
 
     store
         .append_comment(AppendCommentInput {
-            mile_id: snapshot.id.clone(),
-            replica_id: primary.clone(),
+            mile_id: mile_id.clone(),
+            replica_id: ReplicaId::new(primary),
             author: "tester".into(),
             message: Some("third".into()),
             comment_id: None,
@@ -87,9 +89,7 @@ fn milestone_comments_remain_in_lamport_order() {
         })
         .expect("append from primary");
 
-    let refreshed = store
-        .load_mile(&snapshot.id)
-        .expect("load milestone snapshot");
+    let refreshed = store.load_mile(&mile_id).expect("load milestone snapshot");
 
     assert_eq!(refreshed.comments.len(), 3);
     let timestamps: Vec<_> = refreshed

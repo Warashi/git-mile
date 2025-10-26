@@ -286,7 +286,7 @@ impl GitBackend {
         let mut inserted = Vec::new();
         let mut known_ops: HashSet<OperationId> = entity.operations.keys().cloned().collect();
 
-        for operation in operations.into_iter() {
+        for operation in operations {
             if entity.operations.contains_key(&operation.id) {
                 return Err(Error::validation(format!(
                     "operation {} already exists",
@@ -458,7 +458,7 @@ impl GitBackend {
         let blobs_tree = self.repo.find_tree(entry.id())?;
         let mut blobs = HashMap::new();
 
-        for blob_entry in blobs_tree.iter() {
+        for blob_entry in &blobs_tree {
             if blob_entry.kind() != Some(git2::ObjectType::Blob) {
                 continue;
             }
@@ -481,7 +481,7 @@ impl GitBackend {
         let pack_tree = self.repo.find_tree(entry.id())?;
         let mut operations = BTreeMap::new();
 
-        for node in pack_tree.iter() {
+        for node in &pack_tree {
             if node.kind() != Some(git2::ObjectType::Tree) {
                 continue;
             }
@@ -775,16 +775,20 @@ mod tests {
         let base_pack = OperationPack::new(
             entity_id.clone(),
             clock.snapshot(),
-            vec![base_op.clone()],
-            vec![base_blob.clone()],
+            vec![base_op],
+            vec![base_blob],
         )
         .expect("base pack");
         store.persist_pack(base_pack).expect("persist base");
 
+        let base_snapshot = store.load_entity(&entity_id).expect("load base");
+        assert_eq!(base_snapshot.heads.len(), 1);
+        let parent_id = base_snapshot.heads.first().cloned().expect("base head");
+
         let branch_blob_a = OperationBlob::from_bytes(b"branch-a".to_vec());
         let branch_blob_b = OperationBlob::from_bytes(b"branch-b".to_vec());
-        let op_a = build_operation(&mut clock, vec![base_op.id.clone()], &branch_blob_a);
-        let op_b = build_operation(&mut clock, vec![base_op.id.clone()], &branch_blob_b);
+        let op_a = build_operation(&mut clock, vec![parent_id.clone()], &branch_blob_a);
+        let op_b = build_operation(&mut clock, vec![parent_id], &branch_blob_b);
         let pack = OperationPack::new(
             entity_id.clone(),
             clock.snapshot(),

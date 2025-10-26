@@ -37,9 +37,9 @@ pub enum MileStatus {
 impl std::fmt::Display for MileStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let label = match self {
-            MileStatus::Draft => "draft",
-            MileStatus::Open => "open",
-            MileStatus::Closed => "closed",
+            Self::Draft => "draft",
+            Self::Open => "open",
+            Self::Closed => "closed",
         };
         f.write_str(label)
     }
@@ -98,6 +98,37 @@ pub struct MileLabelDetached {
     pub label: LabelId,
 }
 
+#[derive(Debug)]
+enum DecodedEvent {
+    Known(StoredEventPayload),
+    Unknown {
+        version: Option<u8>,
+        event_type: Option<String>,
+        raw: Value,
+    },
+}
+
+fn decode_mile_event(data: &[u8]) -> Result<DecodedEvent> {
+    let value: Value = serde_json::from_slice(data)?;
+    let version = value
+        .get("version")
+        .and_then(Value::as_u64)
+        .and_then(|v| u8::try_from(v).ok());
+    let event_type = value
+        .get("type")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    match serde_json::from_value::<StoredEvent>(value.clone()) {
+        Ok(record) => Ok(DecodedEvent::Known(record.payload)),
+        Err(_) => Ok(DecodedEvent::Unknown {
+            version,
+            event_type,
+            raw: value,
+        }),
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MileCreated {
     pub title: String,
@@ -113,6 +144,100 @@ pub struct MileCreated {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MileStatusChanged {
     pub status: MileStatus,
+}
+
+#[derive(Default)]
+struct MileState {
+    title: Option<String>,
+    description: Option<String>,
+    status: Option<MileStatus>,
+    labels: BTreeSet<LabelId>,
+    comments: Vec<MileComment>,
+    comment_ids: BTreeSet<CommentId>,
+}
+
+impl MileState {
+    fn apply_event(&mut self, event: &MileEvent) {
+        match &event.payload {
+            MileEventKind::Created(data) => {
+                self.title = Some(data.title.clone());
+                self.description.clone_from(&data.description);
+                self.status = Some(data.status);
+                self.labels = data.labels.iter().cloned().collect();
+                if let Some(initial_comment) = &data.initial_comment
+                    && self.comment_ids.insert(initial_comment.comment_id)
+                {
+                    self.comments.push(MileComment {
+                        id: initial_comment.comment_id,
+                        body: initial_comment.body.clone(),
+                        author: event.metadata.author.clone(),
+                        created_at: event.timestamp.clone(),
+                        edited_at: None,
+                    });
+                }
+            }
+            MileEventKind::StatusChanged(data) => {
+                self.status = Some(data.status);
+            }
+            MileEventKind::CommentAppended(data) => {
+                if self.comment_ids.insert(data.comment_id) {
+                    self.comments.push(MileComment {
+                        id: data.comment_id,
+                        body: data.body.clone(),
+                        author: event.metadata.author.clone(),
+                        created_at: event.timestamp.clone(),
+                        edited_at: None,
+                    });
+                }
+            }
+            MileEventKind::LabelAttached(data) => {
+                self.labels.insert(data.label.clone());
+            }
+            MileEventKind::LabelDetached(data) => {
+                self.labels.remove(&data.label);
+            }
+            MileEventKind::Unknown { .. } => {}
+        }
+    }
+
+    fn into_snapshot(
+        self,
+        entity_id: EntityId,
+        events: Vec<MileEvent>,
+        clock_snapshot: LamportTimestamp,
+    ) -> Result<MileSnapshot> {
+        let title = self.title.ok_or_else(|| {
+            Error::validation(format!(
+                "mile {entity_id} missing creation event in history"
+            ))
+        })?;
+        let status = self.status.ok_or_else(|| {
+            Error::validation(format!(
+                "mile {entity_id} missing resolved status in history"
+            ))
+        })?;
+
+        let created_at = events
+            .first()
+            .map(|event| event.timestamp.clone())
+            .ok_or_else(|| Error::validation("mile history missing creation timestamp"))?;
+        let updated_at = events
+            .last()
+            .map_or_else(|| created_at.clone(), |event| event.timestamp.clone());
+
+        Ok(MileSnapshot {
+            id: entity_id,
+            title,
+            description: self.description,
+            status,
+            labels: self.labels,
+            comments: self.comments,
+            created_at,
+            updated_at,
+            clock_snapshot,
+            events,
+        })
+    }
 }
 
 /// Represents a user-facing event in a mile's history.
@@ -314,7 +439,7 @@ impl MileStore {
             .collect();
 
         let entity_id = EntityId::new();
-        let mut clock = LamportClock::new(replica_id.clone());
+        let mut clock = LamportClock::new(replica_id);
         let (operation, blob) = build_operation(
             &mut clock,
             vec![],
@@ -416,7 +541,7 @@ impl MileStore {
             });
         }
 
-        let mut clock = LamportClock::with_state(replica_id.clone(), counter);
+        let mut clock = LamportClock::with_state(replica_id, counter);
         let event_payload = MileEventKind::StatusChanged(MileStatusChanged { status });
         let (operation, blob) = build_operation(&mut clock, heads, event_payload, author, message)?;
 
@@ -477,7 +602,7 @@ impl MileStore {
             None => Uuid::new_v4(),
         };
 
-        let mut clock = LamportClock::with_state(replica_id.clone(), counter);
+        let mut clock = LamportClock::with_state(replica_id, counter);
         let (operation, blob) = build_operation(
             &mut clock,
             heads,
@@ -552,7 +677,7 @@ impl MileStore {
             });
         }
 
-        let mut clock = LamportClock::with_state(replica_id.clone(), counter);
+        let mut clock = LamportClock::with_state(replica_id, counter);
         let mut parents = heads;
         let mut operations = Vec::new();
         let mut blobs = Vec::new();
@@ -627,7 +752,7 @@ fn build_operation(
     let op_id = OperationId::new(timestamp);
     let metadata = OperationMetadata::new(author, message);
 
-    let operation = Operation::new(op_id.clone(), parents, blob.digest().clone(), metadata);
+    let operation = Operation::new(op_id, parents, blob.digest().clone(), metadata);
 
     Ok((operation, blob))
 }
@@ -667,41 +792,6 @@ fn build_mile_snapshot(entity: EntitySnapshot) -> Result<MileSnapshot> {
         .map(|blob| (blob.digest().clone(), blob))
         .collect();
 
-    #[derive(Debug)]
-    enum Decoded {
-        Known {
-            payload: StoredEventPayload,
-        },
-        Unknown {
-            version: Option<u8>,
-            event_type: Option<String>,
-            raw: Value,
-        },
-    }
-
-    fn decode_event(data: &[u8]) -> Result<Decoded> {
-        let value: Value = serde_json::from_slice(data)?;
-        let version = value
-            .get("version")
-            .and_then(Value::as_u64)
-            .and_then(|v| u8::try_from(v).ok());
-        let event_type = value
-            .get("type")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-
-        match serde_json::from_value::<StoredEvent>(value.clone()) {
-            Ok(record) => Ok(Decoded::Known {
-                payload: record.payload,
-            }),
-            Err(_) => Ok(Decoded::Unknown {
-                version,
-                event_type,
-                raw: value,
-            }),
-        }
-    }
-
     let mut events = Vec::with_capacity(operations.len());
     for operation in operations {
         let blob = blob_lookup.get(&operation.payload).ok_or_else(|| {
@@ -711,19 +801,19 @@ fn build_mile_snapshot(entity: EntitySnapshot) -> Result<MileSnapshot> {
             ))
         })?;
 
-        let decoded = decode_event(blob.data())?;
+        let decoded = decode_mile_event(blob.data())?;
         let timestamp = LamportTimestamp::from(operation.id.clone());
         let metadata = operation.metadata.clone();
 
         let payload = match decoded {
-            Decoded::Known { payload, .. } => match payload {
+            DecodedEvent::Known(payload) => match payload {
                 StoredEventPayload::Created(data) => MileEventKind::Created(data),
                 StoredEventPayload::StatusChanged(data) => MileEventKind::StatusChanged(data),
                 StoredEventPayload::CommentAppended(data) => MileEventKind::CommentAppended(data),
                 StoredEventPayload::LabelAttached(data) => MileEventKind::LabelAttached(data),
                 StoredEventPayload::LabelDetached(data) => MileEventKind::LabelDetached(data),
             },
-            Decoded::Unknown {
+            DecodedEvent::Unknown {
                 version,
                 event_type,
                 raw,
@@ -746,87 +836,12 @@ fn build_mile_snapshot(entity: EntitySnapshot) -> Result<MileSnapshot> {
         return Err(Error::validation(format!("mile {entity_id} has no events")));
     }
 
-    let mut title: Option<String> = None;
-    let mut description: Option<String> = None;
-    let mut status: Option<MileStatus> = None;
-    let mut labels: BTreeSet<LabelId> = BTreeSet::new();
-    let mut comments: Vec<MileComment> = Vec::new();
-    let mut comment_ids: BTreeSet<CommentId> = BTreeSet::new();
-
+    let mut state = MileState::default();
     for event in &events {
-        match &event.payload {
-            MileEventKind::Created(data) => {
-                title = Some(data.title.clone());
-                description = data.description.clone();
-                status = Some(data.status);
-                labels.extend(data.labels.iter().cloned());
-                if let Some(initial_comment) = &data.initial_comment
-                    && comment_ids.insert(initial_comment.comment_id)
-                {
-                    comments.push(MileComment {
-                        id: initial_comment.comment_id,
-                        body: initial_comment.body.clone(),
-                        author: event.metadata.author.clone(),
-                        created_at: event.timestamp.clone(),
-                        edited_at: None,
-                    });
-                }
-            }
-            MileEventKind::StatusChanged(data) => {
-                status = Some(data.status);
-            }
-            MileEventKind::CommentAppended(data) => {
-                if comment_ids.insert(data.comment_id) {
-                    comments.push(MileComment {
-                        id: data.comment_id,
-                        body: data.body.clone(),
-                        author: event.metadata.author.clone(),
-                        created_at: event.timestamp.clone(),
-                        edited_at: None,
-                    });
-                }
-            }
-            MileEventKind::LabelAttached(data) => {
-                labels.insert(data.label.clone());
-            }
-            MileEventKind::LabelDetached(data) => {
-                labels.remove(&data.label);
-            }
-            MileEventKind::Unknown { .. } => {}
-        }
+        state.apply_event(event);
     }
 
-    let title = title.ok_or_else(|| {
-        Error::validation(format!(
-            "mile {entity_id} missing creation event in history"
-        ))
-    })?;
-    let status = status.ok_or_else(|| {
-        Error::validation(format!(
-            "mile {entity_id} missing resolved status in history"
-        ))
-    })?;
-
-    let created_at = events
-        .first()
-        .map(|event| event.timestamp.clone())
-        .ok_or_else(|| Error::validation("mile history missing creation timestamp"))?;
-    let updated_at = events
-        .last()
-        .map_or_else(|| created_at.clone(), |event| event.timestamp.clone());
-
-    Ok(MileSnapshot {
-        id: entity_id,
-        title,
-        description,
-        status,
-        labels,
-        comments,
-        created_at,
-        updated_at,
-        clock_snapshot,
-        events,
-    })
+    state.into_snapshot(entity_id, events, clock_snapshot)
 }
 
 #[cfg(test)]
@@ -932,7 +947,7 @@ mod tests {
 
         let outcome = store
             .change_status(ChangeStatusInput {
-                mile_id: snapshot.id.clone(),
+                mile_id: snapshot.id,
                 replica_id: replica,
                 author: "tester".into(),
                 message: Some("open".into()),
@@ -965,7 +980,7 @@ mod tests {
 
         let outcome = store
             .change_status(ChangeStatusInput {
-                mile_id: snapshot.id.clone(),
+                mile_id: snapshot.id,
                 replica_id: replica,
                 author: "tester".into(),
                 message: None,
@@ -997,7 +1012,7 @@ mod tests {
 
         let outcome = store
             .append_comment(AppendCommentInput {
-                mile_id: snapshot.id.clone(),
+                mile_id: snapshot.id,
                 replica_id: replica,
                 author: "tester".into(),
                 message: Some("comment".into()),
@@ -1056,7 +1071,7 @@ mod tests {
 
         let second = store
             .append_comment(AppendCommentInput {
-                mile_id: snapshot.id.clone(),
+                mile_id: snapshot.id,
                 replica_id: replica,
                 author: "tester".into(),
                 message: None,
@@ -1091,7 +1106,7 @@ mod tests {
 
         let outcome = store
             .update_labels(UpdateLabelsInput {
-                mile_id: snapshot.id.clone(),
+                mile_id: snapshot.id,
                 replica_id: replica,
                 author: "tester".into(),
                 message: Some("update labels".into()),

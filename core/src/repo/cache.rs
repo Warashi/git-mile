@@ -83,13 +83,13 @@ pub enum CacheNamespace {
 }
 
 impl CacheNamespace {
-    pub const ALL: [CacheNamespace; 6] = [
-        CacheNamespace::Issues,
-        CacheNamespace::Milestones,
-        CacheNamespace::Bridges,
-        CacheNamespace::Users,
-        CacheNamespace::Labels,
-        CacheNamespace::Identities,
+    pub const ALL: [Self; 6] = [
+        Self::Issues,
+        Self::Milestones,
+        Self::Bridges,
+        Self::Users,
+        Self::Labels,
+        Self::Identities,
     ];
 
     #[must_use]
@@ -99,21 +99,21 @@ impl CacheNamespace {
 
     const fn cf_name(self) -> &'static str {
         match self {
-            CacheNamespace::Issues => "issues",
-            CacheNamespace::Milestones => "milestones",
-            CacheNamespace::Bridges => "bridges",
-            CacheNamespace::Users => "users",
-            CacheNamespace::Labels => "labels",
-            CacheNamespace::Identities => "identities",
+            Self::Issues => "issues",
+            Self::Milestones => "milestones",
+            Self::Bridges => "bridges",
+            Self::Users => "users",
+            Self::Labels => "labels",
+            Self::Identities => "identities",
         }
     }
 
     const fn default_policy(self) -> CachePolicy {
         let ttl = match self {
-            CacheNamespace::Issues | CacheNamespace::Milestones | CacheNamespace::Bridges => {
+            Self::Issues | Self::Milestones | Self::Bridges => {
                 Duration::from_secs(60 * 60 * 24)
             }
-            CacheNamespace::Users | CacheNamespace::Labels | CacheNamespace::Identities => {
+            Self::Users | Self::Labels | Self::Identities => {
                 Duration::from_secs(60 * 60 * 72)
             }
         };
@@ -325,7 +325,7 @@ impl PersistentCache {
     ///
     /// # Errors
     ///
-    /// Returns an error when the cache directory cannot be prepared or when the RocksDB instance
+    /// Returns an error when the cache directory cannot be prepared or when the `RocksDB` instance
     /// fails to open with the requested column families.
     pub fn open(config: CacheConfig) -> Result<Self> {
         ensure_cache_directory(&config.path, config.version)?;
@@ -395,7 +395,7 @@ impl PersistentCache {
     ///
     /// # Errors
     ///
-    /// Returns an error when the generation information cannot be read from RocksDB or when the
+    /// Returns an error when the generation information cannot be read from `RocksDB` or when the
     /// current epoch time is unavailable.
     pub fn generation(&self, namespace: CacheNamespace) -> Result<CacheGenerationSnapshot> {
         self.inner
@@ -421,22 +421,19 @@ impl PersistentCacheInner {
 
         let cf = self.meta_cf()?;
         let key = generation_key(namespace);
-        let state = match self.db.get_cf(&cf, key.as_bytes())? {
-            Some(raw) => {
-                let record: GenerationRecord = serde_cbor::from_slice(&raw)?;
-                record.into_state()
-            }
-            None => {
-                let state = GenerationState {
-                    generation: 0,
-                    created_at: epoch_seconds()?,
-                    base_clock: None,
-                };
-                let record = GenerationRecord::from_state(self.version, &state);
-                let encoded = serde_cbor::to_vec(&record)?;
-                self.db.put_cf(&cf, key.as_bytes(), encoded)?;
-                state
-            }
+        let state = if let Some(raw) = self.db.get_cf(&cf, key.as_bytes())? {
+            let record: GenerationRecord = serde_cbor::from_slice(&raw)?;
+            record.into_state()
+        } else {
+            let state = GenerationState {
+                generation: 0,
+                created_at: epoch_seconds()?,
+                base_clock: None,
+            };
+            let record = GenerationRecord::from_state(self.version, &state);
+            let encoded = serde_cbor::to_vec(&record)?;
+            self.db.put_cf(&cf, key.as_bytes(), encoded)?;
+            state
         };
 
         if let Ok(mut guard) = self.generations.lock() {
@@ -527,54 +524,49 @@ impl CacheRepository for PersistentCache {
         namespace: CacheNamespace,
         entity_id: &EntityId,
     ) -> Result<CacheLoadOutcome<EntitySnapshot>> {
-        let cf = match self.db().cf_handle(namespace.cf_name()) {
-            Some(handle) => handle,
-            None => return Ok(CacheLoadOutcome::Miss),
+        let Some(cf) = self.db().cf_handle(namespace.cf_name()) else {
+            return Ok(CacheLoadOutcome::Miss);
         };
 
         let key = entity_key(entity_id);
-        let raw = match self.db().get_cf(&cf, key.as_bytes())? {
-            Some(value) => value,
-            None => return Ok(CacheLoadOutcome::Miss),
+        let Some(raw) = self.db().get_cf(&cf, key.as_bytes())? else {
+            return Ok(CacheLoadOutcome::Miss);
         };
 
-        match decode_entry(&raw) {
-            Ok(entry) => {
-                if entry.version != self.inner.version {
-                    let _ = self.db().delete_cf(&cf, key.as_bytes());
-                    return Ok(CacheLoadOutcome::Stale);
-                }
-
-                let generation_state = self.inner.current_generation(namespace)?;
-                if entry.generation < generation_state.generation {
-                    let _ = self.db().delete_cf(&cf, key.as_bytes());
-                    return Ok(CacheLoadOutcome::Stale);
-                }
-
-                let now = epoch_seconds()?;
-                if now > entry.expires_at {
-                    let _ = self.db().delete_cf(&cf, key.as_bytes());
-                    return Ok(CacheLoadOutcome::Stale);
-                }
-
-                let checksum = crc32fast::hash(&entry.payload);
-                if checksum != entry.checksum {
-                    let _ = self.db().delete_cf(&cf, key.as_bytes());
-                    return Ok(CacheLoadOutcome::Stale);
-                }
-
-                let snapshot: EntitySnapshot = serde_cbor::from_slice(&entry.payload)?;
-                if snapshot.entity_id != *entity_id {
-                    let _ = self.db().delete_cf(&cf, key.as_bytes());
-                    return Ok(CacheLoadOutcome::Stale);
-                }
-
-                Ok(CacheLoadOutcome::Hit(snapshot))
-            }
-            Err(_) => {
+        if let Ok(entry) = decode_entry(&raw) {
+            if entry.version != self.inner.version {
                 let _ = self.db().delete_cf(&cf, key.as_bytes());
-                Ok(CacheLoadOutcome::Stale)
+                return Ok(CacheLoadOutcome::Stale);
             }
+
+            let generation_state = self.inner.current_generation(namespace)?;
+            if entry.generation < generation_state.generation {
+                let _ = self.db().delete_cf(&cf, key.as_bytes());
+                return Ok(CacheLoadOutcome::Stale);
+            }
+
+            let now = epoch_seconds()?;
+            if now > entry.expires_at {
+                let _ = self.db().delete_cf(&cf, key.as_bytes());
+                return Ok(CacheLoadOutcome::Stale);
+            }
+
+            let checksum = crc32fast::hash(&entry.payload);
+            if checksum != entry.checksum {
+                let _ = self.db().delete_cf(&cf, key.as_bytes());
+                return Ok(CacheLoadOutcome::Stale);
+            }
+
+            let snapshot: EntitySnapshot = serde_cbor::from_slice(&entry.payload)?;
+            if snapshot.entity_id != *entity_id {
+                let _ = self.db().delete_cf(&cf, key.as_bytes());
+                return Ok(CacheLoadOutcome::Stale);
+            }
+
+            Ok(CacheLoadOutcome::Hit(snapshot))
+        } else {
+            let _ = self.db().delete_cf(&cf, key.as_bytes());
+            Ok(CacheLoadOutcome::Stale)
         }
     }
 
@@ -584,9 +576,8 @@ impl CacheRepository for PersistentCache {
         entity_id: &EntityId,
         snapshot: &EntitySnapshot,
     ) -> Result<()> {
-        let cf = match self.db().cf_handle(namespace.cf_name()) {
-            Some(handle) => handle,
-            None => return Ok(()),
+        let Some(cf) = self.db().cf_handle(namespace.cf_name()) else {
+            return Ok(());
         };
 
         let ttl = self.policy(namespace).ttl;
@@ -641,7 +632,7 @@ impl CacheRepository for PersistentCache {
 
         let generation = self
             .inner
-            .bump_generation(namespace, Some(latest_clock.clone()))?;
+            .bump_generation(namespace, Some(latest_clock))?;
         self.inner
             .append_journal_entry(namespace, entity_id, &generation, inserted)?;
 

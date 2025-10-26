@@ -170,7 +170,7 @@ impl McpHarness {
                 )?;
                 Ok(Response::Result(info))
             }
-            other => Ok(other),
+            Response::Error(error) => Ok(Response::Error(error)),
         }
     }
 
@@ -285,7 +285,7 @@ impl McpHarness {
                 (Some(id), _, Some(error)) if id == expected_id => {
                     return Ok(Response::Error(error.clone()));
                 }
-                _ => continue,
+                _ => {}
             }
         }
     }

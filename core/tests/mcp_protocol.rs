@@ -56,7 +56,7 @@ fn reference_session_json_is_valid() {
         .iter()
         .filter_map(|tool| tool.get("name").and_then(Value::as_str))
         .collect::<Vec<_>>();
-    tool_names.sort();
+    tool_names.sort_unstable();
     assert_eq!(
         tool_names,
         vec!["git_mile.list", "git_mile.show"],

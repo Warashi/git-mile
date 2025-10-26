@@ -39,7 +39,8 @@ pub use repo::{
 
 pub const APP_NAME: &str = "git-mile";
 
-pub fn app_version() -> &'static str {
+#[must_use]
+pub const fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 

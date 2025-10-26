@@ -9,10 +9,12 @@ use crate::error::{Error, Result};
 pub struct ReplicaId(String);
 
 impl ReplicaId {
+    #[must_use]
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -37,18 +39,21 @@ pub struct LamportTimestamp {
 }
 
 impl LamportTimestamp {
-    pub fn new(counter: u64, replica_id: ReplicaId) -> Self {
+    #[must_use]
+    pub const fn new(counter: u64, replica_id: ReplicaId) -> Self {
         Self {
             counter,
             replica_id,
         }
     }
 
-    pub fn counter(&self) -> u64 {
+    #[must_use]
+    pub const fn counter(&self) -> u64 {
         self.counter
     }
 
-    pub fn replica_id(&self) -> &ReplicaId {
+    #[must_use]
+    pub const fn replica_id(&self) -> &ReplicaId {
         &self.replica_id
     }
 }
@@ -81,35 +86,41 @@ pub struct LamportClock {
 }
 
 impl LamportClock {
-    pub fn new(replica_id: ReplicaId) -> Self {
+    #[must_use]
+    pub const fn new(replica_id: ReplicaId) -> Self {
         Self {
             counter: 0,
             replica_id,
         }
     }
 
-    pub fn with_state(replica_id: ReplicaId, counter: u64) -> Self {
+    #[must_use]
+    pub const fn with_state(replica_id: ReplicaId, counter: u64) -> Self {
         Self {
             counter,
             replica_id,
         }
     }
 
-    pub fn from_snapshot(snapshot: LamportTimestamp) -> Self {
+    #[must_use]
+    pub fn from_snapshot(snapshot: &LamportTimestamp) -> Self {
         Self {
             counter: snapshot.counter(),
             replica_id: snapshot.replica_id().clone(),
         }
     }
 
-    pub fn counter(&self) -> u64 {
+    #[must_use]
+    pub const fn counter(&self) -> u64 {
         self.counter
     }
 
-    pub fn replica_id(&self) -> &ReplicaId {
+    #[must_use]
+    pub const fn replica_id(&self) -> &ReplicaId {
         &self.replica_id
     }
 
+    #[must_use]
     pub fn snapshot(&self) -> LamportTimestamp {
         LamportTimestamp::new(self.counter, self.replica_id.clone())
     }
@@ -139,14 +150,13 @@ mod tests {
 
     #[test]
     fn tick_advances_clock_and_retains_replica() {
-        let replica = ReplicaId::new("replica-a");
-        let mut clock = LamportClock::new(replica.clone());
+        let mut clock = LamportClock::new(ReplicaId::new("replica-a"));
 
         let ts1 = clock.tick().expect("tick should succeed");
         let ts2 = clock.tick().expect("tick should succeed");
 
-        assert_eq!(ts1.replica_id(), &replica);
-        assert_eq!(ts2.replica_id(), &replica);
+        assert_eq!(ts1.replica_id().as_str(), "replica-a");
+        assert_eq!(ts2.replica_id().as_str(), "replica-a");
         assert!(ts1 < ts2);
         assert_eq!(ts1.counter(), 1);
         assert_eq!(ts2.counter(), 2);
@@ -154,8 +164,7 @@ mod tests {
 
     #[test]
     fn merge_advances_to_remote_counter_when_greater() {
-        let replica = ReplicaId::new("replica-a");
-        let mut clock = LamportClock::with_state(replica.clone(), 2);
+        let mut clock = LamportClock::with_state(ReplicaId::new("replica-a"), 2);
 
         let remote_timestamp = LamportTimestamp::new(5, ReplicaId::new("other"));
 
@@ -163,13 +172,12 @@ mod tests {
 
         assert_eq!(merged.counter(), 5);
         assert_eq!(clock.counter(), 5);
-        assert_eq!(merged.replica_id(), &replica);
+        assert_eq!(merged.replica_id().as_str(), "replica-a");
     }
 
     #[test]
     fn merge_does_not_rewind_clock() {
-        let replica = ReplicaId::new("replica-a");
-        let mut clock = LamportClock::with_state(replica.clone(), 10);
+        let mut clock = LamportClock::with_state(ReplicaId::new("replica-a"), 10);
 
         let remote_timestamp = LamportTimestamp::new(7, ReplicaId::new("other"));
 

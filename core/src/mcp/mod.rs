@@ -422,8 +422,7 @@ fn map_initialize_error(err: &ServerInitializeError) -> Error {
 fn handle_wait_result(result: std::result::Result<QuitReason, JoinError>) -> Result<()> {
     match result {
         Ok(QuitReason::Closed | QuitReason::Cancelled) => Ok(()),
-        Ok(QuitReason::JoinError(err)) => Err(join_error_to_core(&err)),
-        Err(err) => Err(join_error_to_core(&err)),
+        Ok(QuitReason::JoinError(err)) | Err(err) => Err(join_error_to_core(&err)),
     }
 }
 
@@ -468,7 +467,7 @@ pub async fn run_stdio_server(config: StdioServerConfig) -> Result<()> {
         tokio::pin!(waiting);
         tokio::select! {
             result = &mut waiting => handle_wait_result(result)?,
-            _ = time::sleep(idle) => {
+            () = time::sleep(idle) => {
                 info!("idle timeout reached; shutting down MCP server");
                 cancel.cancel();
                 let result = waiting.await;

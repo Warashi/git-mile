@@ -37,9 +37,9 @@ pub enum IssueStatus {
 impl std::fmt::Display for IssueStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let label = match self {
-            IssueStatus::Draft => "draft",
-            IssueStatus::Open => "open",
-            IssueStatus::Closed => "closed",
+            Self::Draft => "draft",
+            Self::Open => "open",
+            Self::Closed => "closed",
         };
         f.write_str(label)
     }
@@ -138,6 +138,185 @@ pub enum IssueEventKind {
         event_type: Option<String>,
         raw: Value,
     },
+}
+
+#[derive(Debug)]
+enum DecodedIssueEvent {
+    Known(StoredEventPayload),
+    Unknown {
+        version: Option<u8>,
+        event_type: Option<String>,
+        raw: Value,
+    },
+}
+
+fn decode_issue_event(data: &[u8]) -> Result<DecodedIssueEvent> {
+    let value: Value = serde_json::from_slice(data)?;
+    let version = value
+        .get("version")
+        .and_then(Value::as_u64)
+        .and_then(|v| u8::try_from(v).ok());
+    let event_type = value
+        .get("type")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    match serde_json::from_value::<StoredEvent>(value.clone()) {
+        Ok(record) => Ok(DecodedIssueEvent::Known(record.payload)),
+        Err(_) => Ok(DecodedIssueEvent::Unknown {
+            version,
+            event_type,
+            raw: value,
+        }),
+    }
+}
+
+#[derive(Default)]
+struct IssueState {
+    title: Option<String>,
+    description: Option<String>,
+    status: Option<IssueStatus>,
+    labels: BTreeSet<LabelId>,
+    comments: Vec<IssueComment>,
+    comment_ids: BTreeSet<CommentId>,
+}
+
+impl IssueState {
+    fn apply_event(&mut self, event: &IssueEvent) {
+        match &event.payload {
+            IssueEventKind::Created(data) => {
+                self.title = Some(data.title.clone());
+                self.description.clone_from(&data.description);
+                self.status = Some(data.status);
+                self.labels.extend(data.labels.iter().cloned());
+                if let Some(initial_comment) = &data.initial_comment
+                    && self.comment_ids.insert(initial_comment.comment_id)
+                {
+                    self.comments.push(IssueComment {
+                        id: initial_comment.comment_id,
+                        body: initial_comment.body.clone(),
+                        author: event.metadata.author.clone(),
+                        created_at: event.timestamp.clone(),
+                        edited_at: None,
+                    });
+                }
+            }
+            IssueEventKind::StatusChanged(data) => {
+                self.status = Some(data.status);
+            }
+            IssueEventKind::CommentAppended(data) => {
+                if self.comment_ids.insert(data.comment_id) {
+                    self.comments.push(IssueComment {
+                        id: data.comment_id,
+                        body: data.body.clone(),
+                        author: event.metadata.author.clone(),
+                        created_at: event.timestamp.clone(),
+                        edited_at: None,
+                    });
+                }
+            }
+            IssueEventKind::LabelAttached(data) => {
+                self.labels.insert(data.label.clone());
+            }
+            IssueEventKind::LabelDetached(data) => {
+                self.labels.remove(&data.label);
+            }
+            IssueEventKind::Unknown { .. } => {}
+        }
+    }
+
+    fn build_snapshot(
+        self,
+        entity_id: EntityId,
+        events: Vec<IssueEvent>,
+        clock_snapshot: LamportTimestamp,
+    ) -> Result<IssueSnapshot> {
+        let title = self.title.ok_or_else(|| {
+            Error::validation(format!(
+                "issue {entity_id} missing creation event in history"
+            ))
+        })?;
+        let status = self.status.ok_or_else(|| {
+            Error::validation(format!(
+                "issue {entity_id} missing resolved status in history"
+            ))
+        })?;
+
+        let created_at = events
+            .first()
+            .map(|event| event.timestamp.clone())
+            .ok_or_else(|| Error::validation("issue history missing creation timestamp"))?;
+        let updated_at = events
+            .last()
+            .map_or_else(|| created_at.clone(), |event| event.timestamp.clone());
+
+        Ok(IssueSnapshot {
+            id: entity_id,
+            title,
+            description: self.description,
+            status,
+            labels: self.labels,
+            comments: self.comments,
+            created_at,
+            updated_at,
+            clock_snapshot,
+            events,
+        })
+    }
+}
+
+fn collect_issue_events(
+    entity_id: &EntityId,
+    operations: Vec<Operation>,
+    blob_lookup: &HashMap<BlobRef, OperationBlob>,
+) -> Result<Vec<IssueEvent>> {
+    let mut events = Vec::with_capacity(operations.len());
+    for operation in operations {
+        let blob = blob_lookup.get(&operation.payload).ok_or_else(|| {
+            Error::validation(format!(
+                "missing blob for operation payload {}",
+                operation.payload
+            ))
+        })?;
+
+        let decoded = decode_issue_event(blob.data())?;
+        let timestamp = LamportTimestamp::from(operation.id.clone());
+        let metadata = operation.metadata.clone();
+
+        let payload = match decoded {
+            DecodedIssueEvent::Known(payload) => match payload {
+                StoredEventPayload::Created(data) => IssueEventKind::Created(data),
+                StoredEventPayload::StatusChanged(data) => IssueEventKind::StatusChanged(data),
+                StoredEventPayload::CommentAppended(data) => IssueEventKind::CommentAppended(data),
+                StoredEventPayload::LabelAttached(data) => IssueEventKind::LabelAttached(data),
+                StoredEventPayload::LabelDetached(data) => IssueEventKind::LabelDetached(data),
+            },
+            DecodedIssueEvent::Unknown {
+                version,
+                event_type,
+                raw,
+            } => IssueEventKind::Unknown {
+                version,
+                event_type,
+                raw,
+            },
+        };
+
+        events.push(IssueEvent {
+            id: operation.id,
+            timestamp,
+            metadata,
+            payload,
+        });
+    }
+
+    if events.is_empty() {
+        return Err(Error::validation(format!(
+            "issue {entity_id} has no events"
+        )));
+    }
+
+    Ok(events)
 }
 
 /// Snapshot representation of an issue comment.
@@ -314,7 +493,7 @@ impl IssueStore {
             .collect();
 
         let entity_id = EntityId::new();
-        let mut clock = LamportClock::new(replica_id.clone());
+        let mut clock = LamportClock::new(replica_id);
         let (operation, blob) = build_operation(
             &mut clock,
             vec![],
@@ -416,7 +595,7 @@ impl IssueStore {
             });
         }
 
-        let mut clock = LamportClock::with_state(replica_id.clone(), counter);
+        let mut clock = LamportClock::with_state(replica_id, counter);
         let event_payload = IssueEventKind::StatusChanged(IssueStatusChanged { status });
         let (operation, blob) = build_operation(&mut clock, heads, event_payload, author, message)?;
 
@@ -480,7 +659,7 @@ impl IssueStore {
             None => Uuid::new_v4(),
         };
 
-        let mut clock = LamportClock::with_state(replica_id.clone(), counter);
+        let mut clock = LamportClock::with_state(replica_id, counter);
         let (operation, blob) = build_operation(
             &mut clock,
             heads,
@@ -555,7 +734,7 @@ impl IssueStore {
             });
         }
 
-        let mut clock = LamportClock::with_state(replica_id.clone(), counter);
+        let mut clock = LamportClock::with_state(replica_id, counter);
         let mut parents = heads;
         let mut operations = Vec::new();
         let mut blobs = Vec::new();
@@ -630,7 +809,8 @@ fn build_operation(
     let op_id = OperationId::new(timestamp);
     let metadata = OperationMetadata::new(author, message);
 
-    let operation = Operation::new(op_id.clone(), parents, blob.digest().clone(), metadata);
+    let payload = blob.digest().clone();
+    let operation = Operation::new(op_id, parents, payload, metadata);
 
     Ok((operation, blob))
 }
@@ -670,168 +850,13 @@ fn build_issue_snapshot(entity: EntitySnapshot) -> Result<IssueSnapshot> {
         .map(|blob| (blob.digest().clone(), blob))
         .collect();
 
-    #[derive(Debug)]
-    enum Decoded {
-        Known {
-            payload: StoredEventPayload,
-        },
-        Unknown {
-            version: Option<u8>,
-            event_type: Option<String>,
-            raw: Value,
-        },
-    }
-
-    fn decode_event(data: &[u8]) -> Result<Decoded> {
-        let value: Value = serde_json::from_slice(data)?;
-        let version = value
-            .get("version")
-            .and_then(Value::as_u64)
-            .and_then(|v| u8::try_from(v).ok());
-        let event_type = value
-            .get("type")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-
-        match serde_json::from_value::<StoredEvent>(value.clone()) {
-            Ok(record) => Ok(Decoded::Known {
-                payload: record.payload,
-            }),
-            Err(_) => Ok(Decoded::Unknown {
-                version,
-                event_type,
-                raw: value,
-            }),
-        }
-    }
-
-    let mut events = Vec::with_capacity(operations.len());
-    for operation in operations {
-        let blob = blob_lookup.get(&operation.payload).ok_or_else(|| {
-            Error::validation(format!(
-                "missing blob for operation payload {}",
-                operation.payload
-            ))
-        })?;
-
-        let decoded = decode_event(blob.data())?;
-        let timestamp = LamportTimestamp::from(operation.id.clone());
-        let metadata = operation.metadata.clone();
-
-        let payload = match decoded {
-            Decoded::Known { payload, .. } => match payload {
-                StoredEventPayload::Created(data) => IssueEventKind::Created(data),
-                StoredEventPayload::StatusChanged(data) => IssueEventKind::StatusChanged(data),
-                StoredEventPayload::CommentAppended(data) => IssueEventKind::CommentAppended(data),
-                StoredEventPayload::LabelAttached(data) => IssueEventKind::LabelAttached(data),
-                StoredEventPayload::LabelDetached(data) => IssueEventKind::LabelDetached(data),
-            },
-            Decoded::Unknown {
-                version,
-                event_type,
-                raw,
-            } => IssueEventKind::Unknown {
-                version,
-                event_type,
-                raw,
-            },
-        };
-
-        events.push(IssueEvent {
-            id: operation.id,
-            timestamp,
-            metadata,
-            payload,
-        });
-    }
-
-    if events.is_empty() {
-        return Err(Error::validation(format!(
-            "issue {entity_id} has no events"
-        )));
-    }
-
-    let mut title: Option<String> = None;
-    let mut description: Option<String> = None;
-    let mut status: Option<IssueStatus> = None;
-    let mut labels: BTreeSet<LabelId> = BTreeSet::new();
-    let mut comments: Vec<IssueComment> = Vec::new();
-    let mut comment_ids: BTreeSet<CommentId> = BTreeSet::new();
-
+    let events = collect_issue_events(&entity_id, operations, &blob_lookup)?;
+    let mut state = IssueState::default();
     for event in &events {
-        match &event.payload {
-            IssueEventKind::Created(data) => {
-                title = Some(data.title.clone());
-                description = data.description.clone();
-                status = Some(data.status);
-                labels.extend(data.labels.iter().cloned());
-                if let Some(initial_comment) = &data.initial_comment
-                    && comment_ids.insert(initial_comment.comment_id)
-                {
-                    comments.push(IssueComment {
-                        id: initial_comment.comment_id,
-                        body: initial_comment.body.clone(),
-                        author: event.metadata.author.clone(),
-                        created_at: event.timestamp.clone(),
-                        edited_at: None,
-                    });
-                }
-            }
-            IssueEventKind::StatusChanged(data) => {
-                status = Some(data.status);
-            }
-            IssueEventKind::CommentAppended(data) => {
-                if comment_ids.insert(data.comment_id) {
-                    comments.push(IssueComment {
-                        id: data.comment_id,
-                        body: data.body.clone(),
-                        author: event.metadata.author.clone(),
-                        created_at: event.timestamp.clone(),
-                        edited_at: None,
-                    });
-                }
-            }
-            IssueEventKind::LabelAttached(data) => {
-                labels.insert(data.label.clone());
-            }
-            IssueEventKind::LabelDetached(data) => {
-                labels.remove(&data.label);
-            }
-            IssueEventKind::Unknown { .. } => {}
-        }
+        state.apply_event(event);
     }
 
-    let title = title.ok_or_else(|| {
-        Error::validation(format!(
-            "issue {entity_id} missing creation event in history"
-        ))
-    })?;
-    let status = status.ok_or_else(|| {
-        Error::validation(format!(
-            "issue {entity_id} missing resolved status in history"
-        ))
-    })?;
-
-    let created_at = events
-        .first()
-        .map(|event| event.timestamp.clone())
-        .ok_or_else(|| Error::validation("issue history missing creation timestamp"))?;
-    let updated_at = events
-        .last()
-        .map_or_else(|| created_at.clone(), |event| event.timestamp.clone());
-
-    Ok(IssueSnapshot {
-        id: entity_id,
-        title,
-        description,
-        status,
-        labels,
-        comments,
-        created_at,
-        updated_at,
-        clock_snapshot,
-        events,
-    })
+    state.build_snapshot(entity_id, events, clock_snapshot)
 }
 
 #[cfg(test)]
@@ -855,7 +880,7 @@ mod tests {
 
         let snapshot = store
             .create_issue(CreateIssueInput {
-                replica_id: replica.clone(),
+                replica_id: replica,
                 author: "tester".into(),
                 message: Some("create".into()),
                 title: "Initial Issue".into(),
@@ -886,7 +911,7 @@ mod tests {
 
         let snapshot = store
             .create_issue(CreateIssueInput {
-                replica_id: replica.clone(),
+                replica_id: replica,
                 author: "tester".into(),
                 message: None,
                 title: "Initial Issue".into(),
@@ -939,8 +964,8 @@ mod tests {
 
         let outcome = store
             .change_status(IssueChangeStatusInput {
-                issue_id: snapshot.id.clone(),
-                replica_id: replica.clone(),
+                issue_id: snapshot.id,
+                replica_id: replica,
                 author: "tester".into(),
                 message: Some("open".into()),
                 status: IssueStatus::Open,
@@ -972,8 +997,8 @@ mod tests {
 
         let outcome = store
             .change_status(IssueChangeStatusInput {
-                issue_id: snapshot.id.clone(),
-                replica_id: replica.clone(),
+                issue_id: snapshot.id,
+                replica_id: replica,
                 author: "tester".into(),
                 message: None,
                 status: IssueStatus::Open,
@@ -1004,8 +1029,8 @@ mod tests {
 
         let outcome = store
             .append_comment(AppendIssueCommentInput {
-                issue_id: snapshot.id.clone(),
-                replica_id: replica.clone(),
+                issue_id: snapshot.id,
+                replica_id: replica,
                 author: "tester".into(),
                 message: Some("comment".into()),
                 comment_id: None,
@@ -1063,8 +1088,8 @@ mod tests {
 
         let second = store
             .append_comment(AppendIssueCommentInput {
-                issue_id: snapshot.id.clone(),
-                replica_id: replica.clone(),
+                issue_id: snapshot.id,
+                replica_id: replica,
                 author: "tester".into(),
                 message: None,
                 comment_id: Some(comment_id),
@@ -1098,8 +1123,8 @@ mod tests {
 
         let outcome = store
             .update_labels(UpdateIssueLabelsInput {
-                issue_id: snapshot.id.clone(),
-                replica_id: replica.clone(),
+                issue_id: snapshot.id,
+                replica_id: replica,
                 author: "tester".into(),
                 message: Some("update labels".into()),
                 add: vec!["beta".into(), "gamma".into()],
@@ -1144,7 +1169,7 @@ mod tests {
         let outcome = store
             .update_labels(UpdateIssueLabelsInput {
                 issue_id: snapshot.id.clone(),
-                replica_id: replica.clone(),
+                replica_id: replica,
                 author: "tester".into(),
                 message: None,
                 add: vec!["alpha".into()],
@@ -1184,7 +1209,7 @@ mod tests {
         let store = IssueStore::open(temp.path()).expect("open issue store");
         let issue = store
             .create_issue(CreateIssueInput {
-                replica_id: replica.clone(),
+                replica_id: replica,
                 author: "tester <tester@example.com>".into(),
                 message: None,
                 title: "Initial Issue".into(),

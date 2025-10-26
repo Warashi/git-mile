@@ -22,10 +22,11 @@ fn issue_label_updates_apply_additions_and_removals() {
         })
         .expect("create issue");
 
+    let issue_id = snapshot.id;
     let outcome = store
         .update_labels(UpdateIssueLabelsInput {
-            issue_id: snapshot.id.clone(),
-            replica_id: replica.clone(),
+            issue_id,
+            replica_id: replica,
             author: "tester".into(),
             message: Some("update labels".into()),
             add: vec!["gamma".into(), "beta".into()],
@@ -45,11 +46,10 @@ fn issue_label_updates_apply_additions_and_removals() {
 fn milestone_label_events_capture_history() {
     let temp = tempfile::tempdir().expect("create temp dir");
     let store = MileStore::open(temp.path()).expect("open milestone store");
-    let replica = ReplicaId::new("milestone-labels");
 
     let snapshot = store
         .create_mile(CreateMileInput {
-            replica_id: replica.clone(),
+            replica_id: ReplicaId::new("milestone-labels"),
             author: "tester".into(),
             message: Some("create".into()),
             title: "Label Milestone".into(),
@@ -60,10 +60,11 @@ fn milestone_label_events_capture_history() {
         })
         .expect("create milestone");
 
+    let mile_id = snapshot.id;
     store
         .update_labels(UpdateLabelsInput {
-            mile_id: snapshot.id.clone(),
-            replica_id: replica.clone(),
+            mile_id: mile_id.clone(),
+            replica_id: ReplicaId::new("milestone-labels"),
             author: "tester".into(),
             message: Some("add labels".into()),
             add: vec!["alpha".into(), "beta".into()],
@@ -73,8 +74,8 @@ fn milestone_label_events_capture_history() {
 
     store
         .update_labels(UpdateLabelsInput {
-            mile_id: snapshot.id.clone(),
-            replica_id: replica.clone(),
+            mile_id: mile_id.clone(),
+            replica_id: ReplicaId::new("milestone-labels"),
             author: "tester".into(),
             message: Some("remove label".into()),
             add: vec![],
@@ -86,7 +87,7 @@ fn milestone_label_events_capture_history() {
 
     let service = MilestoneService::open(temp.path()).expect("open milestone service");
     let details = service
-        .get_with_comments(&snapshot.id)
+        .get_with_comments(&mile_id)
         .expect("load milestone details");
 
     assert_eq!(details.labels.len(), 1);

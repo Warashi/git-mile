@@ -24,8 +24,9 @@ impl RepositoryLockGuard {
     fn unlock(&self) {
         if let Err(err) = self.file.unlock() {
             eprintln!(
-                "warning: failed to release repository lock {:?} ({:?}): {}",
-                self.path, self.mode, err
+                "warning: failed to release repository lock {} ({:?}): {err}",
+                self.path.display(),
+                self.mode
             );
         }
     }

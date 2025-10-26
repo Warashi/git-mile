@@ -124,7 +124,7 @@ impl MilestoneService {
             author: payload.author,
             message: payload.message,
             add: payload.add.clone(),
-            remove: payload.remove.clone(),
+            remove: payload.remove,
         })?;
         let details = MilestoneDetails::from_snapshot(outcome.snapshot);
         Ok(LabelUpdateResult {

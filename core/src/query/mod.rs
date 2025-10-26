@@ -478,10 +478,7 @@ impl QueryEngine {
         let mut items: Vec<R> = records.into_iter().collect();
 
         if let Some(expr) = &request.filter {
-            items = items
-                .into_iter()
-                .filter(|record| self.evaluate(record, expr).unwrap_or(false))
-                .collect();
+            items.retain(|record| self.evaluate(record, expr).unwrap_or(false));
         }
 
         if !request.sort.is_empty() {

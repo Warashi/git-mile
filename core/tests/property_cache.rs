@@ -27,10 +27,9 @@ fn operation_strategy() -> impl Strategy<Value = CacheOp> {
 }
 
 fn sample_snapshot(entity_id: &EntityId) -> EntitySnapshot {
-    let replica = ReplicaId::new("property-cache");
-    let mut clock = LamportClock::new(replica.clone());
+    let mut clock = LamportClock::new(ReplicaId::new("property-cache"));
     let ts = clock.tick().expect("tick clock");
-    let op_id = OperationId::new(ts.clone());
+    let op_id = OperationId::new(ts);
     let op = Operation::new(
         op_id.clone(),
         vec![],

@@ -286,7 +286,7 @@ mod tests {
         let op2 = sample_operation(&mut clock, vec![op1.id.clone()], &blob2);
 
         let pack = OperationPack {
-            entity_id: entity.clone(),
+            entity_id: entity,
             clock_snapshot: clock.snapshot(),
             operations: vec![op2, op1],
             content_blobs: vec![blob1, blob2],

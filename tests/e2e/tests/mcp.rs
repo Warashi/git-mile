@@ -95,7 +95,7 @@ fn show_flow_matches_expected_id() -> Result<()> {
         "git_mile.show",
         json!({
             "entity": "milestone",
-            "id": milestone_id.clone()
+            "id": milestone_id
         }),
     )?;
 
