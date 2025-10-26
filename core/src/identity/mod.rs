@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::mem;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -242,11 +243,11 @@ impl IdentityStore {
 
         let (operation, blob) = build_operation(
             &mut clock,
-            parents.clone(),
+            mem::take(&mut parents),
             IdentityEventKind::Created(IdentityCreated {
                 display_name: display_name.clone(),
                 email: email.clone(),
-                login: login.clone(),
+                login,
                 initial_signature: initial_signature.clone(),
             }),
             author.clone(),
@@ -262,7 +263,7 @@ impl IdentityStore {
                 .unwrap_or_else(|| format!("{display_name} <{email}>"));
             let (operation, blob) = build_operation(
                 &mut clock,
-                parents.clone(),
+                mem::take(&mut parents),
                 IdentityEventKind::Adopted(IdentityAdopted {
                     replica_id: replica_id.clone(),
                     signature,
@@ -278,10 +279,8 @@ impl IdentityStore {
         for protection in protections {
             let (operation, blob) = build_operation(
                 &mut clock,
-                parents.clone(),
-                IdentityEventKind::ProtectionAdded(IdentityProtectionAdded {
-                    protection: protection.clone(),
-                }),
+                mem::take(&mut parents),
+                IdentityEventKind::ProtectionAdded(IdentityProtectionAdded { protection }),
                 author.clone(),
                 message.clone(),
             )?;
@@ -362,7 +361,7 @@ impl IdentityStore {
             &mut clock,
             heads,
             IdentityEventKind::Adopted(IdentityAdopted {
-                replica_id: replica_id.clone(),
+                replica_id,
                 signature,
             }),
             author,
@@ -428,9 +427,7 @@ impl IdentityStore {
         let (operation, blob) = build_operation(
             &mut clock,
             heads,
-            IdentityEventKind::ProtectionAdded(IdentityProtectionAdded {
-                protection: protection.clone(),
-            }),
+            IdentityEventKind::ProtectionAdded(IdentityProtectionAdded { protection }),
             author,
             message,
         )?;
