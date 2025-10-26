@@ -48,6 +48,7 @@ pub struct StdioServerConfig {
 }
 
 impl StdioServerConfig {
+    #[must_use]
     pub fn new(repo_path: PathBuf) -> Self {
         Self {
             repo_path,
@@ -56,11 +57,13 @@ impl StdioServerConfig {
         }
     }
 
+    #[must_use]
     pub fn with_handshake_timeout(mut self, timeout: Duration) -> Self {
         self.handshake_timeout = timeout;
         self
     }
 
+    #[must_use]
     pub fn with_idle_shutdown(mut self, timeout: Option<Duration>) -> Self {
         self.idle_shutdown = timeout;
         self
@@ -73,7 +76,8 @@ struct GitMileServer {
 }
 
 impl GitMileServer {
-    fn new(repo_path: PathBuf) -> Self {
+    #[must_use]
+    const fn new(repo_path: PathBuf) -> Self {
         Self { repo_path }
     }
 
@@ -83,9 +87,9 @@ impl GitMileServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         let args: ListToolArgs = parse_arguments(arguments)?;
         let repo = self.repo_path.clone();
-        let payload = task::spawn_blocking(move || list_entities(repo, args))
+        let payload = task::spawn_blocking(move || list_entities(&repo, args))
             .await
-            .map_err(map_join_error)?
+            .map_err(|err| map_join_error(&err))?
             .map_err(map_error_to_mcp)?;
         let content = Content::json(payload)?;
         Ok(CallToolResult::success(vec![content]))
@@ -97,9 +101,9 @@ impl GitMileServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         let args: ShowToolArgs = parse_arguments(arguments)?;
         let repo = self.repo_path.clone();
-        let value = task::spawn_blocking(move || show_entity(repo, args))
+        let value = task::spawn_blocking(move || show_entity(&repo, args))
             .await
-            .map_err(map_join_error)?
+            .map_err(|err| map_join_error(&err))?
             .map_err(map_error_to_mcp)?;
         let content = Content::json(value)?;
         Ok(CallToolResult::success(vec![content]))
@@ -237,7 +241,7 @@ struct ListPayload {
     next_cursor: Option<String>,
 }
 
-fn list_entities(repo_path: PathBuf, args: ListToolArgs) -> Result<ListPayload> {
+fn list_entities(repo_path: &Path, args: ListToolArgs) -> Result<ListPayload> {
     let ListToolArgs {
         entity,
         filter,
@@ -257,29 +261,29 @@ fn list_entities(repo_path: PathBuf, args: ListToolArgs) -> Result<ListPayload> 
     }
     match entity {
         EntityKind::Milestone => {
-            let response = execute_milestone_query(&repo_path, &schema, &request)?;
+            let response = execute_milestone_query(repo_path, &schema, &request)?;
             to_list_payload(response)
         }
         EntityKind::Issue => {
-            let response = execute_issue_query(&repo_path, &schema, &request)?;
+            let response = execute_issue_query(repo_path, &schema, &request)?;
             to_list_payload(response)
         }
     }
 }
 
-fn show_entity(repo_path: PathBuf, args: ShowToolArgs) -> Result<Value> {
+fn show_entity(repo_path: &Path, args: ShowToolArgs) -> Result<Value> {
     let ShowToolArgs { entity, id } = args;
     let entity_id = EntityId::from_str(&id)
         .map_err(|err| Error::validation(format!("invalid entity id '{id}': {err}")))?;
     match entity {
         EntityKind::Milestone => {
-            let service = MilestoneService::open_with_mode(&repo_path, LockMode::Read)?;
+            let service = MilestoneService::open_with_mode(repo_path, LockMode::Read)?;
             let mile_id: MileId = entity_id;
             let details = service.get_with_comments(&mile_id)?;
             Ok(to_value(details)?)
         }
         EntityKind::Issue => {
-            let service = IssueService::open_with_mode(&repo_path, LockMode::Read)?;
+            let service = IssueService::open_with_mode(repo_path, LockMode::Read)?;
             let issue_id: IssueId = entity_id;
             let details = service.get_with_comments(&issue_id)?;
             Ok(to_value(details)?)
@@ -296,7 +300,7 @@ fn execute_milestone_query(
     let engine = QueryEngine::new(schema.clone());
     engine
         .execute(records, request, None)
-        .map_err(map_query_error)
+        .map_err(|err| map_query_error(&err))
 }
 
 fn execute_issue_query(
@@ -308,7 +312,7 @@ fn execute_issue_query(
     let engine = QueryEngine::new(schema.clone());
     engine
         .execute(records, request, None)
-        .map_err(map_query_error)
+        .map_err(|err| map_query_error(&err))
 }
 
 fn load_milestone_details(repo: &Path) -> Result<Vec<MilestoneDetails>> {
@@ -405,11 +409,11 @@ fn map_error_to_mcp(err: Error) -> McpError {
     }
 }
 
-fn map_query_error(err: QueryError) -> Error {
+fn map_query_error(err: &QueryError) -> Error {
     Error::validation(err.to_string())
 }
 
-fn map_initialize_error(err: ServerInitializeError) -> Error {
+fn map_initialize_error(err: &ServerInitializeError) -> Error {
     Error::Io(io::Error::other(format!(
         "failed to initialize MCP server: {err}"
     )))
@@ -418,16 +422,16 @@ fn map_initialize_error(err: ServerInitializeError) -> Error {
 fn handle_wait_result(result: std::result::Result<QuitReason, JoinError>) -> Result<()> {
     match result {
         Ok(QuitReason::Closed | QuitReason::Cancelled) => Ok(()),
-        Ok(QuitReason::JoinError(err)) => Err(join_error_to_core(err)),
-        Err(err) => Err(join_error_to_core(err)),
+        Ok(QuitReason::JoinError(err)) => Err(join_error_to_core(&err)),
+        Err(err) => Err(join_error_to_core(&err)),
     }
 }
 
-fn join_error_to_core(err: JoinError) -> Error {
+fn join_error_to_core(err: &JoinError) -> Error {
     Error::Io(io::Error::other(format!("MCP server task failed: {err}")))
 }
 
-fn map_join_error(err: JoinError) -> McpError {
+fn map_join_error(err: &JoinError) -> McpError {
     if err.is_panic() {
         error!("blocking task panicked: {err}");
     } else {
@@ -454,7 +458,7 @@ pub async fn run_stdio_server(config: StdioServerConfig) -> Result<()> {
     let running = time::timeout(config.handshake_timeout, server.serve(transport))
         .await
         .map_err(|_| Error::validation("MCP client handshake timed out"))?
-        .map_err(map_initialize_error)?;
+        .map_err(|err| map_initialize_error(&err))?;
 
     info!("MCP client connected; entering serving loop");
 
@@ -529,7 +533,7 @@ mod tests {
         let (temp, replica) = init_repo()?;
         create_milestone(temp.path(), &replica)?;
         let payload = list_entities(
-            temp.path().to_path_buf(),
+            temp.path(),
             ListToolArgs {
                 entity: EntityKind::Milestone,
                 include_closed: true,
@@ -547,7 +551,7 @@ mod tests {
         create_milestone(temp.path(), &replica)?;
         let issue_id = create_issue(temp.path(), &replica)?;
         let value = show_entity(
-            temp.path().to_path_buf(),
+            temp.path(),
             ShowToolArgs {
                 entity: EntityKind::Issue,
                 id: issue_id.to_string(),
@@ -565,7 +569,7 @@ mod tests {
     fn show_entity_invalid_id_produces_error() {
         let (temp, _) = init_repo().expect("init repo");
         let result = show_entity(
-            temp.path().to_path_buf(),
+            temp.path(),
             ShowToolArgs {
                 entity: EntityKind::Issue,
                 id: "invalid-id".into(),
