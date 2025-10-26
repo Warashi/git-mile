@@ -385,7 +385,6 @@ impl PageCursor {
     /// # Errors
     ///
     /// Returns an error when the cursor string is malformed or contains non-numeric segments.
-    #[must_use]
     pub fn parse(value: &str) -> QueryResult<Self> {
         if let Some((generation, offset)) = value.split_once(':') {
             let generation = generation
