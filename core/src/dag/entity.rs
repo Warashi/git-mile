@@ -11,15 +11,18 @@ use crate::clock::{LamportTimestamp, ReplicaId};
 pub struct EntityId(Uuid);
 
 impl EntityId {
+    #[must_use]
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
 
-    pub fn from_uuid(uuid: Uuid) -> Self {
+    #[must_use]
+    pub const fn from_uuid(uuid: Uuid) -> Self {
         Self(uuid)
     }
 
-    pub fn as_uuid(&self) -> &Uuid {
+    #[must_use]
+    pub const fn as_uuid(&self) -> &Uuid {
         &self.0
     }
 }
@@ -56,15 +59,18 @@ pub struct OperationId {
 }
 
 impl OperationId {
-    pub fn new(timestamp: LamportTimestamp) -> Self {
+    #[must_use]
+    pub const fn new(timestamp: LamportTimestamp) -> Self {
         Self { timestamp }
     }
 
-    pub fn timestamp(&self) -> &LamportTimestamp {
+    #[must_use]
+    pub const fn timestamp(&self) -> &LamportTimestamp {
         &self.timestamp
     }
 
-    pub fn replica_id(&self) -> &ReplicaId {
+    #[must_use]
+    pub const fn replica_id(&self) -> &ReplicaId {
         self.timestamp.replica_id()
     }
 }

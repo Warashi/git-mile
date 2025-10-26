@@ -18,6 +18,7 @@ impl BlobRef {
     /// # Errors
     ///
     /// Returns an error when the provided digest is not a 64-character hexadecimal string.
+    #[must_use]
     pub fn new(digest: impl AsRef<str>) -> Result<Self> {
         let digest = digest.as_ref();
         if digest.len() != 64 || !digest.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -29,11 +30,13 @@ impl BlobRef {
         Ok(Self(digest.to_ascii_lowercase()))
     }
 
+    #[must_use]
     pub fn from_bytes(bytes: &[u8]) -> Self {
         let digest = Sha256::digest(bytes);
         Self(hex::encode(digest))
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -60,6 +63,7 @@ pub struct OperationMetadata {
 }
 
 impl OperationMetadata {
+    #[must_use]
     pub fn new(author: impl Into<String>, message: impl Into<Option<String>>) -> Self {
         Self {
             author: author.into(),
@@ -77,6 +81,7 @@ pub struct Operation {
 }
 
 impl Operation {
+    #[must_use]
     pub fn new(
         id: OperationId,
         parents: Vec<OperationId>,
@@ -100,15 +105,18 @@ pub struct OperationBlob {
 }
 
 impl OperationBlob {
+    #[must_use]
     pub fn from_bytes(data: Vec<u8>) -> Self {
         let digest = BlobRef::from_bytes(&data);
         Self { digest, data }
     }
 
-    pub fn digest(&self) -> &BlobRef {
+    #[must_use]
+    pub const fn digest(&self) -> &BlobRef {
         &self.digest
     }
 
+    #[must_use]
     pub fn data(&self) -> &[u8] {
         &self.data
     }
@@ -129,6 +137,7 @@ impl OperationPack {
     ///
     /// Returns an error when the pack fails validation, such as containing duplicate operations or
     /// missing referenced blobs.
+    #[must_use]
     pub fn new(
         entity_id: EntityId,
         clock_snapshot: LamportTimestamp,
