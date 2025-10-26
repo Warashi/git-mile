@@ -99,27 +99,27 @@ impl LogicalOp {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComparisonExpr {
     pub operator: ComparisonOp,
     pub field: String,
     pub values: Vec<Literal>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QueryExpr {
     Comparison(ComparisonExpr),
     Logical(LogicalExpr),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LogicalExpr {
     And(Vec<QueryExpr>),
     Or(Vec<QueryExpr>),
     Not(Box<QueryExpr>),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Literal {
     String(String),
     Raw(String),
@@ -146,14 +146,16 @@ pub struct QuerySchema {
 }
 
 impl QuerySchema {
+    #[must_use]
     pub fn builder() -> QuerySchemaBuilder {
         QuerySchemaBuilder {
-            schema: QuerySchema {
+            schema: Self {
                 fields: HashMap::new(),
             },
         }
     }
 
+    #[must_use]
     pub fn field(&self, name: &str) -> Option<&FieldMetadata> {
         self.fields.get(name)
     }
@@ -231,6 +233,7 @@ pub struct QuerySchemaBuilder {
 }
 
 impl QuerySchemaBuilder {
+    #[must_use]
     pub fn string_field(
         mut self,
         name: impl Into<String>,
@@ -248,6 +251,7 @@ impl QuerySchemaBuilder {
         self
     }
 
+    #[must_use]
     pub fn timestamp_field(
         mut self,
         name: impl Into<String>,
@@ -265,6 +269,7 @@ impl QuerySchemaBuilder {
         self
     }
 
+    #[must_use]
     pub fn string_set_field(
         mut self,
         name: impl Into<String>,
@@ -282,6 +287,7 @@ impl QuerySchemaBuilder {
         self
     }
 
+    #[must_use]
     pub fn boolean_field(
         mut self,
         name: impl Into<String>,
@@ -299,6 +305,7 @@ impl QuerySchemaBuilder {
         self
     }
 
+    #[must_use]
     pub fn build(self) -> QuerySchema {
         self.schema
     }
@@ -365,6 +372,7 @@ pub struct PageCursor {
 }
 
 impl PageCursor {
+    #[must_use]
     pub fn encode(&self) -> String {
         self.generation.map_or_else(
             || format!("{}", self.offset),
@@ -377,6 +385,7 @@ impl PageCursor {
     /// # Errors
     ///
     /// Returns an error when the cursor string is malformed or contains non-numeric segments.
+    #[must_use]
     pub fn parse(value: &str) -> QueryResult<Self> {
         if let Some((generation, offset)) = value.split_once(':') {
             let generation = generation
@@ -421,8 +430,14 @@ pub struct QueryEngine {
 }
 
 impl QueryEngine {
-    pub fn new(schema: QuerySchema) -> Self {
+    #[must_use]
+    pub const fn new(schema: QuerySchema) -> Self {
         Self { schema }
+    }
+
+    #[must_use]
+    pub const fn schema(&self) -> &QuerySchema {
+        &self.schema
     }
 
     /// Execute the query request against the provided records.
@@ -466,11 +481,7 @@ impl QueryEngine {
         if let Some(expr) = &request.filter {
             items = items
                 .into_iter()
-                .filter_map(|record| match self.evaluate(&record, expr) {
-                    Ok(true) => Some(record),
-                    Ok(false) => None,
-                    Err(_) => None,
-                })
+                .filter(|record| self.evaluate(record, expr).unwrap_or(false))
                 .collect();
         }
 
@@ -518,7 +529,7 @@ impl QueryEngine {
                     .field(&comp.field)
                     .ok_or_else(|| QueryError::UnknownField(comp.field.clone()))?;
                 let value = record.field_value(&comp.field);
-                self.evaluate_comparison(meta, value, comp)
+                Self::evaluate_comparison(meta, value, comp)
             }
             QueryExpr::Logical(logical) => match logical {
                 LogicalExpr::And(args) => {
@@ -543,7 +554,6 @@ impl QueryEngine {
     }
 
     fn evaluate_comparison(
-        &self,
         meta: &FieldMetadata,
         value: Option<QueryValue>,
         expr: &ComparisonExpr,
@@ -562,7 +572,7 @@ impl QueryEngine {
                         String::new()
                     }
                 };
-                compare_string(&actual, expr)
+                Ok(compare_string(&actual, expr))
             }
             FieldType::Timestamp => {
                 let actual = match value {
@@ -580,7 +590,7 @@ impl QueryEngine {
             FieldType::StringSet => {
                 let actual = match value {
                     Some(QueryValue::StringList(list)) => list,
-                    None => vec![],
+                    None => Vec::new(),
                     _ => {
                         return Err(QueryError::TypeMismatch {
                             field: expr.field.clone(),
@@ -588,19 +598,19 @@ impl QueryEngine {
                         });
                     }
                 };
-                compare_string_list(&actual, expr)
+                Ok(compare_string_list(&actual, expr))
             }
             FieldType::Boolean => {
-                let actual = match value {
-                    Some(QueryValue::Boolean(val)) => val,
-                    _ => {
-                        return Err(QueryError::TypeMismatch {
-                            field: expr.field.clone(),
-                            operator: expr.operator,
-                        });
-                    }
+                let Some(actual) = (match value {
+                    Some(QueryValue::Boolean(val)) => Some(val),
+                    _ => None,
+                }) else {
+                    return Err(QueryError::TypeMismatch {
+                        field: expr.field.clone(),
+                        operator: expr.operator,
+                    });
                 };
-                compare_boolean(actual, expr)
+                Ok(compare_boolean(actual, expr))
             }
         }
     }
@@ -656,10 +666,10 @@ fn compare_records<R: QueryRecord>(
     Some(Ordering::Equal)
 }
 
-fn compare_string(value: &str, expr: &ComparisonExpr) -> QueryResult<bool> {
+fn compare_string(value: &str, expr: &ComparisonExpr) -> bool {
     let first = expr.values.first().expect("validated to exist");
     let literal = literal_to_string(first);
-    let result = match expr.operator {
+    match expr.operator {
         ComparisonOp::Eq => value == literal,
         ComparisonOp::NotEq => value != literal,
         ComparisonOp::Contains => value.contains(literal),
@@ -672,8 +682,7 @@ fn compare_string(value: &str, expr: &ComparisonExpr) -> QueryResult<bool> {
         ComparisonOp::LessThan => value < literal,
         ComparisonOp::GreaterThanOrEq => value >= literal,
         ComparisonOp::LessThanOrEq => value <= literal,
-    };
-    Ok(result)
+    }
 }
 
 fn compare_timestamp(value: &LamportTimestamp, expr: &ComparisonExpr) -> QueryResult<bool> {
@@ -696,13 +705,13 @@ fn compare_timestamp(value: &LamportTimestamp, expr: &ComparisonExpr) -> QueryRe
     Ok(result)
 }
 
-fn compare_string_list(values: &[String], expr: &ComparisonExpr) -> QueryResult<bool> {
+fn compare_string_list(values: &[String], expr: &ComparisonExpr) -> bool {
     let needles: Vec<String> = expr
         .values
         .iter()
         .map(|literal| literal_to_string(literal).to_string())
         .collect();
-    let result = match expr.operator {
+    match expr.operator {
         ComparisonOp::Contains => needles
             .iter()
             .all(|needle| values.iter().any(|candidate| candidate == needle)),
@@ -716,21 +725,20 @@ fn compare_string_list(values: &[String], expr: &ComparisonExpr) -> QueryResult<
             .iter()
             .all(|needle| values.iter().all(|candidate| candidate != needle)),
         _ => false,
-    };
-    Ok(result)
+    }
 }
 
-fn compare_boolean(value: bool, expr: &ComparisonExpr) -> QueryResult<bool> {
+fn compare_boolean(value: bool, expr: &ComparisonExpr) -> bool {
     let literal = literal_to_string(expr.values.first().expect("validated"));
     let target = matches!(literal, "true" | "1" | "yes" | "on");
-    let result = match expr.operator {
+    match expr.operator {
         ComparisonOp::Eq => value == target,
         ComparisonOp::NotEq => value != target,
         _ => false,
-    };
-    Ok(result)
+    }
 }
 
+#[allow(clippy::missing_const_for_fn)]
 fn literal_to_string(literal: &Literal) -> &str {
     match literal {
         Literal::String(value) | Literal::Raw(value) => value.as_str(),
@@ -795,21 +803,23 @@ fn parse_atom(input: &str) -> nom::IResult<&str, SExpr> {
 fn build_expr(expr: SExpr) -> QueryResult<QueryExpr> {
     match expr {
         SExpr::Atom(_) => Err(QueryError::UnexpectedAtom),
-        SExpr::List(mut items) => {
-            if items.is_empty() {
+        SExpr::List(items) => {
+            let mut parts = items.into_iter();
+            let Some(operator_expr) = parts.next() else {
                 return Err(QueryError::EmptyExpression);
-            }
-            let operator = match items.remove(0) {
-                SExpr::Atom(op) => op,
-                _ => return Err(QueryError::UnexpectedAtom),
+            };
+            let SExpr::Atom(operator) = operator_expr else {
+                return Err(QueryError::UnexpectedAtom);
             };
 
+            let remaining: Vec<SExpr> = parts.collect();
+
             if let Some(logical) = LogicalOp::from_str(&operator) {
-                return build_logical(logical, items);
+                return build_logical(logical, remaining);
             }
 
             if let Some(comparison) = ComparisonOp::from_str(&operator) {
-                return build_comparison(comparison, items);
+                return build_comparison(comparison, remaining);
             }
 
             Err(QueryError::UnknownOperator(operator))
@@ -826,7 +836,11 @@ fn build_logical(operator: LogicalOp, items: Vec<SExpr>) -> QueryResult<QueryExp
                     expected: 1,
                 });
             }
-            let expr = build_expr(items.into_iter().next().unwrap())?;
+            let mut iter = items.into_iter();
+            let Some(item) = iter.next() else {
+                return Err(QueryError::EmptyExpression);
+            };
+            let expr = build_expr(item)?;
             Ok(QueryExpr::Logical(LogicalExpr::Not(Box::new(expr))))
         }
         LogicalOp::And | LogicalOp::Or => {
@@ -849,23 +863,20 @@ fn build_logical(operator: LogicalOp, items: Vec<SExpr>) -> QueryResult<QueryExp
     }
 }
 
-fn build_comparison(operator: ComparisonOp, items: Vec<SExpr>) -> QueryResult<QueryExpr> {
+fn build_comparison(operator: ComparisonOp, mut items: Vec<SExpr>) -> QueryResult<QueryExpr> {
     if items.len() < 2 {
         return Err(QueryError::MissingComparisonValue { operator });
     }
-    let field = match &items[0] {
-        SExpr::Atom(atom) => atom.clone(),
-        _ => return Err(QueryError::UnexpectedAtom),
+    let field_expr = items.remove(0);
+    let field = match field_expr {
+        SExpr::Atom(atom) => atom,
+        SExpr::List(_) => return Err(QueryError::UnexpectedAtom),
     };
-    let mut values = Vec::with_capacity(items.len() - 1);
-    for literal in items.iter().skip(1) {
+    let mut values = Vec::with_capacity(items.len());
+    for literal in items {
         match literal {
-            SExpr::Atom(atom) => {
-                values.push(Literal::String(atom.clone()));
-            }
-            SExpr::List(_) => {
-                return Err(QueryError::UnexpectedAtom);
-            }
+            SExpr::Atom(atom) => values.push(Literal::String(atom)),
+            SExpr::List(_) => return Err(QueryError::UnexpectedAtom),
         }
     }
 
@@ -876,6 +887,7 @@ fn build_comparison(operator: ComparisonOp, items: Vec<SExpr>) -> QueryResult<Qu
     }))
 }
 
+#[must_use]
 pub fn milestone_schema() -> QuerySchema {
     QuerySchema::builder()
         .string_field(
@@ -922,6 +934,7 @@ pub fn milestone_schema() -> QuerySchema {
         .build()
 }
 
+#[must_use]
 pub fn issue_schema() -> QuerySchema {
     QuerySchema::builder()
         .string_field(
@@ -1098,8 +1111,7 @@ mod tests {
 
     #[test]
     fn evaluates_issue_filter() {
-        let schema = issue_schema();
-        let engine = QueryEngine::new(schema.clone());
+        let engine = QueryEngine::new(issue_schema());
         let request = QueryRequest {
             filter: Some(parse_query("(= status \"open\")").unwrap()),
             sort: vec![],
@@ -1111,7 +1123,7 @@ mod tests {
         assert_eq!(response.items.len(), 1);
 
         let closed = parse_query("(= status \"closed\")").unwrap();
-        schema.validate_expr(&closed).unwrap();
+        engine.schema().validate_expr(&closed).unwrap();
         let request = QueryRequest {
             filter: Some(closed),
             sort: vec![],
@@ -1164,8 +1176,7 @@ mod tests {
 
     #[test]
     fn execute_rejects_stale_generation_cursor() {
-        let schema = issue_schema();
-        let engine = QueryEngine::new(schema.clone());
+        let engine = QueryEngine::new(issue_schema());
         let cursor = PageCursor {
             offset: 0,
             generation: Some(3),

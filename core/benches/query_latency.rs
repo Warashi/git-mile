@@ -54,8 +54,7 @@ fn issue_dataset(size: usize) -> Arc<Vec<IssueDetails>> {
 }
 
 fn bench_issue_query(c: &mut Criterion) {
-    let schema = issue_schema();
-    let engine = QueryEngine::new(schema.clone());
+    let engine = QueryEngine::new(issue_schema());
     let dataset = issue_dataset(2_000);
     let filter = parse_query("(= status \"open\")").expect("parse filter");
     let request = QueryRequest {
