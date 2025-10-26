@@ -279,7 +279,7 @@ impl GitBackend {
             content_blobs,
         } = pack;
 
-        for blob in content_blobs.into_iter() {
+        for blob in &content_blobs {
             self.ensure_blob(entity, blob)?;
         }
 
@@ -321,7 +321,7 @@ impl GitBackend {
         Ok(inserted)
     }
 
-    fn ensure_blob(&self, entity: &mut StoredEntity, blob: OperationBlob) -> Result<()> {
+    fn ensure_blob(&self, entity: &mut StoredEntity, blob: &OperationBlob) -> Result<()> {
         if entity.blobs.contains_key(blob.digest()) {
             return Ok(());
         }

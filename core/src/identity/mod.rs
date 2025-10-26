@@ -535,22 +535,17 @@ fn build_operation(
     author: String,
     message: Option<String>,
 ) -> Result<(Operation, OperationBlob)> {
-    let blob = match &event {
-        IdentityEventKind::Created(data) => {
-            encode_event(&StoredEventPayload::Created(data.clone()))?
-        }
-        IdentityEventKind::Adopted(data) => {
-            encode_event(&StoredEventPayload::Adopted(data.clone()))?
-        }
-        IdentityEventKind::ProtectionAdded(data) => {
-            encode_event(&StoredEventPayload::ProtectionAdded(data.clone()))?
-        }
+    let payload = match event {
+        IdentityEventKind::Created(data) => StoredEventPayload::Created(data),
+        IdentityEventKind::Adopted(data) => StoredEventPayload::Adopted(data),
+        IdentityEventKind::ProtectionAdded(data) => StoredEventPayload::ProtectionAdded(data),
         IdentityEventKind::Unknown { .. } => {
             return Err(Error::validation(
                 "cannot persist unknown identity event payload",
             ));
         }
     };
+    let blob = encode_event(&payload)?;
 
     let timestamp = clock.tick()?;
     let op_id = OperationId::new(timestamp);

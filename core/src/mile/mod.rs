@@ -611,24 +611,17 @@ fn build_operation(
     author: String,
     message: Option<String>,
 ) -> Result<(Operation, OperationBlob)> {
-    let blob = match &event {
-        MileEventKind::Created(data) => encode_event(&StoredEventPayload::Created(data.clone()))?,
-        MileEventKind::StatusChanged(data) => {
-            encode_event(&StoredEventPayload::StatusChanged(data.clone()))?
-        }
-        MileEventKind::CommentAppended(data) => {
-            encode_event(&StoredEventPayload::CommentAppended(data.clone()))?
-        }
-        MileEventKind::LabelAttached(data) => {
-            encode_event(&StoredEventPayload::LabelAttached(data.clone()))?
-        }
-        MileEventKind::LabelDetached(data) => {
-            encode_event(&StoredEventPayload::LabelDetached(data.clone()))?
-        }
+    let payload = match event {
+        MileEventKind::Created(data) => StoredEventPayload::Created(data),
+        MileEventKind::StatusChanged(data) => StoredEventPayload::StatusChanged(data),
+        MileEventKind::CommentAppended(data) => StoredEventPayload::CommentAppended(data),
+        MileEventKind::LabelAttached(data) => StoredEventPayload::LabelAttached(data),
+        MileEventKind::LabelDetached(data) => StoredEventPayload::LabelDetached(data),
         MileEventKind::Unknown { .. } => {
             return Err(Error::validation("cannot persist unknown event payload"));
         }
     };
+    let blob = encode_event(&payload)?;
 
     let timestamp = clock.tick()?;
     let op_id = OperationId::new(timestamp);
