@@ -1,0 +1,224 @@
+[
+  {
+    "direction": "client",
+    "payload": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "initialize",
+      "params": {
+        "protocolVersion": "2024-11-05",
+        "capabilities": {
+          "tools": {}
+        },
+        "clientInfo": {
+          "name": "git-mile-docs",
+          "version": "1.0.0"
+        }
+      }
+    }
+  },
+  {
+    "direction": "server",
+    "payload": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "protocolVersion": "2024-11-05",
+        "capabilities": {
+          "tools": {}
+        },
+        "serverInfo": {
+          "name": "git_mile_core",
+          "version": "0.1.0"
+        },
+        "instructions": "Provides git-mile listing (`git_mile.list`) and details (`git_mile.show`) tools."
+      }
+    }
+  },
+  {
+    "direction": "client",
+    "payload": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "method": "tools/list",
+      "params": {}
+    }
+  },
+  {
+    "direction": "server",
+    "payload": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "result": {
+        "tools": [
+          {
+            "name": "git_mile.list",
+            "description": "List git-mile issues or milestones",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "entity": {
+                  "type": "string",
+                  "enum": [
+                    "issue",
+                    "milestone"
+                  ]
+                },
+                "filter": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "sort": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "limit": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 1
+                },
+                "cursor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "includeClosed": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "entity"
+              ],
+              "additionalProperties": false
+            },
+            "annotations": {
+              "title": "List git-mile entities",
+              "readOnlyHint": true,
+              "idempotentHint": true
+            }
+          },
+          {
+            "name": "git_mile.show",
+            "description": "Show git-mile issue or milestone details",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "entity": {
+                  "type": "string",
+                  "enum": [
+                    "issue",
+                    "milestone"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "entity",
+                "id"
+              ],
+              "additionalProperties": false
+            },
+            "annotations": {
+              "title": "Show git-mile entity details",
+              "readOnlyHint": true,
+              "idempotentHint": true
+            }
+          }
+        ],
+        "nextCursor": null
+      }
+    }
+  },
+  {
+    "direction": "client",
+    "payload": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "method": "tools/call",
+      "params": {
+        "name": "git_mile.list",
+        "arguments": {
+          "entity": "milestone",
+          "filter": "status == \"open\"",
+          "sort": [
+            "updated:desc"
+          ],
+          "limit": 20,
+          "includeClosed": false
+        }
+      }
+    }
+  },
+  {
+    "direction": "server",
+    "payload": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"items\":[{\"id\":\"c8d4b0a2-4c5f-4d2c-97bb-29ae2cc8e7c1\",\"title\":\"Milestone Alpha\",\"status\":\"open\",\"labels\":[\"alpha\"],\"stats\":{\"comment_count\":1,\"open_issues\":2}},{\"id\":\"8a5ecaf6-6a4f-4b09-bd8d-1de048c1b309\",\"title\":\"Milestone Beta\",\"status\":\"open\",\"labels\":[\"beta\"],\"stats\":{\"comment_count\":0,\"open_issues\":0}}],\"nextCursor\":null}"
+          }
+        ],
+        "isError": false
+      }
+    }
+  },
+  {
+    "direction": "client",
+    "payload": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "method": "tools/call",
+      "params": {
+        "name": "git_mile.show",
+        "arguments": {
+          "entity": "milestone",
+          "id": "c8d4b0a2-4c5f-4d2c-97bb-29ae2cc8e7c1"
+        }
+      }
+    }
+  },
+  {
+    "direction": "server",
+    "payload": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"id\":\"c8d4b0a2-4c5f-4d2c-97bb-29ae2cc8e7c1\",\"title\":\"Milestone Alpha\",\"status\":\"open\",\"description\":\"First milestone\",\"labels\":[\"alpha\"],\"comments\":[{\"author\":\"Tester\",\"body\":\"kickoff\",\"timestamp\":\"2024-10-25T09:17:00Z\"}],\"stats\":{\"comment_count\":1,\"open_issues\":2}}"
+          }
+        ],
+        "isError": false
+      }
+    }
+  },
+  {
+    "direction": "client",
+    "payload": {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "method": "shutdown"
+    }
+  },
+  {
+    "direction": "server",
+    "payload": {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "result": null
+    }
+  }
+]
