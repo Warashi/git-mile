@@ -12,6 +12,9 @@ fmt-check:
 lint:
     cargo lint
 
+lint-pedantic:
+    cargo clippy --workspace --all-targets --all-features -- --cap-lints=warn -W clippy::pedantic -W clippy::nursery -W clippy::cargo
+
 test:
     cargo test-all
 
