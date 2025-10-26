@@ -78,6 +78,12 @@ impl SyncHookRegistry {
     }
 }
 
+impl Default for SyncHookRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SyncTaskStatus {
     Pending,
@@ -297,8 +303,10 @@ mod tests {
     #[async_trait]
     impl SyncHook for RecordingHook {
         async fn run(&self, ctx: &SyncContext) -> Result<()> {
-            let mut events = self.events.lock().expect("events lock poisoned");
-            events.push(ctx.phase);
+            self.events
+                .lock()
+                .expect("events lock poisoned")
+                .push(ctx.phase);
             Ok(())
         }
     }
@@ -320,11 +328,13 @@ mod tests {
         let ctx = SyncContext::new("/tmp/repo", SyncPhase::Prepare, None);
         registry.dispatch(&ctx).await.expect("dispatch hooks");
 
-        let recorded = events.lock().expect("events lock poisoned");
-        assert_eq!(
-            recorded.as_slice(),
-            &[SyncPhase::Prepare, SyncPhase::Prepare]
-        );
+        {
+            let recorded = events.lock().expect("events lock poisoned");
+            assert_eq!(
+                recorded.as_slice(),
+                &[SyncPhase::Prepare, SyncPhase::Prepare]
+            );
+        }
     }
 
     fn sample_operation(replica: &str) -> OperationId {

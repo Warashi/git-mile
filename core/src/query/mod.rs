@@ -427,15 +427,15 @@ impl QueryEngine {
             self.schema.ensure_sortable(&spec.field)?;
         }
 
-        if let Some(cursor) = &request.cursor {
-            if let Some(expected_generation) = cursor.generation {
-                let actual_generation = generation.map(|snapshot| snapshot.generation);
-                if actual_generation != Some(expected_generation) {
-                    return Err(QueryError::StaleGeneration {
-                        expected: expected_generation,
-                        actual: actual_generation,
-                    });
-                }
+        if let Some(cursor) = &request.cursor
+            && let Some(expected_generation) = cursor.generation
+        {
+            let actual_generation = generation.map(|snapshot| snapshot.generation);
+            if actual_generation != Some(expected_generation) {
+                return Err(QueryError::StaleGeneration {
+                    expected: expected_generation,
+                    actual: actual_generation,
+                });
             }
         }
 
@@ -536,7 +536,7 @@ impl QueryEngine {
                             operator: expr.operator,
                         });
                     }
-                    Some(QueryValue::Timestamp(_)) | Some(QueryValue::StringList(_)) | None => {
+                    Some(QueryValue::Timestamp(_) | QueryValue::StringList(_)) | None => {
                         String::new()
                     }
                 };
@@ -655,7 +655,7 @@ fn compare_string(value: &str, expr: &ComparisonExpr) -> QueryResult<bool> {
 }
 
 fn compare_timestamp(value: &LamportTimestamp, expr: &ComparisonExpr) -> QueryResult<bool> {
-    let target = parse_lamport(&expr.values.first().expect("validated to exist"))?;
+    let target = parse_lamport(expr.values.first().expect("validated to exist"))?;
     let ordering = value.cmp(&target);
     let result = match expr.operator {
         ComparisonOp::Eq => ordering == Ordering::Equal,
@@ -997,7 +997,7 @@ mod tests {
             description: None,
             status: IssueStatus::Open,
             initial_comment_id: Some(comment.id),
-            labels: ["bug".to_string()].into_iter().collect(),
+            labels: std::iter::once("bug".to_string()).collect(),
             comments: vec![comment],
             label_events: vec![],
             created_at: LamportTimestamp::new(1, ReplicaId::new("alice")),
@@ -1022,7 +1022,7 @@ mod tests {
             description: None,
             status: MileStatus::Open,
             initial_comment_id: Some(comment.id),
-            labels: ["release".to_string()].into_iter().collect(),
+            labels: std::iter::once("release".to_string()).collect(),
             comments: vec![comment],
             label_events: vec![],
             created_at: LamportTimestamp::new(1, ReplicaId::new("alice")),
@@ -1040,7 +1040,7 @@ mod tests {
                 assert_eq!(comp.field, "status");
                 assert_eq!(comp.values, vec![Literal::String("open".to_string())]);
             }
-            _ => panic!("expected comparison"),
+            QueryExpr::Logical(other) => panic!("expected comparison, got logical {other:?}"),
         }
     }
 
@@ -1052,7 +1052,8 @@ mod tests {
             QueryExpr::Logical(LogicalExpr::And(args)) => {
                 assert_eq!(args.len(), 2);
             }
-            _ => panic!("expected logical expression"),
+            QueryExpr::Logical(other) => panic!("expected logical and, got {other:?}"),
+            QueryExpr::Comparison(other) => panic!("expected logical expression, got comparison {other:?}"),
         }
     }
 

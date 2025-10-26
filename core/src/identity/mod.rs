@@ -319,7 +319,7 @@ impl IdentityStore {
                         updated_at: identity.updated_at.clone(),
                     });
                 }
-                Err(Error::Validation(_)) => continue,
+                Err(Error::Validation(_)) => {}
                 Err(err) => return Err(err),
             }
         }

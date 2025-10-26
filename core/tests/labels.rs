@@ -90,7 +90,7 @@ fn milestone_label_events_capture_history() {
         .expect("load milestone details");
 
     assert_eq!(details.labels.len(), 1);
-    assert!(details.labels.contains(&"beta".to_string()));
+    assert!(details.labels.contains("beta"));
     assert_eq!(details.label_events.len(), 3);
     assert_eq!(details.label_events[0].label_id, "alpha");
     assert_eq!(details.label_events[1].label_id, "beta");

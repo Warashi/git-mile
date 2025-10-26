@@ -263,7 +263,7 @@ mod tests {
         let status_outcome = service
             .change_status(ChangeStatusPayload {
                 milestone_id: created.id.clone(),
-                replica_id: replica.clone(),
+                replica_id: replica,
                 author: "dora@example.com".into(),
                 message: Some("close milestone".into()),
                 status: MileStatus::Closed,

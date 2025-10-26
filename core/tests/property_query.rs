@@ -68,8 +68,8 @@ proptest! {
 
         let expected: Vec<IssueDetails> = dataset
             .iter()
-            .cloned()
             .filter(|issue| issue.status == target)
+            .cloned()
             .collect();
         let response = engine
             .execute(dataset.iter().cloned(), &request, None)

@@ -360,10 +360,10 @@ impl PersistentCacheInner {
     }
 
     fn current_generation(&self, namespace: CacheNamespace) -> Result<GenerationState> {
-        if let Ok(guard) = self.generations.lock() {
-            if let Some(state) = guard.get(&namespace) {
-                return Ok(state.clone());
-            }
+        if let Ok(guard) = self.generations.lock()
+            && let Some(state) = guard.get(&namespace)
+        {
+            return Ok(state.clone());
         }
 
         let cf = self.meta_cf()?;
@@ -459,10 +459,10 @@ impl Drop for PersistentCache {
     fn drop(&mut self) {
         if Arc::strong_count(&self.inner) == 1 {
             self.inner.shutdown.store(true, Ordering::SeqCst);
-            if let Ok(mut guard) = self.inner.maintenance_handle.lock() {
-                if let Some(handle) = guard.take() {
-                    let _ = handle.join();
-                }
+            if let Ok(mut guard) = self.inner.maintenance_handle.lock()
+                && let Some(handle) = guard.take()
+            {
+                let _ = handle.join();
             }
         }
     }
@@ -561,7 +561,7 @@ impl CacheRepository for PersistentCache {
     fn invalidate(&self, namespace: CacheNamespace, entity_id: &EntityId) -> Result<()> {
         if let Some(cf) = self.db().cf_handle(namespace.cf_name()) {
             let key = entity_key(entity_id);
-            let _ = self.db().delete_cf(&cf, key.as_bytes())?;
+            self.db().delete_cf(&cf, key.as_bytes())?;
         }
         Ok(())
     }
@@ -655,7 +655,7 @@ fn start_maintenance(inner: Arc<PersistentCacheInner>) -> Result<()> {
 
                     let mut iter = db.iterator_cf(cf, IteratorMode::Start);
 
-                    while let Some(item) = iter.next() {
+                    for item in iter.by_ref() {
                         match item {
                             Ok((key, value)) => {
                                 let remove = match decode_entry(&value) {
@@ -900,9 +900,9 @@ mod tests {
     fn sample_snapshot() -> EntitySnapshot {
         let entity_id = EntityId::new();
         let replica = ReplicaId::new("cache-test");
-        let mut clock = LamportClock::new(replica.clone());
+        let mut clock = LamportClock::new(replica);
         let op_ts = clock.tick().expect("tick clock");
-        let op_id = OperationId::new(op_ts.clone());
+        let op_id = OperationId::new(op_ts);
         let operation = Operation::new(
             op_id.clone(),
             vec![],
@@ -1012,7 +1012,9 @@ mod tests {
             .expect("load snapshot")
         {
             CacheLoadOutcome::Hit(_) => {}
-            other => panic!("expected cache hit, got {other:?}"),
+            other @ (CacheLoadOutcome::Stale | CacheLoadOutcome::Miss) => {
+                panic!("expected cache hit, got {other:?}");
+            }
         }
 
         let updated_clock = LamportTimestamp::new(42, ReplicaId::new("gen"));
@@ -1021,7 +1023,7 @@ mod tests {
             .on_pack_persisted(
                 CacheNamespace::Issues,
                 &entity_id,
-                &[op_id.clone()],
+                std::slice::from_ref(&op_id),
                 &updated_clock,
             )
             .expect("on pack persisted");
@@ -1030,14 +1032,16 @@ mod tests {
             .generation(CacheNamespace::Issues)
             .expect("generation after");
         assert!(after.generation > before.generation);
-        assert_eq!(after.base_clock, Some(updated_clock.clone()));
+        assert_eq!(after.base_clock.as_ref(), Some(&updated_clock));
 
         match cache
             .get(CacheNamespace::Issues, &entity_id)
             .expect("load snapshot after persist")
         {
             CacheLoadOutcome::Stale | CacheLoadOutcome::Miss => {}
-            other => panic!("expected stale or miss entry, got {other:?}"),
+            other @ CacheLoadOutcome::Hit(_) => {
+                panic!("expected stale or miss entry, got {other:?}");
+            }
         }
 
         let journal_cf = cache
@@ -1054,7 +1058,7 @@ mod tests {
                 found = true;
                 assert_eq!(entry.generation, after.generation);
                 assert_eq!(entry.inserted.len(), 1);
-                assert_eq!(entry.base_clock, Some(updated_clock.clone()));
+                assert_eq!(entry.base_clock.as_ref(), Some(&updated_clock));
                 break;
             }
         }

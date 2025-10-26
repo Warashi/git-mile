@@ -596,12 +596,12 @@ impl CacheBundle {
         let config = CacheConfig::for_repo(repo)?;
         let cache_path = config.path.clone();
 
-        if let Ok(guard) = cache_registry().lock() {
-            if let Some(existing) = guard.get(&cache_path) {
-                return Some(Self {
-                    repository: existing.clone(),
-                });
-            }
+        if let Ok(guard) = cache_registry().lock()
+            && let Some(existing) = guard.get(&cache_path)
+        {
+            return Some(Self {
+                repository: existing.clone(),
+            });
         }
 
         match PersistentCache::open(config) {
@@ -805,17 +805,31 @@ fn command_init(repo: &Path) -> Result<()> {
     }
 }
 
-fn command_mile_create(
-    repo: &Path,
-    replica_id: &ReplicaId,
-    author: &str,
-    title: &str,
-    description: Option<&str>,
-    initial_comment: Option<&str>,
-    labels: &[String],
+struct CommandMileCreateArgs<'a> {
+    repo: &'a Path,
+    replica_id: &'a ReplicaId,
+    author: &'a str,
+    title: &'a str,
+    description: Option<&'a str>,
+    initial_comment: Option<&'a str>,
+    labels: &'a [String],
     message: Option<String>,
     initial_status: MileStatus,
-) -> Result<MileSnapshot> {
+}
+
+fn command_mile_create(args: CommandMileCreateArgs<'_>) -> Result<MileSnapshot> {
+    let CommandMileCreateArgs {
+        repo,
+        replica_id,
+        author,
+        title,
+        description,
+        initial_comment,
+        labels,
+        message,
+        initial_status,
+    } = args;
+
     let cache = CacheBundle::open(repo);
     let store = if let Some(bundle) = cache.as_ref() {
         MileStore::open_with_cache(
@@ -838,17 +852,30 @@ fn command_mile_create(
     })?)
 }
 
-fn command_issue_create(
-    repo: &Path,
-    replica_id: &ReplicaId,
-    author: &str,
-    title: &str,
-    description: Option<&str>,
-    initial_comment: Option<&str>,
-    labels: &[String],
+struct CommandIssueCreateArgs<'a> {
+    repo: &'a Path,
+    replica_id: &'a ReplicaId,
+    author: &'a str,
+    title: &'a str,
+    description: Option<&'a str>,
+    initial_comment: Option<&'a str>,
+    labels: &'a [String],
     message: Option<String>,
     initial_status: IssueStatus,
-) -> Result<IssueSnapshot> {
+}
+
+fn command_issue_create(args: CommandIssueCreateArgs<'_>) -> Result<IssueSnapshot> {
+    let CommandIssueCreateArgs {
+        repo,
+        replica_id,
+        author,
+        title,
+        description,
+        initial_comment,
+        labels,
+        message,
+        initial_status,
+    } = args;
     let cache = CacheBundle::open(repo);
     let store = if let Some(bundle) = cache.as_ref() {
         IssueStore::open_with_cache(
@@ -1393,21 +1420,22 @@ fn run_milestone_create(
     let identity = resolve_identity(repo, &replica_id, author, email)?;
     let message = message.or_else(|| Some(format!("create milestone {}", title)));
 
-    let snapshot = command_mile_create(
+    let initial_status = if draft {
+        MileStatus::Draft
+    } else {
+        MileStatus::Open
+    };
+    let snapshot = command_mile_create(CommandMileCreateArgs {
         repo,
-        &replica_id,
-        &identity.signature,
-        &title,
-        description.as_deref(),
-        comment.as_deref(),
-        &labels,
+        replica_id: &replica_id,
+        author: &identity.signature,
+        title: &title,
+        description: description.as_deref(),
+        initial_comment: comment.as_deref(),
+        labels: &labels,
         message,
-        if draft {
-            MileStatus::Draft
-        } else {
-            MileStatus::Open
-        },
-    )?;
+        initial_status,
+    })?;
     print_milestone_create_summary(&snapshot, comment.is_some(), json)?;
     Ok(())
 }
@@ -1435,21 +1463,22 @@ fn run_issue_create(
     let identity = resolve_identity(repo, &replica_id, author, email)?;
     let message = message.or_else(|| Some(format!("create issue {}", title)));
 
-    let snapshot = command_issue_create(
+    let initial_status = if draft {
+        IssueStatus::Draft
+    } else {
+        IssueStatus::Open
+    };
+    let snapshot = command_issue_create(CommandIssueCreateArgs {
         repo,
-        &replica_id,
-        &identity.signature,
-        &title,
-        description.as_deref(),
-        comment.as_deref(),
-        &labels,
+        replica_id: &replica_id,
+        author: &identity.signature,
+        title: &title,
+        description: description.as_deref(),
+        initial_comment: comment.as_deref(),
+        labels: &labels,
         message,
-        if draft {
-            IssueStatus::Draft
-        } else {
-            IssueStatus::Open
-        },
-    )?;
+        initial_status,
+    })?;
     print_issue_create_summary(&snapshot, comment.is_some(), json)?;
     Ok(())
 }
@@ -2220,10 +2249,8 @@ fn run_mcp_server(repo: &Path, args: McpServerArgs) -> Result<()> {
     if handshake_timeout == 0 {
         bail!("--handshake-timeout must be greater than 0");
     }
-    if let Some(idle) = idle_shutdown {
-        if idle == 0 {
-            bail!("--idle-shutdown must be greater than 0 when specified");
-        }
+    if let Some(idle) = idle_shutdown && idle == 0 {
+        bail!("--idle-shutdown must be greater than 0 when specified");
     }
 
     init_mcp_tracing(log_level);
@@ -2582,50 +2609,50 @@ fn resolve_identity(
     let mut email = email_override.map(|value| value.to_string());
     let mut identity_signature: Option<String> = None;
 
-    if !overrides_present || name.is_none() || email.is_none() {
-        if let Ok(store) = IdentityStore::open_with_mode(repo, LockMode::Read) {
-            if let Ok(Some(snapshot)) = store.find_adopted_by_replica(replica_id) {
-                if !overrides_present && name.is_none() && email.is_none() {
-                    if let Some(signature) = snapshot.signature.clone() {
-                        return Ok(Identity { signature });
-                    }
-                }
+    if (!overrides_present || name.is_none() || email.is_none())
+        && let Ok(store) = IdentityStore::open_with_mode(repo, LockMode::Read)
+        && let Ok(Some(snapshot)) = store.find_adopted_by_replica(replica_id)
+    {
+        if !overrides_present
+            && name.is_none()
+            && email.is_none()
+            && let Some(signature) = snapshot.signature.clone()
+        {
+            return Ok(Identity { signature });
+        }
 
-                if name.is_none() {
-                    name = Some(snapshot.display_name.clone());
-                }
-                if email.is_none() {
-                    email = Some(snapshot.email.clone());
-                }
+        if name.is_none() {
+            name = Some(snapshot.display_name.clone());
+        }
+        if email.is_none() {
+            email = Some(snapshot.email.clone());
+        }
 
-                if !overrides_present {
-                    identity_signature = snapshot.signature.clone();
-                }
-            }
+        if !overrides_present {
+            identity_signature = snapshot.signature.clone();
         }
     }
 
-    if name.is_none() || email.is_none() {
-        if let Ok(repo) = Repository::discover(repo) {
-            if let Ok(config) = repo.config() {
-                if name.is_none() {
-                    name = read_config(&config, "user.name");
-                }
-                if email.is_none() {
-                    email = read_config(&config, "user.email");
-                }
-            }
+    if (name.is_none() || email.is_none())
+        && let Ok(repo) = Repository::discover(repo)
+        && let Ok(config) = repo.config()
+    {
+        if name.is_none() {
+            name = read_config(&config, "user.name");
+        }
+        if email.is_none() {
+            email = read_config(&config, "user.email");
         }
     }
 
-    if name.is_none() || email.is_none() {
-        if let Ok(config) = Config::open_default() {
-            if name.is_none() {
-                name = read_config(&config, "user.name");
-            }
-            if email.is_none() {
-                email = read_config(&config, "user.email");
-            }
+    if (name.is_none() || email.is_none())
+        && let Ok(config) = Config::open_default()
+    {
+        if name.is_none() {
+            name = read_config(&config, "user.name");
+        }
+        if email.is_none() {
+            email = read_config(&config, "user.email");
         }
     }
 
@@ -2657,7 +2684,7 @@ fn read_config(config: &Config, key: &str) -> Option<String> {
 }
 
 fn print_legacy_milestone_table(miles: &[MileSummary]) {
-    println!("{:<40} {:<10} {}", "ID", "STATUS", "TITLE");
+    println!("{:<40} {:<10} TITLE", "ID", "STATUS");
     for mile in miles {
         println!("{:<40} {:<10} {}", mile.id, mile.status, mile.title);
     }
@@ -2926,15 +2953,15 @@ fn print_table_separator(widths: &[usize]) {
 }
 
 fn print_list_long_details<T: DetailedRecord>(record: &T) {
-    if let Some(preview) = record.description_preview() {
-        if !preview.is_empty() {
-            println!("    desc: {preview}");
-        }
+    if let Some(preview) = record.description_preview()
+        && !preview.is_empty()
+    {
+        println!("    desc: {preview}");
     }
-    if let Some(excerpt) = record.latest_comment_excerpt() {
-        if !excerpt.is_empty() {
-            println!("    last: {excerpt}");
-        }
+    if let Some(excerpt) = record.latest_comment_excerpt()
+        && !excerpt.is_empty()
+    {
+        println!("    last: {excerpt}");
     }
 }
 
@@ -3089,8 +3116,8 @@ fn build_milestone_show_payload(details: &MilestoneDetailsView) -> serde_json::V
 
 fn print_identity_table(identities: &[IdentitySummary]) {
     println!(
-        "{:<40} {:<16} {:<20} {}",
-        "ID", "STATUS", "ADOPTED_BY", "DISPLAY NAME"
+        "{:<40} {:<16} {:<20} DISPLAY NAME",
+        "ID", "STATUS", "ADOPTED_BY"
     );
     for identity in identities {
         let adopted = identity
@@ -3239,17 +3266,17 @@ mod tests {
         Repository::init_bare(temp.path())?;
         let replica = ReplicaId::new("cli-tests");
 
-        let snapshot = command_mile_create(
-            temp.path(),
-            &replica,
-            "tester <tester@example.com>",
-            "Initial Mile",
-            Some("details"),
-            None,
-            &[],
-            None,
-            MileStatus::Open,
-        )?;
+        let snapshot = command_mile_create(CommandMileCreateArgs {
+            repo: temp.path(),
+            replica_id: &replica,
+            author: "tester <tester@example.com>",
+            title: "Initial Mile",
+            description: Some("details"),
+            initial_comment: None,
+            labels: &Vec::new(),
+            message: None,
+            initial_status: MileStatus::Open,
+        })?;
 
         let miles = command_mile_list(temp.path())?;
         assert_eq!(miles.len(), 1);
@@ -3264,17 +3291,17 @@ mod tests {
         Repository::init_bare(temp.path())?;
         let replica = ReplicaId::new("cli-tests");
 
-        let snapshot = command_mile_create(
-            temp.path(),
-            &replica,
-            "tester <tester@example.com>",
-            "Initial Mile",
-            None,
-            None,
-            &[],
-            None,
-            MileStatus::Open,
-        )?;
+        let snapshot = command_mile_create(CommandMileCreateArgs {
+            repo: temp.path(),
+            replica_id: &replica,
+            author: "tester <tester@example.com>",
+            title: "Initial Mile",
+            description: None,
+            initial_comment: None,
+            labels: &Vec::new(),
+            message: None,
+            initial_status: MileStatus::Open,
+        })?;
 
         let closed = command_mile_change_status(
             temp.path(),
@@ -3305,20 +3332,22 @@ mod tests {
 
         let replica = ReplicaId::new("replica-cli");
         let labels = vec!["alpha".to_string(), "beta".to_string()];
-        let snapshot = command_mile_create(
-            temp.path(),
-            &replica,
-            "Tester <tester@example.com>",
-            "CLI Milestone",
-            Some("Milestone description"),
-            Some("Kickoff comment"),
-            &labels,
-            Some("create milestone".to_string()),
-            MileStatus::Open,
-        )?;
+        let snapshot = command_mile_create(CommandMileCreateArgs {
+            repo: temp.path(),
+            replica_id: &replica,
+            author: "Tester <tester@example.com>",
+            title: "CLI Milestone",
+            description: Some("Milestone description"),
+            initial_comment: Some("Kickoff comment"),
+            labels: &labels,
+            message: Some("create milestone".to_string()),
+            initial_status: MileStatus::Open,
+        })?;
 
-        let mut comment_args = CommentTargetArgs::default();
-        comment_args.id = snapshot.id.to_string();
+        let mut comment_args = CommentTargetArgs {
+            id: snapshot.id.to_string(),
+            ..CommentTargetArgs::default()
+        };
         comment_args.input.comment = Some("Second comment".to_string());
         comment_args.input.no_editor = true;
         run_comment_milestone(
@@ -3329,10 +3358,12 @@ mod tests {
             comment_args,
         )?;
 
-        let mut label_args = LabelTargetArgs::default();
-        label_args.id = snapshot.id.to_string();
-        label_args.add = vec!["gamma".to_string()];
-        label_args.remove = vec!["alpha".to_string()];
+        let label_args = LabelTargetArgs {
+            id: snapshot.id.to_string(),
+            add: vec!["gamma".to_string()],
+            remove: vec!["alpha".to_string()],
+            ..LabelTargetArgs::default()
+        };
         run_label_milestone(
             temp.path(),
             Some("replica-cli"),
@@ -3343,9 +3374,9 @@ mod tests {
 
         let details = command_mile_details(temp.path(), &snapshot.id)?;
         assert_eq!(details.comment_count, 2);
-        assert!(details.labels.contains(&"beta".to_string()));
-        assert!(details.labels.contains(&"gamma".to_string()));
-        assert!(!details.labels.contains(&"alpha".to_string()));
+        assert!(details.labels.iter().any(|label| label == "beta"));
+        assert!(details.labels.iter().any(|label| label == "gamma"));
+        assert!(!details.labels.iter().any(|label| label == "alpha"));
         assert!(
             details
                 .latest_comment_excerpt
@@ -3366,20 +3397,22 @@ mod tests {
 
         let replica = ReplicaId::new("replica-cli");
         let labels = vec!["bug".to_string(), "core".to_string()];
-        let snapshot = command_issue_create(
-            temp.path(),
-            &replica,
-            "Tester <tester@example.com>",
-            "CLI Issue",
-            Some("Issue description"),
-            Some("Initial issue comment"),
-            &labels,
-            Some("create issue".to_string()),
-            IssueStatus::Open,
-        )?;
+        let snapshot = command_issue_create(CommandIssueCreateArgs {
+            repo: temp.path(),
+            replica_id: &replica,
+            author: "Tester <tester@example.com>",
+            title: "CLI Issue",
+            description: Some("Issue description"),
+            initial_comment: Some("Initial issue comment"),
+            labels: &labels,
+            message: Some("create issue".to_string()),
+            initial_status: IssueStatus::Open,
+        })?;
 
-        let mut comment_args = CommentTargetArgs::default();
-        comment_args.id = snapshot.id.to_string();
+        let mut comment_args = CommentTargetArgs {
+            id: snapshot.id.to_string(),
+            ..CommentTargetArgs::default()
+        };
         comment_args.input.comment = Some("Follow up".to_string());
         comment_args.input.no_editor = true;
         run_comment_issue(
@@ -3390,10 +3423,12 @@ mod tests {
             comment_args,
         )?;
 
-        let mut label_args = LabelTargetArgs::default();
-        label_args.id = snapshot.id.to_string();
-        label_args.add = vec!["frontend".to_string()];
-        label_args.remove = vec!["core".to_string()];
+        let label_args = LabelTargetArgs {
+            id: snapshot.id.to_string(),
+            add: vec!["frontend".to_string()],
+            remove: vec!["core".to_string()],
+            ..LabelTargetArgs::default()
+        };
         run_label_issue(
             temp.path(),
             Some("replica-cli"),
@@ -3407,9 +3442,9 @@ mod tests {
             .find(|issue| issue.id == snapshot.id)
             .expect("issue present");
         assert_eq!(details.comment_count, 2);
-        assert!(details.labels.contains(&"bug".to_string()));
-        assert!(details.labels.contains(&"frontend".to_string()));
-        assert!(!details.labels.contains(&"core".to_string()));
+        assert!(details.labels.iter().any(|label| label == "bug"));
+        assert!(details.labels.iter().any(|label| label == "frontend"));
+        assert!(!details.labels.iter().any(|label| label == "core"));
         Ok(())
     }
 
@@ -3419,17 +3454,17 @@ mod tests {
         Repository::init_bare(temp.path())?;
 
         let replica = ReplicaId::new("replica-cli");
-        let snapshot = command_mile_create(
-            temp.path(),
-            &replica,
-            "Tester <tester@example.com>",
-            "Payload Test",
-            Some("# Heading\n\n* item"),
-            Some("Initial"),
-            &[],
-            None,
-            MileStatus::Open,
-        )?;
+        let snapshot = command_mile_create(CommandMileCreateArgs {
+            repo: temp.path(),
+            replica_id: &replica,
+            author: "Tester <tester@example.com>",
+            title: "Payload Test",
+            description: Some("# Heading\n\n* item"),
+            initial_comment: Some("Initial"),
+            labels: &Vec::new(),
+            message: None,
+            initial_status: MileStatus::Open,
+        })?;
 
         let details = command_mile_details(temp.path(), &snapshot.id)?;
         let payload = build_milestone_show_payload(&details);
@@ -3461,8 +3496,10 @@ mod tests {
     #[test]
     fn comment_file_requires_allow_empty() -> Result<()> {
         let file = NamedTempFile::new()?;
-        let mut args = CommentInputArgs::default();
-        args.comment_file = Some(file.path().to_path_buf());
+        let mut args = CommentInputArgs {
+            comment_file: Some(file.path().to_path_buf()),
+            ..CommentInputArgs::default()
+        };
         let err = resolve_comment_input(&args, None, false).expect_err("missing allow-empty");
         assert!(
             err.to_string()
@@ -3480,9 +3517,10 @@ mod tests {
         let file = NamedTempFile::new()?;
         fs::write(file.path(), "alpha\nbeta\nAlpha\n")?;
 
-        let mut args = LabelInputArgs::default();
-        args.labels = vec!["gamma".into(), "alpha".into()];
-        args.label_files = vec![file.path().to_path_buf()];
+        let args = LabelInputArgs {
+            labels: vec!["gamma".into(), "alpha".into()],
+            label_files: vec![file.path().to_path_buf()],
+        };
 
         let labels = resolve_labels(&args)?;
         assert_eq!(labels, vec!["gamma", "alpha", "beta"]);
@@ -3582,20 +3620,22 @@ mod tests {
         Repository::init_bare(temp.path())?;
         let replica = ReplicaId::new("replica-comment");
 
-        let snapshot = command_mile_create(
-            temp.path(),
-            &replica,
-            "tester <tester@example.com>",
-            "Milestone",
-            None,
-            None,
-            &[],
-            None,
-            MileStatus::Open,
-        )?;
+        let snapshot = command_mile_create(CommandMileCreateArgs {
+            repo: temp.path(),
+            replica_id: &replica,
+            author: "tester <tester@example.com>",
+            title: "Milestone",
+            description: None,
+            initial_comment: None,
+            labels: &Vec::new(),
+            message: None,
+            initial_status: MileStatus::Open,
+        })?;
 
-        let mut comment_args = CommentTargetArgs::default();
-        comment_args.id = snapshot.id.to_string();
+        let mut comment_args = CommentTargetArgs {
+            id: snapshot.id.to_string(),
+            ..CommentTargetArgs::default()
+        };
         comment_args.input.comment = Some("Follow-up from CLI".into());
         comment_args.input.no_editor = true;
 
@@ -3620,17 +3660,17 @@ mod tests {
         Repository::init_bare(temp.path())?;
         let replica = ReplicaId::new("replica-editor");
 
-        let snapshot = command_issue_create(
-            temp.path(),
-            &replica,
-            "tester <tester@example.com>",
-            "Issue",
-            None,
-            Some("Seed comment"),
-            &[],
-            None,
-            IssueStatus::Open,
-        )?;
+        let snapshot = command_issue_create(CommandIssueCreateArgs {
+            repo: temp.path(),
+            replica_id: &replica,
+            author: "tester <tester@example.com>",
+            title: "Issue",
+            description: None,
+            initial_comment: Some("Seed comment"),
+            labels: &Vec::new(),
+            message: None,
+            initial_status: IssueStatus::Open,
+        })?;
         let quoted_id = snapshot.comments.first().expect("initial comment").id;
 
         let editor_path = temp.path().join("editor.sh");
@@ -3647,8 +3687,10 @@ mod tests {
             std::env::set_var("EDITOR", &editor_path);
         }
 
-        let mut comment_args = CommentTargetArgs::default();
-        comment_args.id = snapshot.id.to_string();
+        let mut comment_args = CommentTargetArgs {
+            id: snapshot.id.to_string(),
+            ..CommentTargetArgs::default()
+        };
         comment_args.input.editor = true;
         comment_args.input.no_editor = false;
         comment_args.quote = Some(quoted_id.to_string());
@@ -3684,20 +3726,22 @@ mod tests {
         Repository::init_bare(temp.path())?;
         let replica = ReplicaId::new("replica-empty");
 
-        let snapshot = command_issue_create(
-            temp.path(),
-            &replica,
-            "tester <tester@example.com>",
-            "Issue",
-            None,
-            None,
-            &[],
-            None,
-            IssueStatus::Open,
-        )?;
+        let snapshot = command_issue_create(CommandIssueCreateArgs {
+            repo: temp.path(),
+            replica_id: &replica,
+            author: "tester <tester@example.com>",
+            title: "Issue",
+            description: None,
+            initial_comment: None,
+            labels: &Vec::new(),
+            message: None,
+            initial_status: IssueStatus::Open,
+        })?;
 
-        let mut comment_args = CommentTargetArgs::default();
-        comment_args.id = snapshot.id.to_string();
+        let mut comment_args = CommentTargetArgs {
+            id: snapshot.id.to_string(),
+            ..CommentTargetArgs::default()
+        };
         comment_args.input.no_editor = true;
 
         let result = run_comment_issue(
@@ -3717,22 +3761,25 @@ mod tests {
         Repository::init_bare(temp.path())?;
         let replica = ReplicaId::new("replica-label-milestone");
 
-        let snapshot = command_mile_create(
-            temp.path(),
-            &replica,
-            "tester <tester@example.com>",
-            "Milestone",
-            None,
-            None,
-            &["frontend".to_string()],
-            None,
-            MileStatus::Open,
-        )?;
+        let labels = vec!["frontend".to_string()];
+        let snapshot = command_mile_create(CommandMileCreateArgs {
+            repo: temp.path(),
+            replica_id: &replica,
+            author: "tester <tester@example.com>",
+            title: "Milestone",
+            description: None,
+            initial_comment: None,
+            labels: &labels,
+            message: None,
+            initial_status: MileStatus::Open,
+        })?;
 
-        let mut label_args = LabelTargetArgs::default();
-        label_args.id = snapshot.id.to_string();
-        label_args.add = vec!["backend".into()];
-        label_args.remove = vec!["frontend".into()];
+        let label_args = LabelTargetArgs {
+            id: snapshot.id.to_string(),
+            add: vec!["backend".into()],
+            remove: vec!["frontend".into()],
+            ..LabelTargetArgs::default()
+        };
 
         run_label_milestone(
             temp.path(),
@@ -3755,21 +3802,24 @@ mod tests {
         Repository::init_bare(temp.path())?;
         let replica = ReplicaId::new("replica-label-issue");
 
-        let snapshot = command_issue_create(
-            temp.path(),
-            &replica,
-            "tester <tester@example.com>",
-            "Issue",
-            None,
-            None,
-            &["bug".into(), "core".into()],
-            None,
-            IssueStatus::Open,
-        )?;
+        let labels = vec!["bug".into(), "core".into()];
+        let snapshot = command_issue_create(CommandIssueCreateArgs {
+            repo: temp.path(),
+            replica_id: &replica,
+            author: "tester <tester@example.com>",
+            title: "Issue",
+            description: None,
+            initial_comment: None,
+            labels: &labels,
+            message: None,
+            initial_status: IssueStatus::Open,
+        })?;
 
-        let mut label_args = LabelTargetArgs::default();
-        label_args.id = snapshot.id.to_string();
-        label_args.set = vec!["core".into(), "triaged".into()];
+        let label_args = LabelTargetArgs {
+            id: snapshot.id.to_string(),
+            set: vec!["core".into(), "triaged".into()],
+            ..LabelTargetArgs::default()
+        };
 
         run_label_issue(
             temp.path(),
@@ -3792,29 +3842,29 @@ mod tests {
         Repository::init_bare(temp.path())?;
         let replica = ReplicaId::new("query-filter");
 
-        command_mile_create(
-            temp.path(),
-            &replica,
-            "tester <tester@example.com>",
-            "Open Mile",
-            None,
-            None,
-            &[],
-            None,
-            MileStatus::Open,
-        )?;
+        command_mile_create(CommandMileCreateArgs {
+            repo: temp.path(),
+            replica_id: &replica,
+            author: "tester <tester@example.com>",
+            title: "Open Mile",
+            description: None,
+            initial_comment: None,
+            labels: &Vec::new(),
+            message: None,
+            initial_status: MileStatus::Open,
+        })?;
 
-        let closed = command_mile_create(
-            temp.path(),
-            &replica,
-            "tester <tester@example.com>",
-            "Closed Mile",
-            None,
-            None,
-            &[],
-            None,
-            MileStatus::Open,
-        )?;
+        let closed = command_mile_create(CommandMileCreateArgs {
+            repo: temp.path(),
+            replica_id: &replica,
+            author: "tester <tester@example.com>",
+            title: "Closed Mile",
+            description: None,
+            initial_comment: None,
+            labels: &Vec::new(),
+            message: None,
+            initial_status: MileStatus::Open,
+        })?;
 
         command_mile_change_status(
             temp.path(),
@@ -3891,17 +3941,17 @@ mod tests {
 
         for index in 0..3 {
             let title = format!("Mile {index}");
-            command_mile_create(
-                temp.path(),
-                &replica,
-                "tester <tester@example.com>",
-                title.as_str(),
-                None,
-                None,
-                &[],
-                None,
-                MileStatus::Open,
-            )?;
+            command_mile_create(CommandMileCreateArgs {
+                repo: temp.path(),
+                replica_id: &replica,
+                author: "tester <tester@example.com>",
+                title: title.as_str(),
+                description: None,
+                initial_comment: None,
+                labels: &Vec::new(),
+                message: None,
+                initial_status: MileStatus::Open,
+            })?;
         }
 
         let schema = milestone_schema();
@@ -3924,22 +3974,24 @@ mod tests {
         Repository::init_bare(temp.path())?;
         let replica = ReplicaId::new("replica-label-conflict");
 
-        let snapshot = command_mile_create(
-            temp.path(),
-            &replica,
-            "tester <tester@example.com>",
-            "Milestone",
-            None,
-            None,
-            &[],
-            None,
-            MileStatus::Open,
-        )?;
+        let snapshot = command_mile_create(CommandMileCreateArgs {
+            repo: temp.path(),
+            replica_id: &replica,
+            author: "tester <tester@example.com>",
+            title: "Milestone",
+            description: None,
+            initial_comment: None,
+            labels: &Vec::new(),
+            message: None,
+            initial_status: MileStatus::Open,
+        })?;
 
-        let mut label_args = LabelTargetArgs::default();
-        label_args.id = snapshot.id.to_string();
-        label_args.add = vec!["backend".into()];
-        label_args.set = vec!["frontend".into()];
+        let label_args = LabelTargetArgs {
+            id: snapshot.id.to_string(),
+            add: vec!["backend".into()],
+            set: vec!["frontend".into()],
+            ..LabelTargetArgs::default()
+        };
 
         let result = run_label_milestone(
             temp.path(),

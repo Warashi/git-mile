@@ -138,13 +138,18 @@ impl ServerHandler for GitMileServer {
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = std::result::Result<CallToolResult, McpError>> + Send + '_
     {
-        async move {
+        async fn dispatch(
+            server: &GitMileServer,
+            request: CallToolRequestParam,
+        ) -> std::result::Result<CallToolResult, McpError> {
             match request.name.as_ref() {
-                LIST_TOOL_NAME => self.handle_list(request.arguments).await,
-                SHOW_TOOL_NAME => self.handle_show(request.arguments).await,
+                LIST_TOOL_NAME => server.handle_list(request.arguments).await,
+                SHOW_TOOL_NAME => server.handle_show(request.arguments).await,
                 _ => Err(McpError::method_not_found::<CallToolRequestMethod>()),
             }
         }
+
+        dispatch(self, request)
     }
 }
 
@@ -405,25 +410,19 @@ fn map_query_error(err: QueryError) -> Error {
 }
 
 fn map_initialize_error(err: ServerInitializeError) -> Error {
-    Error::Io(io::Error::new(
-        io::ErrorKind::Other,
-        format!("failed to initialize MCP server: {err}"),
-    ))
+    Error::Io(io::Error::other(format!("failed to initialize MCP server: {err}")))
 }
 
 fn handle_wait_result(result: std::result::Result<QuitReason, JoinError>) -> Result<()> {
     match result {
-        Ok(QuitReason::Closed) | Ok(QuitReason::Cancelled) => Ok(()),
+        Ok(QuitReason::Closed | QuitReason::Cancelled) => Ok(()),
         Ok(QuitReason::JoinError(err)) => Err(join_error_to_core(err)),
         Err(err) => Err(join_error_to_core(err)),
     }
 }
 
 fn join_error_to_core(err: JoinError) -> Error {
-    Error::Io(io::Error::new(
-        io::ErrorKind::Other,
-        format!("MCP server task failed: {err}"),
-    ))
+    Error::Io(io::Error::other(format!("MCP server task failed: {err}")))
 }
 
 fn map_join_error(err: JoinError) -> McpError {

@@ -26,7 +26,7 @@ impl EntityStore {
     }
 
     pub fn open_with_mode(repo_path: impl AsRef<Path>, mode: LockMode) -> Result<Self> {
-        let cache: Arc<dyn RepositoryCacheHook> = Arc::new(NoopCache::default());
+        let cache: Arc<dyn RepositoryCacheHook> = Arc::new(NoopCache);
         Self::open_with_cache(repo_path, mode, cache)
     }
 
@@ -368,9 +368,9 @@ impl GitBackend {
 
     fn list_entities(&self) -> Result<Vec<EntitySummary>> {
         let mut summaries = Vec::new();
-        let mut references = self.repo.references_glob("refs/git-mile/entities/*")?;
+        let references = self.repo.references_glob("refs/git-mile/entities/*")?;
 
-        while let Some(reference) = references.next() {
+        for reference in references {
             let reference = reference?;
             let name = reference
                 .name()

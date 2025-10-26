@@ -339,7 +339,7 @@ impl IssueStore {
                         updated_at: issue.updated_at.clone(),
                     });
                 }
-                Err(Error::Validation(_)) => continue,
+                Err(Error::Validation(_)) => {}
                 Err(err) => return Err(err),
             }
         }
@@ -722,16 +722,16 @@ fn build_issue_snapshot(entity: EntitySnapshot) -> Result<IssueSnapshot> {
                 description = data.description.clone();
                 status = Some(data.status);
                 labels.extend(data.labels.iter().cloned());
-                if let Some(initial_comment) = &data.initial_comment {
-                    if comment_ids.insert(initial_comment.comment_id) {
-                        comments.push(IssueComment {
-                            id: initial_comment.comment_id,
-                            body: initial_comment.body.clone(),
-                            author: event.metadata.author.clone(),
-                            created_at: event.timestamp.clone(),
-                            edited_at: None,
-                        });
-                    }
+                if let Some(initial_comment) = &data.initial_comment
+                    && comment_ids.insert(initial_comment.comment_id)
+                {
+                    comments.push(IssueComment {
+                        id: initial_comment.comment_id,
+                        body: initial_comment.body.clone(),
+                        author: event.metadata.author.clone(),
+                        created_at: event.timestamp.clone(),
+                        edited_at: None,
+                    });
                 }
             }
             IssueEventKind::StatusChanged(data) => {

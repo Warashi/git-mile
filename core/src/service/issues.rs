@@ -214,7 +214,7 @@ mod tests {
         let updated_labels = service
             .update_labels(LabelUpdatePayload {
                 issue_id: created.id.clone(),
-                replica_id: replica.clone(),
+                replica_id: replica,
                 author: "carol@example.com".into(),
                 message: Some("update labels".into()),
                 add: vec!["beta".into()],

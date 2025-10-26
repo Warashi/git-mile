@@ -70,6 +70,7 @@ impl RepositoryLock {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&lock_path)?;
         Ok((file, lock_path))
     }

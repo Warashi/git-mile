@@ -2,6 +2,7 @@
 name = "git_mile_core"
 version.workspace = true
 edition.workspace = true
+publish = false
 
 [features]
 property-tests = ["proptest"]

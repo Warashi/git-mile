@@ -24,6 +24,12 @@ impl EntityId {
     }
 }
 
+impl Default for EntityId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl fmt::Display for EntityId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)

@@ -2,6 +2,7 @@
 name = "git-mile"
 version.workspace = true
 edition.workspace = true
+publish = false
 
 [dependencies]
 git_mile_core.workspace = true
