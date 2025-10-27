@@ -326,20 +326,12 @@ async fn process_delta(delta: &IndexDelta) -> Result<()> {
 
 impl Drop for BackgroundSyncWorkerInner {
     fn drop(&mut self) {
-        let shutdown_token = self
-            .shutdown
-            .lock()
-            .expect("sync shutdown poisoned")
-            .take();
+        let shutdown_token = self.shutdown.lock().expect("sync shutdown poisoned").take();
         if let Some(shutdown) = shutdown_token {
             let _ = shutdown.send(());
         }
 
-        let join_handle = self
-            .handle
-            .lock()
-            .expect("sync handle poisoned")
-            .take();
+        let join_handle = self.handle.lock().expect("sync handle poisoned").take();
         if let Some(handle) = join_handle {
             let _ = handle.join();
         }

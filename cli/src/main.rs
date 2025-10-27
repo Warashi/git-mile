@@ -112,9 +112,7 @@ fn run() -> Result<()> {
                 &identity.signature,
                 &mile_id,
                 MileStatus::Open,
-                args.message
-                    
-                    .or_else(|| Some("open mile".to_string())),
+                args.message.or_else(|| Some("open mile".to_string())),
             )?;
             if outcome.changed {
                 println!("Mile {mile_id} opened");
@@ -133,9 +131,7 @@ fn run() -> Result<()> {
                 &identity.signature,
                 &mile_id,
                 MileStatus::Closed,
-                args.message
-                    
-                    .or_else(|| Some("close mile".to_string())),
+                args.message.or_else(|| Some("close mile".to_string())),
             )?;
             if outcome.changed {
                 println!("Mile {mile_id} closed");
@@ -1111,10 +1107,7 @@ fn preview_text(value: &str) -> String {
         first_line.to_string()
     } else {
         let mut preview = String::new();
-        for ch in first_line
-            .chars()
-            .take(PREVIEW_LIMIT.saturating_sub(1))
-        {
+        for ch in first_line.chars().take(PREVIEW_LIMIT.saturating_sub(1)) {
             preview.push(ch);
         }
         preview.push('…');

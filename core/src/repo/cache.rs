@@ -110,12 +110,8 @@ impl CacheNamespace {
 
     const fn default_policy(self) -> CachePolicy {
         let ttl = match self {
-            Self::Issues | Self::Milestones | Self::Bridges => {
-                Duration::from_secs(60 * 60 * 24)
-            }
-            Self::Users | Self::Labels | Self::Identities => {
-                Duration::from_secs(60 * 60 * 72)
-            }
+            Self::Issues | Self::Milestones | Self::Bridges => Duration::from_secs(60 * 60 * 24),
+            Self::Users | Self::Labels | Self::Identities => Duration::from_secs(60 * 60 * 72),
         };
         CachePolicy { ttl }
     }
@@ -630,9 +626,7 @@ impl CacheRepository for PersistentCache {
             .max()
             .unwrap_or_else(|| clock.clone());
 
-        let generation = self
-            .inner
-            .bump_generation(namespace, Some(latest_clock))?;
+        let generation = self.inner.bump_generation(namespace, Some(latest_clock))?;
         self.inner
             .append_journal_entry(namespace, entity_id, &generation, inserted)?;
 
