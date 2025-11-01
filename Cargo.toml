@@ -1,0 +1,27 @@
+[workspace]
+members = ["crates/git-mile-core", "crates/git-mile-store-git", "crates/git-mile"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.79"
+description = "Task tracking stored as Git commits under refs/git-mile/tasks/*"
+repository = "https://github.com/Warashi/git-mile"
+readme = "README.md"
+keywords = ["git", "task-management", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+rust-2018-idioms = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = "deny"
+pedantic = "deny"
+nursery = "deny"
+cargo = "deny"
+expect_used = "deny"
+unwrap_used = "deny"
+dbg_macro = "deny"

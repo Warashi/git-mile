@@ -1,0 +1,19 @@
+[graph]
+all-features = true
+
+[advisories]
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "deny"
+notice = "warn"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+deny = []
+
+[licenses]
+unlicensed = "deny"
+allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "Unicode-3.0", "ISC", "Zlib"]
+default = "deny"
+confidence-threshold = 0.8

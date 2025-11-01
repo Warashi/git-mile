@@ -1,0 +1,22 @@
+[package]
+name = "git-mile-store-git"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1"
+thiserror = "1"
+git2 = { version = "0.18", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }
+serde_json = "1"
+git-mile-core = { path = "../git-mile-core" }
+time = { version = "0.3", features = ["formatting"] }
+tracing = "0.1"
