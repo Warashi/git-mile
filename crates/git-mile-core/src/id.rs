@@ -1,16 +1,17 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{fmt, str::FromStr};
-use ulid::Ulid;
+use uuid::Uuid;
 
-/// Identifier of a task (ULID).
+/// Identifier of a task (UUID v7).
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
-pub struct TaskId(pub Ulid);
+pub struct TaskId(pub Uuid);
 
 impl TaskId {
     #[must_use]
     /// Generate a fresh task identifier.
     pub fn new() -> Self {
-        Self(Ulid::new())
+        // UUID version 7 keeps the temporal ordering used for CRDT convergence.
+        Self(Uuid::now_v7())
     }
 }
 
@@ -21,10 +22,10 @@ impl fmt::Display for TaskId {
 }
 
 impl FromStr for TaskId {
-    type Err = ulid::DecodeError;
+    type Err = uuid::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(Ulid::from_string(s)?))
+        Ok(Self(Uuid::parse_str(s)?))
     }
 }
 
@@ -47,15 +48,16 @@ impl<'de> Deserialize<'de> for TaskId {
     }
 }
 
-/// Identifier of an event (ULID).
+/// Identifier of an event (UUID v7).
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
-pub struct EventId(pub Ulid);
+pub struct EventId(pub Uuid);
 
 impl EventId {
     #[must_use]
     /// Generate a fresh event identifier.
     pub fn new() -> Self {
-        Self(Ulid::new())
+        // UUID version 7 keeps the temporal ordering used for CRDT convergence.
+        Self(Uuid::now_v7())
     }
 }
 
@@ -66,10 +68,10 @@ impl fmt::Display for EventId {
 }
 
 impl FromStr for EventId {
-    type Err = ulid::DecodeError;
+    type Err = uuid::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(Ulid::from_string(s)?))
+        Ok(Self(Uuid::parse_str(s)?))
     }
 }
 
@@ -89,5 +91,39 @@ impl<'de> Deserialize<'de> for EventId {
     {
         let s = String::deserialize(d)?;
         s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_id_uses_uuid_v7() {
+        let id = TaskId::new();
+        assert_eq!(id.0.get_version_num(), 7);
+    }
+
+    #[test]
+    fn event_id_uses_uuid_v7() {
+        let id = EventId::new();
+        assert_eq!(id.0.get_version_num(), 7);
+    }
+
+    #[test]
+    fn task_id_roundtrip() {
+        let uuid = Uuid::now_v7();
+        let parsed: TaskId = uuid.to_string().parse().expect("must parse task id");
+        assert_eq!(parsed.0, uuid);
+    }
+
+    #[test]
+    fn event_id_roundtrip() {
+        let uuid = Uuid::now_v7();
+        let parsed: EventId = uuid
+            .to_string()
+            .parse()
+            .expect("must parse event id");
+        assert_eq!(parsed.0, uuid);
     }
 }
