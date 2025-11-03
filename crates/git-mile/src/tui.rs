@@ -103,6 +103,7 @@ pub struct App<S: TaskStore> {
     pub selected: usize,
 }
 
+#[allow(clippy::missing_const_for_fn)]
 impl<S: TaskStore> App<S> {
     /// Create an application instance and eagerly load tasks.
     pub fn new(store: S) -> Result<Self> {
@@ -136,17 +137,15 @@ impl<S: TaskStore> App<S> {
         });
         self.tasks = views;
         if let Some(id) = keep_id {
-            if let Some(idx) = self.tasks.iter().position(|view| view.snapshot.id == id) {
-                self.selected = idx;
-            } else if !self.tasks.is_empty() {
-                self.selected = 0;
-            } else {
-                self.selected = 0;
-            }
-        } else if !self.tasks.is_empty() && self.selected >= self.tasks.len() {
-            self.selected = self.tasks.len() - 1;
+            self.selected = self
+                .tasks
+                .iter()
+                .position(|view| view.snapshot.id == id)
+                .unwrap_or(0);
         } else if self.tasks.is_empty() {
             self.selected = 0;
+        } else if self.selected >= self.tasks.len() {
+            self.selected = self.tasks.len() - 1;
         }
         Ok(())
     }
@@ -258,16 +257,15 @@ fn run_event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, store: GitS
         let timeout = tick_rate.checked_sub(last_tick.elapsed()).unwrap_or_default();
 
         if event::poll(timeout)? {
-            match event::read()? {
-                CrosstermEvent::Key(key) => {
-                    if let Some(action) = ui.handle_key(key)? {
-                        if let Err(err) = handle_ui_action(terminal, &mut ui, action) {
-                            ui.error(format!("エディタ処理中に失敗しました: {err}"));
-                        }
+            let evt = event::read()?;
+            if let CrosstermEvent::Key(key) = evt {
+                if let Some(action) = ui.handle_key(key)? {
+                    if let Err(err) = handle_ui_action(terminal, &mut ui, action) {
+                        ui.error(format!("エディタ処理中に失敗しました: {err}"));
                     }
                 }
-                CrosstermEvent::Resize(_, _) => ui.request_redraw(),
-                _ => {}
+            } else {
+                // リサイズやその他のイベントは次の描画サイクルで自然に反映される。
             }
         }
 
@@ -287,6 +285,7 @@ struct Ui<S: TaskStore> {
     should_quit: bool,
 }
 
+#[allow(clippy::missing_const_for_fn)]
 impl<S: TaskStore> Ui<S> {
     fn new(app: App<S>, actor: Actor) -> Self {
         Self {
@@ -297,7 +296,7 @@ impl<S: TaskStore> Ui<S> {
         }
     }
 
-    fn draw(&mut self, f: &mut ratatui::Frame<'_>) {
+    fn draw(&self, f: &mut ratatui::Frame<'_>) {
         let size = f.area();
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -308,7 +307,7 @@ impl<S: TaskStore> Ui<S> {
         self.draw_status(f, chunks[1]);
     }
 
-    fn draw_main(&mut self, f: &mut ratatui::Frame<'_>, area: Rect) {
+    fn draw_main(&self, f: &mut ratatui::Frame<'_>, area: Rect) {
         let columns = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
@@ -325,7 +324,7 @@ impl<S: TaskStore> Ui<S> {
         self.draw_comments(f, details[1]);
     }
 
-    fn draw_task_list(&mut self, f: &mut ratatui::Frame<'_>, area: Rect) {
+    fn draw_task_list(&self, f: &mut ratatui::Frame<'_>, area: Rect) {
         let items = if self.app.tasks.is_empty() {
             vec![ListItem::new(Line::from("タスクがありません"))]
         } else {
@@ -382,7 +381,7 @@ impl<S: TaskStore> Ui<S> {
                     .snapshot
                     .labels
                     .iter()
-                    .map(|s| s.as_str())
+                    .map(String::as_str)
                     .collect::<Vec<_>>()
                     .join(", ");
                 lines.push(Line::from(format!("ラベル: {labels}")));
@@ -392,7 +391,7 @@ impl<S: TaskStore> Ui<S> {
                     .snapshot
                     .assignees
                     .iter()
-                    .map(|s| s.as_str())
+                    .map(String::as_str)
                     .collect::<Vec<_>>()
                     .join(", ");
                 lines.push(Line::from(format!("担当者: {assignees}")));
@@ -487,38 +486,37 @@ impl<S: TaskStore> Ui<S> {
 
     fn handle_browse_key(&mut self, key: KeyEvent) -> Result<Option<UiAction>> {
         match key.code {
-            KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
+            KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
                 self.should_quit = true;
                 Ok(None)
             }
-            KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
+            KeyCode::Down | KeyCode::Char('j' | 'J') => {
                 self.app.select_next();
                 Ok(None)
             }
-            KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
+            KeyCode::Up | KeyCode::Char('k' | 'K') => {
                 self.app.select_prev();
                 Ok(None)
             }
-            KeyCode::Char('r') | KeyCode::Char('R') => {
+            KeyCode::Char('r' | 'R') => {
                 self.app.refresh_tasks()?;
                 self.info("タスクを再読込しました");
                 Ok(None)
             }
-            KeyCode::Char('c') | KeyCode::Char('C') => {
-                if let Some(task) = self.app.selected_task_id() {
-                    Ok(Some(UiAction::AddComment { task }))
-                } else {
+            KeyCode::Char('c' | 'C') => self.app.selected_task_id().map_or_else(
+                || {
                     self.error("コメント対象のタスクが選択されていません");
                     Ok(None)
-                }
-            }
-            KeyCode::Char('n') | KeyCode::Char('N') => Ok(Some(UiAction::CreateTask)),
+                },
+                |task| Ok(Some(UiAction::AddComment { task })),
+            ),
+            KeyCode::Char('n' | 'N') => Ok(Some(UiAction::CreateTask)),
             _ => Ok(None),
         }
     }
 
-    fn apply_comment_input(&mut self, task: TaskId, raw: String) -> Result<()> {
-        match parse_comment_editor_output(&raw) {
+    fn apply_comment_input(&mut self, task: TaskId, raw: &str) -> Result<()> {
+        match parse_comment_editor_output(raw) {
             Some(body) => {
                 self.app
                     .add_comment(task, body, self.actor.clone())
@@ -530,8 +528,8 @@ impl<S: TaskStore> Ui<S> {
         Ok(())
     }
 
-    fn apply_new_task_input(&mut self, raw: String) -> Result<()> {
-        match parse_new_task_editor_output(&raw) {
+    fn apply_new_task_input(&mut self, raw: &str) -> Result<()> {
+        match parse_new_task_editor_output(raw) {
             Ok(Some(data)) => {
                 let id = self
                     .app
@@ -561,19 +559,14 @@ impl<S: TaskStore> Ui<S> {
     }
 
     fn status_text(&self) -> String {
-        if let Some(msg) = &self.message {
-            msg.text.clone()
-        } else {
-            "ステータスメッセージはありません".into()
-        }
+        self.message.as_ref().map_or_else(
+            || "ステータスメッセージはありません".into(),
+            |msg| msg.text.clone(),
+        )
     }
 
     fn status_style(&self) -> Style {
-        if let Some(msg) = &self.message {
-            msg.style()
-        } else {
-            Style::default()
-        }
+        self.message.as_ref().map_or_else(Style::default, Message::style)
     }
 
     fn tick(&mut self) {
@@ -583,10 +576,9 @@ impl<S: TaskStore> Ui<S> {
             }
         }
     }
-
-    fn request_redraw(&mut self) {}
 }
 
+#[derive(Clone, Copy)]
 enum UiAction {
     AddComment { task: TaskId },
     CreateTask,
@@ -601,12 +593,12 @@ fn handle_ui_action<S: TaskStore>(
         UiAction::AddComment { task } => {
             let template = comment_editor_template(&ui.actor, task);
             let raw = with_terminal_suspended(terminal, || launch_editor(&template))?;
-            ui.apply_comment_input(task, raw)?;
+            ui.apply_comment_input(task, &raw)?;
         }
         UiAction::CreateTask => {
             let template = new_task_editor_template();
             let raw = with_terminal_suspended(terminal, || launch_editor(&template))?;
-            ui.apply_new_task_input(raw)?;
+            ui.apply_new_task_input(&raw)?;
         }
     }
     Ok(())
@@ -701,30 +693,31 @@ fn parse_new_task_editor_output(raw: &str) -> Result<Option<NewTaskData>, String
         if trimmed.starts_with('#') {
             continue;
         }
-        if !in_description {
-            if trimmed.is_empty() {
-                continue;
-            }
-            if trimmed == "---" {
-                in_description = true;
-                continue;
-            }
-            if let Some((key, value)) = trimmed.split_once(':') {
-                let value = value.trim();
-                match key.trim() {
-                    "title" => title = value.to_owned(),
-                    "state" => state = value.to_owned(),
-                    "labels" => labels = value.to_owned(),
-                    "assignees" => assignees = value.to_owned(),
-                    unknown => {
-                        return Err(format!("未知のフィールドです: {unknown}"));
-                    }
+        if in_description {
+            description_lines.push(line);
+            continue;
+        }
+
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed == "---" {
+            in_description = true;
+            continue;
+        }
+        if let Some((key, value)) = trimmed.split_once(':') {
+            let value = value.trim();
+            match key.trim() {
+                "title" => value.clone_into(&mut title),
+                "state" => value.clone_into(&mut state),
+                "labels" => value.clone_into(&mut labels),
+                "assignees" => value.clone_into(&mut assignees),
+                unknown => {
+                    return Err(format!("未知のフィールドです: {unknown}"));
                 }
-            } else {
-                return Err(format!("フィールドの形式が正しくありません: {trimmed}"));
             }
         } else {
-            description_lines.push(line);
+            return Err(format!("フィールドの形式が正しくありません: {trimmed}"));
         }
     }
 
@@ -775,10 +768,7 @@ where
 {
     suspend_terminal(terminal)?;
     let result = f();
-    let resume_result = resume_terminal(terminal);
-    if let Err(err) = resume_result {
-        return Err(err);
-    }
+    resume_terminal(terminal)?;
     result
 }
 
@@ -842,9 +832,9 @@ fn launch_editor(initial: &str) -> Result<String> {
 fn parse_list(input: &str) -> Vec<String> {
     input
         .split(',')
-        .map(|s| s.trim())
+        .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|s| s.to_owned())
+        .map(str::to_owned)
         .collect()
 }
 
@@ -860,20 +850,22 @@ fn resolve_actor() -> Actor {
 
 impl TaskStore for GitStore {
     fn list_tasks(&self) -> Result<Vec<TaskId>> {
-        GitStore::list_tasks(self)
+        Self::list_tasks(self)
     }
 
     fn load_events(&self, task: TaskId) -> Result<Vec<Event>> {
-        GitStore::load_events(self, task)
+        Self::load_events(self, task)
     }
 
     fn append_event(&self, event: &Event) -> Result<()> {
-        GitStore::append_event(self, event).map(|_| ())
+        Self::append_event(self, event).map(|_| ())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
     use super::*;
     use anyhow::Result;
     use git_mile_core::event::EventKind;
@@ -907,12 +899,7 @@ mod tests {
         }
 
         fn load_events(&self, task: TaskId) -> Result<Vec<Event>> {
-            Ok(self
-                .events
-                .borrow()
-                .get(&task)
-                .cloned()
-                .unwrap_or_else(|| Vec::new()))
+            Ok(self.events.borrow().get(&task).cloned().unwrap_or_default())
         }
 
         fn append_event(&self, event: &Event) -> Result<()> {
@@ -1109,7 +1096,7 @@ mod tests {
         assert_eq!(snap.title, "Title");
         assert_eq!(snap.state.as_deref(), Some("todo"));
         assert_eq!(snap.description, "Write documentation");
-        let labels: Vec<&str> = snap.labels.iter().map(|s| s.as_str()).collect();
+        let labels: Vec<&str> = snap.labels.iter().map(String::as_str).collect();
         assert_eq!(labels, vec!["type/docs"]);
         Ok(())
     }
@@ -1179,10 +1166,7 @@ assignees:
     fn parse_list_trims_entries() {
         assert_eq!(
             parse_list("one, two , , three"),
-            vec!["one", "two", "three"]
-                .into_iter()
-                .map(String::from)
-                .collect::<Vec<_>>()
+            vec!["one".to_owned(), "two".to_owned(), "three".to_owned()]
         );
     }
 }
