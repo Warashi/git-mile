@@ -143,6 +143,16 @@ impl TaskCrdt {
             EventKind::TaskStateSet { state } => {
                 self.state.update(Some(state.clone()), stamp);
             }
+            EventKind::TaskStateCleared => {
+                self.state.update(None, stamp);
+            }
+            EventKind::TaskTitleSet { title } => {
+                self.title.update(title.clone(), stamp);
+            }
+            EventKind::TaskDescriptionSet { description } => {
+                self.description
+                    .update(description.clone().unwrap_or_default(), stamp);
+            }
             EventKind::LabelsAdded { labels } => {
                 add_all(&mut self.labels, labels.iter().cloned(), ev.id);
             }
@@ -415,5 +425,60 @@ mod tests {
         assert_eq!(via_apply.parents, via_replay.parents);
         assert_eq!(via_apply.relates, via_replay.relates);
         assert_eq!(via_apply.updated_rfc3339, via_replay.updated_rfc3339);
+    }
+
+    #[test]
+    fn title_description_and_state_events_update_snapshot() {
+        let task = TaskId::new();
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+
+        let created = Event::new(
+            task,
+            actor.clone(),
+            EventKind::TaskCreated {
+                title: "Initial".into(),
+                labels: Vec::new(),
+                assignees: Vec::new(),
+                description: Some("first".into()),
+                state: Some("state/in-progress".into()),
+            },
+        );
+
+        let title_set = Event::new(
+            task,
+            actor.clone(),
+            EventKind::TaskTitleSet {
+                title: "Updated".into(),
+            },
+        );
+        let description_set = Event::new(
+            task,
+            actor.clone(),
+            EventKind::TaskDescriptionSet {
+                description: Some("refined".into()),
+            },
+        );
+        let state_cleared = Event::new(task, actor, EventKind::TaskStateCleared);
+
+        let replayed = TaskSnapshot::replay(vec![
+            created.clone(),
+            title_set.clone(),
+            description_set.clone(),
+            state_cleared.clone(),
+        ]);
+        assert_eq!(replayed.title, "Updated");
+        assert_eq!(replayed.description, "refined");
+        assert_eq!(replayed.state, None);
+
+        let mut applied = TaskSnapshot::default();
+        for ev in [created, title_set, description_set, state_cleared] {
+            applied.apply(&ev);
+        }
+        assert_eq!(applied.title, "Updated");
+        assert_eq!(applied.description, "refined");
+        assert_eq!(applied.state, None);
     }
 }

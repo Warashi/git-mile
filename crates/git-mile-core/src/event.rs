@@ -55,6 +55,19 @@ pub enum EventKind {
         /// New state label.
         state: String,
     },
+    /// The workflow state is cleared.
+    TaskStateCleared,
+    /// The task title is overwritten.
+    TaskTitleSet {
+        /// New task title.
+        title: String,
+    },
+    /// The task description is overwritten.
+    TaskDescriptionSet {
+        /// New description body in Markdown (or `None` to clear).
+        #[serde(default)]
+        description: Option<String>,
+    },
     /// One or more labels are added.
     LabelsAdded {
         /// Labels to add.

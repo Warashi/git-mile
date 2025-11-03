@@ -1,6 +1,7 @@
 //! Terminal UI for browsing and updating tasks.
 
 use std::cmp::Ordering;
+use std::collections::BTreeSet;
 use std::env;
 use std::fs;
 use std::io::{self, Stdout, Write};
@@ -215,6 +216,130 @@ impl<S: TaskStore> App<S> {
         self.store.append_event(&event)?;
         self.refresh_tasks_with(Some(task))?;
         Ok(task)
+    }
+
+    /// Update an existing task and refresh the view. Returns `true` when any changes were applied.
+    pub fn update_task(&mut self, task: TaskId, data: NewTaskData, actor: Actor) -> Result<bool> {
+        let current = self
+            .tasks
+            .iter()
+            .find(|view| view.snapshot.id == task)
+            .cloned()
+            .map(Ok)
+            .unwrap_or_else(|| {
+                self.store
+                    .load_events(task)
+                    .map(TaskView::from_events)
+                    .context("タスクの読み込みに失敗しました")
+            })?;
+
+        let NewTaskData {
+            title,
+            state,
+            labels,
+            assignees,
+            description,
+        } = data;
+
+        let mut events = Vec::new();
+
+        if title != current.snapshot.title {
+            events.push(Event::new(
+                task,
+                actor.clone(),
+                EventKind::TaskTitleSet { title: title.clone() },
+            ));
+        }
+
+        match (current.snapshot.state.as_ref(), state.as_ref()) {
+            (Some(old), Some(new)) if old != new => events.push(Event::new(
+                task,
+                actor.clone(),
+                EventKind::TaskStateSet { state: new.clone() },
+            )),
+            (None, Some(new)) => events.push(Event::new(
+                task,
+                actor.clone(),
+                EventKind::TaskStateSet { state: new.clone() },
+            )),
+            (Some(_), None) => events.push(Event::new(task, actor.clone(), EventKind::TaskStateCleared)),
+            _ => {}
+        }
+
+        let current_labels = &current.snapshot.labels;
+        let new_labels: BTreeSet<String> = labels.into_iter().collect();
+        let added_labels: Vec<String> = new_labels.difference(current_labels).cloned().collect();
+        if !added_labels.is_empty() {
+            events.push(Event::new(
+                task,
+                actor.clone(),
+                EventKind::LabelsAdded { labels: added_labels },
+            ));
+        }
+        let removed_labels: Vec<String> = current_labels.difference(&new_labels).cloned().collect();
+        if !removed_labels.is_empty() {
+            events.push(Event::new(
+                task,
+                actor.clone(),
+                EventKind::LabelsRemoved {
+                    labels: removed_labels,
+                },
+            ));
+        }
+
+        let current_assignees = &current.snapshot.assignees;
+        let new_assignees: BTreeSet<String> = assignees.into_iter().collect();
+        let added_assignees: Vec<String> = new_assignees.difference(current_assignees).cloned().collect();
+        if !added_assignees.is_empty() {
+            events.push(Event::new(
+                task,
+                actor.clone(),
+                EventKind::AssigneesAdded {
+                    assignees: added_assignees,
+                },
+            ));
+        }
+        let removed_assignees: Vec<String> = current_assignees.difference(&new_assignees).cloned().collect();
+        if !removed_assignees.is_empty() {
+            events.push(Event::new(
+                task,
+                actor.clone(),
+                EventKind::AssigneesRemoved {
+                    assignees: removed_assignees,
+                },
+            ));
+        }
+
+        let new_description = description.unwrap_or_default();
+        if current.snapshot.description != new_description {
+            if new_description.is_empty() {
+                events.push(Event::new(
+                    task,
+                    actor.clone(),
+                    EventKind::TaskDescriptionSet { description: None },
+                ));
+            } else {
+                events.push(Event::new(
+                    task,
+                    actor.clone(),
+                    EventKind::TaskDescriptionSet {
+                        description: Some(new_description),
+                    },
+                ));
+            }
+        }
+
+        if events.is_empty() {
+            return Ok(false);
+        }
+
+        for event in &events {
+            self.store
+                .append_event(event)
+                .context("タスク更新イベントの書き込みに失敗しました")?;
+        }
+        self.refresh_tasks_with(Some(task))?;
+        Ok(true)
     }
 }
 
@@ -517,6 +642,13 @@ impl<S: TaskStore> Ui<S> {
                 },
                 |task| Ok(Some(UiAction::AddComment { task })),
             ),
+            KeyCode::Char('e' | 'E') => self.app.selected_task_id().map_or_else(
+                || {
+                    self.error("編集対象のタスクが選択されていません");
+                    Ok(None)
+                },
+                |task| Ok(Some(UiAction::EditTask { task })),
+            ),
             KeyCode::Char('n' | 'N') => Ok(Some(UiAction::CreateTask)),
             _ => Ok(None),
         }
@@ -550,6 +682,25 @@ impl<S: TaskStore> Ui<S> {
         Ok(())
     }
 
+    fn apply_edit_task_input(&mut self, task: TaskId, raw: &str) -> Result<()> {
+        match parse_new_task_editor_output(raw) {
+            Ok(Some(data)) => {
+                let updated = self
+                    .app
+                    .update_task(task, data, self.actor.clone())
+                    .context("タスクの更新に失敗しました")?;
+                if updated {
+                    self.info("タスクを更新しました");
+                } else {
+                    self.info("変更はありませんでした");
+                }
+            }
+            Ok(None) => self.info("タスク編集をキャンセルしました"),
+            Err(msg) => self.error(msg),
+        }
+        Ok(())
+    }
+
     fn info(&mut self, message: impl Into<String>) {
         self.message = Some(Message::info(message));
     }
@@ -560,7 +711,7 @@ impl<S: TaskStore> Ui<S> {
 
     fn instructions(&self) -> String {
         format!(
-            "j/k・↑↓:移動  n:新規  c:コメント  r:再読込  q/Esc:終了  [{} <{}>]",
+            "j/k・↑↓:移動  n:新規  e:編集  c:コメント  r:再読込  q/Esc:終了  [{} <{}>]",
             self.actor.name, self.actor.email
         )
     }
@@ -588,6 +739,7 @@ impl<S: TaskStore> Ui<S> {
 #[derive(Clone, Copy)]
 enum UiAction {
     AddComment { task: TaskId },
+    EditTask { task: TaskId },
     CreateTask,
 }
 
@@ -601,6 +753,16 @@ fn handle_ui_action<S: TaskStore>(
             let template = comment_editor_template(&ui.actor, task);
             let raw = with_terminal_suspended(terminal, || launch_editor(&template))?;
             ui.apply_comment_input(task, &raw)?;
+        }
+        UiAction::EditTask { task } => {
+            let view = ui.app.tasks.iter().find(|view| view.snapshot.id == task).cloned();
+            let Some(view) = view else {
+                ui.error("編集対象のタスクが見つかりません");
+                return Ok(());
+            };
+            let template = edit_task_editor_template(&view);
+            let raw = with_terminal_suspended(terminal, || launch_editor(&template))?;
+            ui.apply_edit_task_input(task, &raw)?;
         }
         UiAction::CreateTask => {
             let template = new_task_editor_template();
@@ -670,6 +832,39 @@ fn parse_comment_editor_output(raw: &str) -> Option<String> {
     } else {
         Some(trimmed.to_owned())
     }
+}
+
+fn edit_task_editor_template(task: &TaskView) -> String {
+    let snapshot = &task.snapshot;
+    let state = snapshot.state.clone().unwrap_or_default();
+    let labels = if snapshot.labels.is_empty() {
+        String::new()
+    } else {
+        snapshot.labels.iter().cloned().collect::<Vec<_>>().join(", ")
+    };
+    let assignees = if snapshot.assignees.is_empty() {
+        String::new()
+    } else {
+        snapshot.assignees.iter().cloned().collect::<Vec<_>>().join(", ")
+    };
+
+    let mut lines = vec![
+        "# 選択中のタスクを編集します。タイトルは必須です。".to_string(),
+        "# 空のフィールドは対応する値をクリアします。".to_string(),
+        format!("title: {}", snapshot.title),
+        format!("state: {}", state),
+        format!("labels: {}", labels),
+        format!("assignees: {}", assignees),
+        "---".to_string(),
+        "# この下で説明を編集してください。空欄で説明を削除します。".to_string(),
+    ];
+    if snapshot.description.is_empty() {
+        lines.push(String::new());
+    } else {
+        lines.extend(snapshot.description.lines().map(str::to_owned));
+    }
+    lines.push(String::new());
+    lines.join("\n")
 }
 
 fn new_task_editor_template() -> String {
@@ -1175,5 +1370,128 @@ assignees:
             parse_list("one, two , , three"),
             vec!["one".to_owned(), "two".to_owned(), "three".to_owned()]
         );
+    }
+
+    #[test]
+    fn update_task_applies_field_changes() -> Result<()> {
+        let task = TaskId::new();
+        let created = Event::new(
+            task,
+            actor(),
+            EventKind::TaskCreated {
+                title: "Initial".into(),
+                labels: vec!["type/bug".into(), "area/cli".into()],
+                assignees: vec!["alice".into(), "carol".into()],
+                description: Some("old description".into()),
+                state: Some("state/in-progress".into()),
+            },
+        );
+
+        let store = MockStore::new().with_task(task, vec![created]);
+        let mut app = App::new(store)?;
+
+        let updated = app.update_task(
+            task,
+            NewTaskData {
+                title: "Updated".into(),
+                state: None,
+                labels: vec!["type/docs".into()],
+                assignees: vec!["bob".into()],
+                description: Some("new description".into()),
+            },
+            actor(),
+        )?;
+        assert!(updated);
+
+        let view = app
+            .tasks
+            .iter()
+            .find(|view| view.snapshot.id == task)
+            .expect("task should exist");
+        assert_eq!(view.snapshot.title, "Updated");
+        assert_eq!(view.snapshot.state, None);
+        assert_eq!(
+            view.snapshot.labels.iter().cloned().collect::<Vec<_>>(),
+            vec!["type/docs".to_owned()]
+        );
+        assert_eq!(
+            view.snapshot.assignees.iter().cloned().collect::<Vec<_>>(),
+            vec!["bob".to_owned()]
+        );
+        assert_eq!(view.snapshot.description, "new description");
+
+        let events = app.store.events.borrow();
+        let stored = events.get(&task).expect("events for task");
+        assert_eq!(stored.len(), 8);
+        assert!(stored
+            .iter()
+            .any(|ev| matches!(ev.kind, EventKind::TaskTitleSet { .. })));
+        assert!(stored
+            .iter()
+            .any(|ev| matches!(ev.kind, EventKind::TaskStateCleared)));
+        assert!(stored
+            .iter()
+            .any(|ev| matches!(ev.kind, EventKind::TaskDescriptionSet { .. })));
+        assert!(stored
+            .iter()
+            .any(|ev| matches!(ev.kind, EventKind::LabelsAdded { .. })));
+        assert!(stored
+            .iter()
+            .any(|ev| matches!(ev.kind, EventKind::LabelsRemoved { .. })));
+        assert!(stored
+            .iter()
+            .any(|ev| matches!(ev.kind, EventKind::AssigneesAdded { .. })));
+        assert!(stored
+            .iter()
+            .any(|ev| matches!(ev.kind, EventKind::AssigneesRemoved { .. })));
+        Ok(())
+    }
+
+    #[test]
+    fn update_task_returns_false_when_no_diff() -> Result<()> {
+        let task = TaskId::new();
+        let created = Event::new(
+            task,
+            actor(),
+            EventKind::TaskCreated {
+                title: "Initial".into(),
+                labels: vec!["type/bug".into()],
+                assignees: vec!["alice".into()],
+                description: Some("desc".into()),
+                state: Some("state/todo".into()),
+            },
+        );
+
+        let store = MockStore::new().with_task(task, vec![created]);
+        let mut app = App::new(store)?;
+        let snapshot = app
+            .tasks
+            .iter()
+            .find(|view| view.snapshot.id == task)
+            .expect("task should exist")
+            .snapshot
+            .clone();
+
+        let updated = app.update_task(
+            task,
+            NewTaskData {
+                title: snapshot.title.clone(),
+                state: snapshot.state.clone(),
+                labels: snapshot.labels.iter().cloned().collect(),
+                assignees: snapshot.assignees.iter().cloned().collect(),
+                description: if snapshot.description.is_empty() {
+                    None
+                } else {
+                    Some(snapshot.description.clone())
+                },
+            },
+            actor(),
+        )?;
+        assert!(!updated);
+
+        let events = app.store.events.borrow();
+        let stored = events.get(&task).expect("events for task");
+        assert_eq!(stored.len(), 1);
+        Ok(())
     }
 }
