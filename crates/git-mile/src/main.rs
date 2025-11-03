@@ -1,4 +1,3 @@
-#![allow(clippy::multiple_crate_versions)]
 //! CLI entry point for git-mile.
 
 use anyhow::{Context, Result};

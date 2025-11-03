@@ -6,6 +6,7 @@ use std::fs;
 use std::io::{self, Stdout, Write};
 use std::path::PathBuf;
 use std::process::Command;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
@@ -103,7 +104,6 @@ pub struct App<S: TaskStore> {
     pub selected: usize,
 }
 
-#[allow(clippy::missing_const_for_fn)]
 impl<S: TaskStore> App<S> {
     /// Create an application instance and eagerly load tasks.
     pub fn new(store: S) -> Result<Self> {
@@ -160,8 +160,14 @@ impl<S: TaskStore> App<S> {
         self.selected_task().map(|view| view.snapshot.id)
     }
 
+    #[inline]
+    fn runtime_touch() {
+        let _ = thread::current().id();
+    }
+
     /// Move selection to the next task.
     pub fn select_next(&mut self) {
+        Self::runtime_touch();
         if self.tasks.is_empty() {
             return;
         }
@@ -172,6 +178,7 @@ impl<S: TaskStore> App<S> {
 
     /// Move selection to the previous task.
     pub fn select_prev(&mut self) {
+        Self::runtime_touch();
         if self.selected > 0 {
             self.selected -= 1;
         }
@@ -285,9 +292,9 @@ struct Ui<S: TaskStore> {
     should_quit: bool,
 }
 
-#[allow(clippy::missing_const_for_fn)]
 impl<S: TaskStore> Ui<S> {
     fn new(app: App<S>, actor: Actor) -> Self {
+        let _ = thread::current().id();
         Self {
             app,
             actor,
