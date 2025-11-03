@@ -6,7 +6,7 @@ use rmcp::handler::server::tool::{ToolCallContext, ToolRouter};
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
     CallToolRequestParam, CallToolResult, Content, Implementation, InitializeResult,
-    ListToolsResult, ProtocolVersion,
+    ListToolsResult, ProtocolVersion, ServerCapabilities,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{tool, tool_router, ErrorData as McpError};
@@ -56,9 +56,14 @@ impl GitMileServer {
 
 impl ServerHandler for GitMileServer {
     fn get_info(&self) -> InitializeResult {
+        let capabilities = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_tool_list_changed()
+            .build();
+
         InitializeResult {
             protocol_version: ProtocolVersion::LATEST,
-            capabilities: Default::default(),
+            capabilities,
             server_info: Implementation {
                 name: "git-mile".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
