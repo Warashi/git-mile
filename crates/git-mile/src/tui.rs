@@ -186,7 +186,7 @@ impl<S: TaskStore> App<S> {
     }
 
     /// Append a comment to the given task and refresh the view.
-    pub fn add_comment(&mut self, task: TaskId, body: String, actor: Actor) -> Result<()> {
+    pub fn add_comment(&mut self, task: TaskId, body: String, actor: &Actor) -> Result<()> {
         let event = Event::new(
             task,
             actor,
@@ -200,7 +200,7 @@ impl<S: TaskStore> App<S> {
     }
 
     /// Create a fresh task and refresh the view, returning the new identifier.
-    pub fn create_task(&mut self, data: NewTaskData, actor: Actor) -> Result<TaskId> {
+    pub fn create_task(&mut self, data: NewTaskData, actor: &Actor) -> Result<TaskId> {
         let task = TaskId::new();
         let event = Event::new(
             task,
@@ -219,19 +219,22 @@ impl<S: TaskStore> App<S> {
     }
 
     /// Update an existing task and refresh the view. Returns `true` when any changes were applied.
-    pub fn update_task(&mut self, task: TaskId, data: NewTaskData, actor: Actor) -> Result<bool> {
+    #[allow(clippy::too_many_lines)]
+    pub fn update_task(&mut self, task: TaskId, data: NewTaskData, actor: &Actor) -> Result<bool> {
         let current = self
             .tasks
             .iter()
             .find(|view| view.snapshot.id == task)
             .cloned()
-            .map(Ok)
-            .unwrap_or_else(|| {
-                self.store
-                    .load_events(task)
-                    .map(TaskView::from_events)
-                    .context("タスクの読み込みに失敗しました")
-            })?;
+            .map_or_else(
+                || {
+                    self.store
+                        .load_events(task)
+                        .map(TaskView::from_events)
+                        .context("タスクの読み込みに失敗しました")
+                },
+                Ok,
+            )?;
 
         let NewTaskData {
             title,
@@ -246,23 +249,23 @@ impl<S: TaskStore> App<S> {
         if title != current.snapshot.title {
             events.push(Event::new(
                 task,
-                actor.clone(),
-                EventKind::TaskTitleSet { title: title.clone() },
+                actor,
+                EventKind::TaskTitleSet { title },
             ));
         }
 
         match (current.snapshot.state.as_ref(), state.as_ref()) {
             (Some(old), Some(new)) if old != new => events.push(Event::new(
                 task,
-                actor.clone(),
+                actor,
                 EventKind::TaskStateSet { state: new.clone() },
             )),
             (None, Some(new)) => events.push(Event::new(
                 task,
-                actor.clone(),
+                actor,
                 EventKind::TaskStateSet { state: new.clone() },
             )),
-            (Some(_), None) => events.push(Event::new(task, actor.clone(), EventKind::TaskStateCleared)),
+            (Some(_), None) => events.push(Event::new(task, actor, EventKind::TaskStateCleared)),
             _ => {}
         }
 
@@ -272,7 +275,7 @@ impl<S: TaskStore> App<S> {
         if !added_labels.is_empty() {
             events.push(Event::new(
                 task,
-                actor.clone(),
+                actor,
                 EventKind::LabelsAdded { labels: added_labels },
             ));
         }
@@ -280,7 +283,7 @@ impl<S: TaskStore> App<S> {
         if !removed_labels.is_empty() {
             events.push(Event::new(
                 task,
-                actor.clone(),
+                actor,
                 EventKind::LabelsRemoved {
                     labels: removed_labels,
                 },
@@ -293,7 +296,7 @@ impl<S: TaskStore> App<S> {
         if !added_assignees.is_empty() {
             events.push(Event::new(
                 task,
-                actor.clone(),
+                actor,
                 EventKind::AssigneesAdded {
                     assignees: added_assignees,
                 },
@@ -303,7 +306,7 @@ impl<S: TaskStore> App<S> {
         if !removed_assignees.is_empty() {
             events.push(Event::new(
                 task,
-                actor.clone(),
+                actor,
                 EventKind::AssigneesRemoved {
                     assignees: removed_assignees,
                 },
@@ -315,13 +318,13 @@ impl<S: TaskStore> App<S> {
             if new_description.is_empty() {
                 events.push(Event::new(
                     task,
-                    actor.clone(),
+                    actor,
                     EventKind::TaskDescriptionSet { description: None },
                 ));
             } else {
                 events.push(Event::new(
                     task,
-                    actor.clone(),
+                    actor,
                     EventKind::TaskDescriptionSet {
                         description: Some(new_description),
                     },
@@ -658,7 +661,7 @@ impl<S: TaskStore> Ui<S> {
         match parse_comment_editor_output(raw) {
             Some(body) => {
                 self.app
-                    .add_comment(task, body, self.actor.clone())
+                    .add_comment(task, body, &self.actor)
                     .context("コメントの保存に失敗しました")?;
                 self.info("コメントを追加しました");
             }
@@ -672,7 +675,7 @@ impl<S: TaskStore> Ui<S> {
             Ok(Some(data)) => {
                 let id = self
                     .app
-                    .create_task(data, self.actor.clone())
+                    .create_task(data, &self.actor)
                     .context("タスクの作成に失敗しました")?;
                 self.info(format!("タスクを作成しました: {id}"));
             }
@@ -687,7 +690,7 @@ impl<S: TaskStore> Ui<S> {
             Ok(Some(data)) => {
                 let updated = self
                     .app
-                    .update_task(task, data, self.actor.clone())
+                    .update_task(task, data, &self.actor)
                     .context("タスクの更新に失敗しました")?;
                 if updated {
                     self.info("タスクを更新しました");
@@ -1134,7 +1137,7 @@ mod tests {
     }
 
     fn event(task: TaskId, ts: OffsetDateTime, kind: EventKind) -> Event {
-        let mut ev = Event::new(task, actor(), kind);
+        let mut ev = Event::new(task, &actor(), kind);
         ev.ts = ts;
         ev
     }
@@ -1271,7 +1274,7 @@ mod tests {
         let mut app = App::new(store)?;
         app.selected = 1;
         let target = app.selected_task_id().expect("selected task id");
-        app.add_comment(target, "hello".into(), actor())?;
+        app.add_comment(target, "hello".into(), &actor())?;
 
         assert_eq!(app.selected_task_id(), Some(target));
         assert_eq!(
@@ -1300,7 +1303,7 @@ mod tests {
             description: Some("Write documentation".into()),
         };
 
-        let id = app.create_task(data, actor())?;
+        let id = app.create_task(data, &actor())?;
         assert_eq!(app.tasks.len(), 1);
         assert_eq!(app.selected_task_id(), Some(id));
 
@@ -1387,7 +1390,7 @@ assignees:
         let task = TaskId::new();
         let created = Event::new(
             task,
-            actor(),
+            &actor(),
             EventKind::TaskCreated {
                 title: "Initial".into(),
                 labels: vec!["type/bug".into(), "area/cli".into()],
@@ -1409,7 +1412,7 @@ assignees:
                 assignees: vec!["bob".into()],
                 description: Some("new description".into()),
             },
-            actor(),
+            &actor(),
         )?;
         assert!(updated);
 
@@ -1462,7 +1465,7 @@ assignees:
         let task = TaskId::new();
         let created = Event::new(
             task,
-            actor(),
+            &actor(),
             EventKind::TaskCreated {
                 title: "Initial".into(),
                 labels: vec!["type/bug".into()],
@@ -1492,10 +1495,10 @@ assignees:
                 description: if snapshot.description.is_empty() {
                     None
                 } else {
-                    Some(snapshot.description.clone())
+                    Some(snapshot.description)
                 },
             },
-            actor(),
+            &actor(),
         )?;
         assert!(!updated);
 

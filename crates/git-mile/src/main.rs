@@ -100,7 +100,7 @@ fn execute_command(repo_path: &str, command: Command) -> Result<()> {
             };
             let ev = Event::new(
                 task,
-                actor,
+                &actor,
                 EventKind::TaskCreated {
                     title,
                     labels,
@@ -127,7 +127,7 @@ fn execute_command(repo_path: &str, command: Command) -> Result<()> {
             };
             let ev = Event::new(
                 task,
-                actor,
+                &actor,
                 EventKind::CommentAdded {
                     comment_id: EventId::new(),
                     body_md: message,

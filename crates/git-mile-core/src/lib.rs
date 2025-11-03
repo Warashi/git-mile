@@ -295,7 +295,7 @@ mod tests {
 
         let mut created = Event::new(
             task,
-            actor.clone(),
+            &actor,
             EventKind::TaskCreated {
                 title: "Initial".into(),
                 labels: vec!["type/bug".into()],
@@ -308,7 +308,7 @@ mod tests {
 
         let mut label_removed = Event::new(
             task,
-            actor.clone(),
+            &actor,
             EventKind::LabelsRemoved {
                 labels: vec!["type/bug".into()],
             },
@@ -317,7 +317,7 @@ mod tests {
 
         let mut state_set = Event::new(
             task,
-            actor.clone(),
+            &actor,
             EventKind::TaskStateSet {
                 state: "state/done".into(),
             },
@@ -326,7 +326,7 @@ mod tests {
 
         let mut label_readd = Event::new(
             task,
-            actor,
+            &actor,
             EventKind::LabelsAdded {
                 labels: vec!["type/bug".into()],
             },
@@ -362,7 +362,7 @@ mod tests {
 
         let mut created = Event::new(
             task,
-            actor.clone(),
+            &actor,
             EventKind::TaskCreated {
                 title: "Initial".into(),
                 labels: vec!["type/bug".into()],
@@ -375,21 +375,21 @@ mod tests {
 
         let mut link_child = Event::new(
             task,
-            actor.clone(),
+            &actor,
             EventKind::ChildLinked { parent: task, child },
         );
         link_child.ts = created.ts + Duration::seconds(5);
 
         let mut unlink_child = Event::new(
             task,
-            actor.clone(),
+            &actor,
             EventKind::ChildUnlinked { parent: task, child },
         );
         unlink_child.ts = link_child.ts + Duration::seconds(5);
 
         let mut relation_add = Event::new(
             task,
-            actor.clone(),
+            &actor,
             EventKind::RelationAdded {
                 kind: relation_kind.clone(),
                 target: related,
@@ -399,7 +399,7 @@ mod tests {
 
         let mut relation_rm = Event::new(
             task,
-            actor,
+            &actor,
             EventKind::RelationRemoved {
                 kind: relation_kind,
                 target: related,
@@ -437,7 +437,7 @@ mod tests {
 
         let created = Event::new(
             task,
-            actor.clone(),
+            &actor,
             EventKind::TaskCreated {
                 title: "Initial".into(),
                 labels: Vec::new(),
@@ -449,19 +449,19 @@ mod tests {
 
         let title_set = Event::new(
             task,
-            actor.clone(),
+            &actor,
             EventKind::TaskTitleSet {
                 title: "Updated".into(),
             },
         );
         let description_set = Event::new(
             task,
-            actor.clone(),
+            &actor,
             EventKind::TaskDescriptionSet {
                 description: Some("refined".into()),
             },
         );
-        let state_cleared = Event::new(task, actor, EventKind::TaskStateCleared);
+        let state_cleared = Event::new(task, &actor, EventKind::TaskStateCleared);
 
         let replayed = TaskSnapshot::replay(vec![
             created.clone(),

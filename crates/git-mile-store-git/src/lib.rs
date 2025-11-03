@@ -151,7 +151,7 @@ mod tests {
 
         let event = Event::new(
             task,
-            actor,
+            &actor,
             EventKind::TaskCreated {
                 title: "Add docs".into(),
                 labels: vec![],

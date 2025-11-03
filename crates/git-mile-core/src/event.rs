@@ -128,12 +128,12 @@ pub enum EventKind {
 impl Event {
     /// Create a new event with the current timestamp.
     #[must_use]
-    pub fn new(task: TaskId, actor: Actor, kind: EventKind) -> Self {
+    pub fn new(task: TaskId, actor: &Actor, kind: EventKind) -> Self {
         Self {
             schema: "git-mile-event@1".to_owned(),
             id: EventId::new(),
             ts: OffsetDateTime::now_utc(),
-            actor,
+            actor: actor.clone(),
             task,
             kind,
         }
