@@ -9,6 +9,8 @@ default:
 fmt:
     cargo fmt
 
+alias format := fmt
+
 build:
     cargo build {{cargo_workspace_flags}}
 
