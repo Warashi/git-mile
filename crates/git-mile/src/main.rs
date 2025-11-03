@@ -140,8 +140,8 @@ fn execute_command(repo_path: &str, command: Command) -> Result<()> {
         Command::Show { task } => {
             let store = GitStore::open(repo_path)?;
             let task = TaskId::from_str(&task).context("Invalid task id")?;
-            let mut events = store.load_events(task)?;
-            let snap = TaskSnapshot::replay(&mut events);
+            let events = store.load_events(task)?;
+            let snap = TaskSnapshot::replay(&events);
             println!("{}", serde_json::to_string_pretty(&snap)?);
         }
 

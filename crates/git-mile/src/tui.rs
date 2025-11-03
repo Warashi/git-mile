@@ -65,13 +65,16 @@ pub struct TaskView {
 }
 
 impl TaskView {
-    fn from_events(mut events: Vec<Event>) -> Self {
-        events.sort_by(|a, b| match a.ts.cmp(&b.ts) {
+    fn from_events(events: &[Event]) -> Self {
+        let snapshot = TaskSnapshot::replay(events);
+
+        let mut sorted_refs: Vec<&Event> = events.iter().collect();
+        sorted_refs.sort_by(|a, b| match a.ts.cmp(&b.ts) {
             Ordering::Equal => a.id.cmp(&b.id),
             other => other,
         });
-        let snapshot = TaskSnapshot::replay(&mut events);
-        let comments = events
+
+        let comments = sorted_refs
             .iter()
             .filter_map(|ev| {
                 if let EventKind::CommentAdded { body_md, .. } = &ev.kind {
@@ -86,7 +89,7 @@ impl TaskView {
             })
             .collect();
 
-        let last_updated = events.last().map(|ev| ev.ts);
+        let last_updated = sorted_refs.last().map(|ev| ev.ts);
 
         Self {
             snapshot,
@@ -128,7 +131,7 @@ impl<S: TaskStore> App<S> {
         let mut views = Vec::new();
         for tid in self.store.list_tasks()? {
             let events = self.store.load_events(tid)?;
-            views.push(TaskView::from_events(events));
+            views.push(TaskView::from_events(&events));
         }
         views.sort_by(|a, b| match (a.last_updated, b.last_updated) {
             (Some(a_ts), Some(b_ts)) => b_ts.cmp(&a_ts),
@@ -230,7 +233,7 @@ impl<S: TaskStore> App<S> {
                 || {
                     self.store
                         .load_events(task)
-                        .map(TaskView::from_events)
+                        .map(|events| TaskView::from_events(&events))
                         .context("タスクの読み込みに失敗しました")
                 },
                 Ok,
@@ -1179,7 +1182,7 @@ mod tests {
             ),
         ];
 
-        let view = TaskView::from_events(events);
+        let view = TaskView::from_events(&events);
         assert_eq!(view.comments.len(), 2);
         assert_eq!(view.comments[0].body, "First");
         assert_eq!(view.comments[1].body, "Second");

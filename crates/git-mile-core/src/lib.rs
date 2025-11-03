@@ -74,10 +74,11 @@ impl TaskSnapshot {
 
     /// Replay many events in time order.
     #[must_use]
-    pub fn replay(events: &mut [Event]) -> Self {
-        events.sort_by_key(|e| (e.ts, e.id));
+    pub fn replay(events: &[Event]) -> Self {
+        let mut sorted_refs: Vec<&Event> = events.iter().collect();
+        sorted_refs.sort_by_key(|e| (e.ts, e.id));
         let mut snap = Self::default();
-        for e in events.iter() {
+        for e in sorted_refs {
             snap.apply(e);
         }
         snap
@@ -337,7 +338,7 @@ mod tests {
             .ts
             .format(&Rfc3339)
             .unwrap_or_else(|err| panic!("timestamp must format: {err}"));
-        let snapshot = TaskSnapshot::replay(&mut [label_readd, state_set, label_removed, created]);
+        let snapshot = TaskSnapshot::replay(&[label_readd, state_set, label_removed, created]);
 
         assert_eq!(snapshot.id, task);
         assert_eq!(snapshot.title, "Initial");
@@ -414,9 +415,7 @@ mod tests {
             via_apply.apply(event);
         }
 
-        let mut reversed = events;
-        reversed.reverse();
-        let via_replay = TaskSnapshot::replay(&mut reversed);
+        let via_replay = TaskSnapshot::replay(&events);
 
         assert_eq!(via_apply.title, via_replay.title);
         assert_eq!(via_apply.labels, via_replay.labels);
@@ -463,7 +462,7 @@ mod tests {
         );
         let state_cleared = Event::new(task, &actor, EventKind::TaskStateCleared);
 
-        let replayed = TaskSnapshot::replay(&mut [
+        let replayed = TaskSnapshot::replay(&[
             created.clone(),
             title_set.clone(),
             description_set.clone(),
