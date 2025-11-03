@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 git-mile-core = { path = "../git-mile-core" }
 git-mile-store-git = { path = "../git-mile-store-git" }
@@ -26,5 +27,6 @@ crossterm = "0.27"
 shell-words = "1"
 tempfile = "3"
 git2 = { version = "0.18", default-features = false }
-rmcp = "0.1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+rmcp = "0.8"
+schemars = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }

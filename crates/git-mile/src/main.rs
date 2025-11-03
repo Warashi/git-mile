@@ -9,7 +9,9 @@ use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::{EventId, TaskId};
 use git_mile_core::TaskSnapshot;
 use git_mile_store_git::GitStore;
+use rmcp::ServiceExt;
 
+mod mcp;
 mod tui;
 
 /// Git-backed tasks without touching the working tree.
@@ -71,6 +73,9 @@ enum Command {
 
     /// Launch interactive terminal UI.
     Tui,
+
+    /// Start MCP server.
+    Mcp,
 }
 
 fn main() -> Result<()> {
@@ -155,6 +160,16 @@ fn execute_command(repo_path: &str, command: Command) -> Result<()> {
         Command::Tui => {
             let store = GitStore::open(repo_path)?;
             tui::run(store)?;
+        }
+
+        Command::Mcp => {
+            let store = GitStore::open(repo_path)?;
+            let server = mcp::GitMileServer::new(store);
+            tokio::runtime::Runtime::new()?.block_on(async move {
+                let transport = (tokio::io::stdin(), tokio::io::stdout());
+                let server = server.serve(transport).await.map_err(|e| anyhow::anyhow!("{:?}", e))?;
+                server.waiting().await.map_err(|e| anyhow::anyhow!("{:?}", e))
+            })?;
         }
     }
 
