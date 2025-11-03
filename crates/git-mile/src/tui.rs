@@ -1,13 +1,16 @@
 //! Terminal UI for browsing and updating tasks.
 
 use std::cmp::Ordering;
-use std::io::{self, Stdout};
-use std::mem;
+use std::env;
+use std::fs;
+use std::io::{self, Stdout, Write};
+use std::path::PathBuf;
+use std::process::Command;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use crossterm::{
-    event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -20,12 +23,12 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Terminal,
 };
+use tempfile::NamedTempFile;
 use time::OffsetDateTime;
 use tracing::subscriber::NoSubscriber;
-use tui_textarea::TextArea;
 
 /// Storage abstraction so the TUI logic can be unit-tested.
 pub trait TaskStore {
@@ -210,6 +213,7 @@ impl<S: TaskStore> App<S> {
 }
 
 /// Input collected from the new task form.
+#[derive(Debug)]
 pub struct NewTaskData {
     pub title: String,
     pub state: Option<String>,
@@ -255,7 +259,13 @@ fn run_event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, store: GitS
 
         if event::poll(timeout)? {
             match event::read()? {
-                CrosstermEvent::Key(key) => ui.handle_key(key)?,
+                CrosstermEvent::Key(key) => {
+                    if let Some(action) = ui.handle_key(key)? {
+                        if let Err(err) = handle_ui_action(terminal, &mut ui, action) {
+                            ui.error(format!("エディタ処理中に失敗しました: {err}"));
+                        }
+                    }
+                }
                 CrosstermEvent::Resize(_, _) => ui.request_redraw(),
                 _ => {}
             }
@@ -273,7 +283,6 @@ fn run_event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, store: GitS
 struct Ui<S: TaskStore> {
     app: App<S>,
     actor: Actor,
-    mode: Mode,
     message: Option<Message>,
     should_quit: bool,
 }
@@ -283,7 +292,6 @@ impl<S: TaskStore> Ui<S> {
         Self {
             app,
             actor,
-            mode: Mode::Browse,
             message: None,
             should_quit: false,
         }
@@ -298,13 +306,6 @@ impl<S: TaskStore> Ui<S> {
 
         self.draw_main(f, chunks[0]);
         self.draw_status(f, chunks[1]);
-
-        if let Mode::Comment(input) = &mut self.mode {
-            render_comment_overlay(f, size, input);
-        }
-        if let Mode::NewTask(form) = &mut self.mode {
-            render_new_task_overlay(f, size, form);
-        }
     }
 
     fn draw_main(&mut self, f: &mut ratatui::Frame<'_>, area: Rect) {
@@ -476,101 +477,72 @@ impl<S: TaskStore> Ui<S> {
         f.render_widget(message, rows[1]);
     }
 
-    fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
+    fn handle_key(&mut self, key: KeyEvent) -> Result<Option<UiAction>> {
         if key.kind != KeyEventKind::Press {
-            return Ok(());
+            return Ok(None);
         }
 
-        let current_mode = mem::replace(&mut self.mode, Mode::Browse);
-        let next_mode = match current_mode {
-            Mode::Browse => self.handle_browse_key(key)?,
-            Mode::Comment(input) => self.handle_comment_mode(key, input)?,
-            Mode::NewTask(form) => self.handle_new_task_mode(key, form)?,
-        };
-        self.mode = next_mode;
-        Ok(())
+        self.handle_browse_key(key)
     }
 
-    fn handle_browse_key(&mut self, key: KeyEvent) -> Result<Mode> {
-        let next_mode = match key.code {
+    fn handle_browse_key(&mut self, key: KeyEvent) -> Result<Option<UiAction>> {
+        match key.code {
             KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
                 self.should_quit = true;
-                Mode::Browse
+                Ok(None)
             }
             KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
                 self.app.select_next();
-                Mode::Browse
+                Ok(None)
             }
             KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
                 self.app.select_prev();
-                Mode::Browse
+                Ok(None)
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 self.app.refresh_tasks()?;
                 self.info("タスクを再読込しました");
-                Mode::Browse
+                Ok(None)
             }
             KeyCode::Char('c') | KeyCode::Char('C') => {
                 if let Some(task) = self.app.selected_task_id() {
-                    Mode::Comment(CommentInput::new(task))
+                    Ok(Some(UiAction::AddComment { task }))
                 } else {
                     self.error("コメント対象のタスクが選択されていません");
-                    Mode::Browse
+                    Ok(None)
                 }
             }
-            KeyCode::Char('n') | KeyCode::Char('N') => Mode::NewTask(NewTaskForm::new()),
-            _ => Mode::Browse,
-        };
-        Ok(next_mode)
+            KeyCode::Char('n') | KeyCode::Char('N') => Ok(Some(UiAction::CreateTask)),
+            _ => Ok(None),
+        }
     }
 
-    fn handle_comment_mode(&mut self, key: KeyEvent, mut input: CommentInput) -> Result<Mode> {
-        if key.code == KeyCode::Esc {
-            self.info("コメントをキャンセルしました");
-            return Ok(Mode::Browse);
-        }
-
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            match key.code {
-                KeyCode::Char('s') | KeyCode::Enter => {
-                    let body = input.textarea.lines().join("\n");
-                    let trimmed = body.trim();
-                    if trimmed.is_empty() {
-                        self.error("コメント本文が空です");
-                        return Ok(Mode::Comment(input));
-                    }
-                    self.app
-                        .add_comment(input.task, trimmed.to_owned(), self.actor.clone())?;
-                    self.info("コメントを追加しました");
-                    return Ok(Mode::Browse);
-                }
-                _ => {}
+    fn apply_comment_input(&mut self, task: TaskId, raw: String) -> Result<()> {
+        match parse_comment_editor_output(&raw) {
+            Some(body) => {
+                self.app
+                    .add_comment(task, body, self.actor.clone())
+                    .context("コメントの保存に失敗しました")?;
+                self.info("コメントを追加しました");
             }
+            None => self.info("コメントをキャンセルしました"),
         }
-
-        input.textarea.input(key);
-        Ok(Mode::Comment(input))
+        Ok(())
     }
 
-    fn handle_new_task_mode(&mut self, key: KeyEvent, mut form: NewTaskForm) -> Result<Mode> {
-        match form.handle_key(key) {
-            FormAction::Continue => Ok(Mode::NewTask(form)),
-            FormAction::Cancel => {
-                self.info("新規タスク作成をキャンセルしました");
-                Ok(Mode::Browse)
+    fn apply_new_task_input(&mut self, raw: String) -> Result<()> {
+        match parse_new_task_editor_output(&raw) {
+            Ok(Some(data)) => {
+                let id = self
+                    .app
+                    .create_task(data, self.actor.clone())
+                    .context("タスクの作成に失敗しました")?;
+                self.info(format!("タスクを作成しました: {id}"));
             }
-            FormAction::Submit => match form.build_data() {
-                Ok(data) => {
-                    let id = self.app.create_task(data, self.actor.clone())?;
-                    self.info(format!("タスクを作成しました: {id}"));
-                    Ok(Mode::Browse)
-                }
-                Err(msg) => {
-                    self.error(msg);
-                    Ok(Mode::NewTask(form))
-                }
-            },
+            Ok(None) => self.info("タスク作成をキャンセルしました"),
+            Err(msg) => self.error(msg),
         }
+        Ok(())
     }
 
     fn info(&mut self, message: impl Into<String>) {
@@ -582,14 +554,10 @@ impl<S: TaskStore> Ui<S> {
     }
 
     fn instructions(&self) -> String {
-        match self.mode {
-            Mode::Browse => format!(
-                "j/k・↑↓:移動  n:新規  c:コメント  r:再読込  q/Esc:終了  [{} <{}>]",
-                self.actor.name, self.actor.email
-            ),
-            Mode::Comment(_) => "Ctrl+S / Ctrl+Enter:送信  Esc:キャンセル".into(),
-            Mode::NewTask(_) => "Tab/Shift+Tab:移動  Ctrl+S / Ctrl+Enter:作成  Esc:キャンセル".into(),
-        }
+        format!(
+            "j/k・↑↓:移動  n:新規  c:コメント  r:再読込  q/Esc:終了  [{} <{}>]",
+            self.actor.name, self.actor.email
+        )
     }
 
     fn status_text(&self) -> String {
@@ -619,23 +587,29 @@ impl<S: TaskStore> Ui<S> {
     fn request_redraw(&mut self) {}
 }
 
-enum Mode {
-    Browse,
-    Comment(CommentInput),
-    NewTask(NewTaskForm),
+enum UiAction {
+    AddComment { task: TaskId },
+    CreateTask,
 }
 
-struct CommentInput {
-    task: TaskId,
-    textarea: TextArea<'static>,
-}
-
-impl CommentInput {
-    fn new(task: TaskId) -> Self {
-        let mut textarea = TextArea::default();
-        textarea.set_placeholder_text("コメントを入力してください");
-        Self { task, textarea }
+fn handle_ui_action<S: TaskStore>(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    ui: &mut Ui<S>,
+    action: UiAction,
+) -> Result<()> {
+    match action {
+        UiAction::AddComment { task } => {
+            let template = comment_editor_template(&ui.actor, task);
+            let raw = with_terminal_suspended(terminal, || launch_editor(&template))?;
+            ui.apply_comment_input(task, raw)?;
+        }
+        UiAction::CreateTask => {
+            let template = new_task_editor_template();
+            let raw = with_terminal_suspended(terminal, || launch_editor(&template))?;
+            ui.apply_new_task_input(raw)?;
+        }
     }
+    Ok(())
 }
 
 struct Message {
@@ -678,348 +652,191 @@ impl Message {
     }
 }
 
-struct NewTaskForm {
-    step: TaskFormStep,
-    title: LineEditor,
-    state: LineEditor,
-    labels: LineEditor,
-    assignees: LineEditor,
-    description: TextArea<'static>,
+fn comment_editor_template(actor: &Actor, task: TaskId) -> String {
+    format!(
+        "# コメントを入力してください。\n# 空のまま保存するとキャンセルされます。\n# Task: {task}\n# Actor: {} <{}>\n\n",
+        actor.name, actor.email
+    )
 }
 
-impl NewTaskForm {
-    fn new() -> Self {
-        let mut description = TextArea::default();
-        description.set_placeholder_text("Markdown 形式で説明を入力できます");
-        Self {
-            step: TaskFormStep::Title,
-            title: LineEditor::default(),
-            state: LineEditor::default(),
-            labels: LineEditor::default(),
-            assignees: LineEditor::default(),
-            description,
-        }
-    }
-
-    fn handle_key(&mut self, key: KeyEvent) -> FormAction {
-        if key.code == KeyCode::Esc {
-            return FormAction::Cancel;
-        }
-
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            match key.code {
-                KeyCode::Char('s') | KeyCode::Enter => return FormAction::Submit,
-                _ => {}
-            }
-        }
-
-        match key.code {
-            KeyCode::Tab => {
-                self.step = self.step.next();
-                FormAction::Continue
-            }
-            KeyCode::BackTab => {
-                self.step = self.step.prev();
-                FormAction::Continue
-            }
-            KeyCode::Enter => {
-                if self.step == TaskFormStep::Description {
-                    self.description.input(key);
-                } else {
-                    self.step = self.step.next();
-                }
-                FormAction::Continue
-            }
-            _ => {
-                if self.step == TaskFormStep::Description {
-                    self.description.input(key);
-                } else if let Some(editor) = self.current_line_editor_mut() {
-                    editor.handle_key(key);
-                }
-                FormAction::Continue
-            }
-        }
-    }
-
-    fn build_data(&self) -> Result<NewTaskData, String> {
-        let title = self.title.content().trim().to_owned();
-        if title.is_empty() {
-            return Err("タイトルを入力してください".into());
-        }
-
-        let state = match self.state.content().trim() {
-            "" => None,
-            other => Some(other.to_owned()),
-        };
-        let labels = parse_list(self.labels.content());
-        let assignees = parse_list(self.assignees.content());
-
-        let description_raw = self.description.lines().join("\n");
-        let description = if description_raw.trim().is_empty() {
-            None
-        } else {
-            Some(description_raw.trim_end().to_owned())
-        };
-
-        Ok(NewTaskData {
-            title,
-            state,
-            labels,
-            assignees,
-            description,
-        })
-    }
-
-    fn current_line_editor_mut(&mut self) -> Option<&mut LineEditor> {
-        match self.step {
-            TaskFormStep::Title => Some(&mut self.title),
-            TaskFormStep::State => Some(&mut self.state),
-            TaskFormStep::Labels => Some(&mut self.labels),
-            TaskFormStep::Assignees => Some(&mut self.assignees),
-            TaskFormStep::Description => None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum TaskFormStep {
-    Title,
-    State,
-    Labels,
-    Assignees,
-    Description,
-}
-
-impl TaskFormStep {
-    fn next(self) -> Self {
-        match self {
-            TaskFormStep::Title => TaskFormStep::State,
-            TaskFormStep::State => TaskFormStep::Labels,
-            TaskFormStep::Labels => TaskFormStep::Assignees,
-            TaskFormStep::Assignees => TaskFormStep::Description,
-            TaskFormStep::Description => TaskFormStep::Description,
-        }
-    }
-
-    fn prev(self) -> Self {
-        match self {
-            TaskFormStep::Title => TaskFormStep::Title,
-            TaskFormStep::State => TaskFormStep::Title,
-            TaskFormStep::Labels => TaskFormStep::State,
-            TaskFormStep::Assignees => TaskFormStep::Labels,
-            TaskFormStep::Description => TaskFormStep::Assignees,
-        }
-    }
-}
-
-enum FormAction {
-    Continue,
-    Submit,
-    Cancel,
-}
-
-#[derive(Default, Clone)]
-struct LineEditor {
-    buffer: String,
-    cursor: usize,
-}
-
-impl LineEditor {
-    fn content(&self) -> &str {
-        &self.buffer
-    }
-
-    fn handle_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Left => {
-                if self.cursor > 0 {
-                    self.cursor -= 1;
-                }
-            }
-            KeyCode::Right => {
-                if self.cursor < self.char_count() {
-                    self.cursor += 1;
-                }
-            }
-            KeyCode::Home => {
-                self.cursor = 0;
-            }
-            KeyCode::End => {
-                self.cursor = self.char_count();
-            }
-            KeyCode::Backspace => {
-                if self.cursor > 0 {
-                    let start = self.byte_index(self.cursor - 1);
-                    let end = self.byte_index(self.cursor);
-                    self.buffer.drain(start..end);
-                    self.cursor -= 1;
-                }
-            }
-            KeyCode::Delete => {
-                if self.cursor < self.char_count() {
-                    let start = self.byte_index(self.cursor);
-                    let end = self.byte_index(self.cursor + 1);
-                    self.buffer.drain(start..end);
-                }
-            }
-            KeyCode::Char(c) => {
-                if !key
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-                {
-                    let idx = self.byte_index(self.cursor);
-                    self.buffer.insert(idx, c);
-                    self.cursor += 1;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn char_count(&self) -> usize {
-        self.buffer.chars().count()
-    }
-
-    fn byte_index(&self, char_idx: usize) -> usize {
-        if char_idx == 0 {
-            return 0;
-        }
-        if char_idx >= self.char_count() {
-            return self.buffer.len();
-        }
-        self.buffer
-            .char_indices()
-            .nth(char_idx)
-            .map(|(idx, _)| idx)
-            .unwrap_or_else(|| self.buffer.len())
-    }
-
-    fn split_at_cursor(&self) -> (String, Option<char>, String) {
-        let mut chars = self.buffer.chars();
-        let before: String = chars.by_ref().take(self.cursor).collect();
-        let cursor_char = chars.next();
-        let after: String = chars.collect();
-        (before, cursor_char, after)
-    }
-}
-
-fn render_line_field(
-    f: &mut ratatui::Frame<'_>,
-    area: Rect,
-    label: &str,
-    editor: &LineEditor,
-    active: bool,
-    placeholder: &str,
-) {
-    let mut block = Block::default().title(label).borders(Borders::ALL);
-    if active {
-        block = block.border_style(Style::default().fg(Color::Cyan));
-    }
-    let (before, cursor_char, after) = editor.split_at_cursor();
-
-    let mut spans = Vec::new();
-    if active {
-        if before.is_empty() && cursor_char.is_none() && after.is_empty() {
-            spans.push(Span::styled(placeholder, Style::default().fg(Color::DarkGray)));
-            spans.push(Span::styled(" ", Style::default().bg(Color::Cyan)));
-        } else {
-            spans.push(Span::raw(before));
-            spans.push(Span::styled(
-                cursor_char
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| " ".to_string()),
-                Style::default().bg(Color::Cyan),
-            ));
-            spans.push(Span::raw(after));
-        }
-    } else if before.is_empty() && cursor_char.is_none() && after.is_empty() {
-        spans.push(Span::styled(placeholder, Style::default().fg(Color::DarkGray)));
+fn parse_comment_editor_output(raw: &str) -> Option<String> {
+    let body = raw
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        None
     } else {
-        let mut text = before;
-        if let Some(c) = cursor_char {
-            text.push(c);
+        Some(trimmed.to_owned())
+    }
+}
+
+fn new_task_editor_template() -> String {
+    [
+        "# 新規タスクを作成します。タイトルは必須です。",
+        "# 空のまま保存すると作成をキャンセルしたものとして扱います。",
+        "title: ",
+        "state: ",
+        "labels: ",
+        "assignees: ",
+        "---",
+        "# この下に説明をMarkdown形式で記入してください。不要なら空のままにしてください。",
+        "",
+    ]
+    .join("\n")
+}
+
+fn parse_new_task_editor_output(raw: &str) -> Result<Option<NewTaskData>, String> {
+    let mut title = String::new();
+    let mut state = String::new();
+    let mut labels = String::new();
+    let mut assignees = String::new();
+    let mut description_lines = Vec::new();
+    let mut in_description = false;
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') {
+            continue;
         }
-        text.push_str(&after);
-        spans.push(Span::raw(text));
+        if !in_description {
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed == "---" {
+                in_description = true;
+                continue;
+            }
+            if let Some((key, value)) = trimmed.split_once(':') {
+                let value = value.trim();
+                match key.trim() {
+                    "title" => title = value.to_owned(),
+                    "state" => state = value.to_owned(),
+                    "labels" => labels = value.to_owned(),
+                    "assignees" => assignees = value.to_owned(),
+                    unknown => {
+                        return Err(format!("未知のフィールドです: {unknown}"));
+                    }
+                }
+            } else {
+                return Err(format!("フィールドの形式が正しくありません: {trimmed}"));
+            }
+        } else {
+            description_lines.push(line);
+        }
     }
 
-    let paragraph = Paragraph::new(Line::from(spans))
-        .block(block)
-        .wrap(Wrap { trim: false });
-    f.render_widget(paragraph, area);
-}
+    let title = title.trim().to_owned();
+    let state = state.trim();
+    let labels = labels.trim();
+    let assignees = assignees.trim();
+    let description = description_lines.join("\n");
 
-fn render_comment_overlay(f: &mut ratatui::Frame<'_>, size: Rect, input: &mut CommentInput) {
-    let area = centered_rect(70, 60, size);
-    f.render_widget(Clear, area);
-    let block = Block::default()
-        .title("コメント入力 (Ctrl+S / Ctrl+Enter:送信, Esc:キャンセル)")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
-    input.textarea.set_block(block);
-    f.render_widget(input.textarea.widget(), area);
-}
-
-fn render_new_task_overlay(f: &mut ratatui::Frame<'_>, size: Rect, form: &mut NewTaskForm) {
-    let area = centered_rect(80, 80, size);
-    f.render_widget(Clear, area);
-
-    let block = Block::default()
-        .title("新規タスク (Tab/Shift+Tab:移動, Ctrl+S / Ctrl+Enter:作成, Esc:キャンセル)")
-        .borders(Borders::ALL);
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Min(5),
-        ])
-        .split(inner);
-
-    render_line_field(
-        f,
-        chunks[0],
-        "タイトル*",
-        &form.title,
-        form.step == TaskFormStep::Title,
-        "タスク名を入力",
-    );
-    render_line_field(
-        f,
-        chunks[1],
-        "状態",
-        &form.state,
-        form.step == TaskFormStep::State,
-        "state/todo など",
-    );
-    render_line_field(
-        f,
-        chunks[2],
-        "ラベル(カンマ区切り)",
-        &form.labels,
-        form.step == TaskFormStep::Labels,
-        "type/docs, area/cli",
-    );
-    render_line_field(
-        f,
-        chunks[3],
-        "担当者(カンマ区切り)",
-        &form.assignees,
-        form.step == TaskFormStep::Assignees,
-        "alice, bob",
-    );
-
-    let mut desc_block = Block::default().title("説明 (Markdown 可)").borders(Borders::ALL);
-    if form.step == TaskFormStep::Description {
-        desc_block = desc_block.border_style(Style::default().fg(Color::Cyan));
+    let is_all_empty = title.is_empty()
+        && state.is_empty()
+        && labels.is_empty()
+        && assignees.is_empty()
+        && description.trim().is_empty();
+    if is_all_empty {
+        return Ok(None);
     }
-    form.description.set_block(desc_block);
-    f.render_widget(form.description.widget(), chunks[4]);
+
+    if title.is_empty() {
+        return Err("タイトルを入力してください".into());
+    }
+
+    let state = if state.is_empty() {
+        None
+    } else {
+        Some(state.to_owned())
+    };
+    let labels = parse_list(labels);
+    let assignees = parse_list(assignees);
+    let description = if description.trim().is_empty() {
+        None
+    } else {
+        Some(description.trim_end().to_owned())
+    };
+
+    Ok(Some(NewTaskData {
+        title,
+        state,
+        labels,
+        assignees,
+        description,
+    }))
+}
+
+fn with_terminal_suspended<F, T>(terminal: &mut Terminal<CrosstermBackend<Stdout>>, f: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T>,
+{
+    suspend_terminal(terminal)?;
+    let result = f();
+    let resume_result = resume_terminal(terminal);
+    if let Err(err) = resume_result {
+        return Err(err);
+    }
+    result
+}
+
+fn suspend_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
+    terminal.show_cursor()?;
+    terminal.flush()?;
+    disable_raw_mode().context("failed to disable raw mode")?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen).context("failed to leave alternate screen")?;
+    Ok(())
+}
+
+fn resume_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
+    execute!(terminal.backend_mut(), EnterAlternateScreen).context("failed to re-enter alternate screen")?;
+    enable_raw_mode().context("failed to enable raw mode")?;
+    terminal.clear()?;
+    terminal.hide_cursor()?;
+    terminal.flush()?;
+    Ok(())
+}
+
+fn resolve_editor_command() -> String {
+    env::var("GIT_MILE_EDITOR")
+        .or_else(|_| env::var("VISUAL"))
+        .or_else(|_| env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".into())
+}
+
+fn launch_editor(initial: &str) -> Result<String> {
+    let mut tempfile = NamedTempFile::new().context("一時ファイルの作成に失敗しました")?;
+    tempfile
+        .write_all(initial.as_bytes())
+        .context("一時ファイルへの書き込みに失敗しました")?;
+    tempfile
+        .flush()
+        .context("一時ファイルのフラッシュに失敗しました")?;
+
+    let temp_path: PathBuf = tempfile.path().to_path_buf();
+
+    let editor = resolve_editor_command();
+    let mut parts =
+        shell_words::split(&editor).map_err(|err| anyhow!("エディタコマンドを解析できません: {err}"))?;
+    if parts.is_empty() {
+        parts.push(editor);
+    }
+    let program = parts.remove(0);
+
+    let status = Command::new(&program)
+        .args(&parts)
+        .arg(&temp_path)
+        .status()
+        .with_context(|| format!("エディタ {program} の起動に失敗しました"))?;
+    if !status.success() {
+        return Err(anyhow!("エディタが異常終了しました (終了コード: {status})"));
+    }
+
+    let contents =
+        fs::read_to_string(&temp_path).context("エディタで編集した内容の読み込みに失敗しました")?;
+    Ok(contents)
 }
 
 fn parse_list(input: &str) -> Vec<String> {
@@ -1039,26 +856,6 @@ fn resolve_actor() -> Actor {
         .or_else(|_| std::env::var("GIT_AUTHOR_EMAIL"))
         .unwrap_or_else(|_| "git-mile@example.invalid".to_owned());
     Actor { name, email }
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
 }
 
 impl TaskStore for GitStore {
@@ -1315,6 +1112,67 @@ mod tests {
         let labels: Vec<&str> = snap.labels.iter().map(|s| s.as_str()).collect();
         assert_eq!(labels, vec!["type/docs"]);
         Ok(())
+    }
+
+    #[test]
+    fn comment_editor_output_strips_comments_and_trims() {
+        let input = "# comment\nline1\n\nline2  \n# ignored";
+        let parsed = parse_comment_editor_output(input);
+        assert_eq!(parsed.as_deref(), Some("line1\n\nline2"));
+    }
+
+    #[test]
+    fn comment_editor_output_none_when_empty() {
+        let input = "# comment\n\n   \n# another comment";
+        assert!(parse_comment_editor_output(input).is_none());
+    }
+
+    #[test]
+    fn new_task_editor_output_parses_fields() {
+        let raw = "\
+# heading
+title: Sample Task
+state: state/todo
+labels: type/docs, area/cli
+assignees: alice, bob
+---
+This is description.
+";
+        let parsed = parse_new_task_editor_output(raw).expect("parse succeeds");
+        let data = parsed.expect("should create task");
+        assert_eq!(data.title, "Sample Task");
+        assert_eq!(data.state.as_deref(), Some("state/todo"));
+        assert_eq!(data.labels, vec!["type/docs".to_string(), "area/cli".to_string()]);
+        assert_eq!(data.assignees, vec!["alice".to_string(), "bob".to_string()]);
+        assert_eq!(data.description.as_deref(), Some("This is description."));
+    }
+
+    #[test]
+    fn new_task_editor_output_none_when_all_empty() {
+        let raw = "\
+# heading
+title:
+state:
+labels:
+assignees:
+---
+# no description
+";
+        let parsed = parse_new_task_editor_output(raw).expect("parse succeeds");
+        assert!(parsed.is_none());
+    }
+
+    #[test]
+    fn new_task_editor_output_requires_title() {
+        let raw = "\
+title:
+state: state/todo
+labels: foo
+assignees:
+---
+";
+        let err = parse_new_task_editor_output(raw).expect_err("should error");
+        assert_eq!(err, "タイトルを入力してください");
     }
 
     #[test]
