@@ -120,10 +120,7 @@ mod tests {
     #[test]
     fn event_id_roundtrip() {
         let uuid = Uuid::now_v7();
-        let parsed: EventId = uuid
-            .to_string()
-            .parse()
-            .expect("must parse event id");
+        let parsed: EventId = uuid.to_string().parse().expect("must parse event id");
         assert_eq!(parsed.0, uuid);
     }
 }
