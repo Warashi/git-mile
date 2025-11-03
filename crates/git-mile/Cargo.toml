@@ -21,3 +21,6 @@ git-mile-store-git = { path = "../git-mile-store-git" }
 time = { version = "0.3", features = ["formatting"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "std"] }
+ratatui = "0.29"
+crossterm = "0.27"
+tui-textarea = "0.4"

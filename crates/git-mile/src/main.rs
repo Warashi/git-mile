@@ -10,6 +10,8 @@ use git_mile_core::id::{EventId, TaskId};
 use git_mile_core::TaskSnapshot;
 use git_mile_store_git::GitStore;
 
+mod tui;
+
 /// Git-backed tasks without touching the working tree.
 #[derive(Parser, Debug)]
 #[command(
@@ -66,6 +68,9 @@ enum Command {
 
     /// List task ids.
     Ls,
+
+    /// Launch interactive terminal UI.
+    Tui,
 }
 
 fn main() -> Result<()> {
@@ -73,9 +78,11 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let repo_path = cli.repo.unwrap_or_else(|| ".".to_owned());
-    let store = GitStore::open(repo_path)?;
+    execute_command(&repo_path, cli.cmd)
+}
 
-    match cli.cmd {
+fn execute_command(repo_path: &str, command: Command) -> Result<()> {
+    match command {
         Command::New {
             title,
             state,
@@ -85,6 +92,7 @@ fn main() -> Result<()> {
             actor_name,
             actor_email,
         } => {
+            let store = GitStore::open(repo_path)?;
             let task = TaskId::new();
             let actor = Actor {
                 name: actor_name,
@@ -111,6 +119,7 @@ fn main() -> Result<()> {
             actor_name,
             actor_email,
         } => {
+            let store = GitStore::open(repo_path)?;
             let task = TaskId::from_str(&task).context("Invalid task id")?;
             let actor = Actor {
                 name: actor_name,
@@ -129,6 +138,7 @@ fn main() -> Result<()> {
         }
 
         Command::Show { task } => {
+            let store = GitStore::open(repo_path)?;
             let task = TaskId::from_str(&task).context("Invalid task id")?;
             let events = store.load_events(task)?;
             let snap = TaskSnapshot::replay(events);
@@ -136,9 +146,15 @@ fn main() -> Result<()> {
         }
 
         Command::Ls => {
+            let store = GitStore::open(repo_path)?;
             for id in store.list_tasks()? {
                 println!("{id}");
             }
+        }
+
+        Command::Tui => {
+            let store = GitStore::open(repo_path)?;
+            tui::run(store)?;
         }
     }
 
@@ -211,6 +227,15 @@ mod tests {
                 assert_eq!(message, "Looks good");
             }
             _ => panic!("expected comment command"),
+        }
+    }
+
+    #[test]
+    fn parse_tui_command() {
+        let cli = Cli::parse_from(["git-mile", "tui"]);
+        match cli.cmd {
+            Command::Tui => {}
+            _ => panic!("expected tui command"),
         }
     }
 }
