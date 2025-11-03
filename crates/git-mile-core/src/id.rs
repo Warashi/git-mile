@@ -113,14 +113,20 @@ mod tests {
     #[test]
     fn task_id_roundtrip() {
         let uuid = Uuid::now_v7();
-        let parsed: TaskId = uuid.to_string().parse().expect("must parse task id");
+        let parsed: TaskId = uuid
+            .to_string()
+            .parse()
+            .unwrap_or_else(|err| panic!("must parse task id: {err}"));
         assert_eq!(parsed.0, uuid);
     }
 
     #[test]
     fn event_id_roundtrip() {
         let uuid = Uuid::now_v7();
-        let parsed: EventId = uuid.to_string().parse().expect("must parse event id");
+        let parsed: EventId = uuid
+            .to_string()
+            .parse()
+            .unwrap_or_else(|err| panic!("must parse event id: {err}"));
         assert_eq!(parsed.0, uuid);
     }
 }
