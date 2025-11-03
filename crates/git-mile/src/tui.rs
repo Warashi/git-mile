@@ -24,6 +24,7 @@ use ratatui::{
     Terminal,
 };
 use time::OffsetDateTime;
+use tracing::subscriber::NoSubscriber;
 use tui_textarea::TextArea;
 
 /// Storage abstraction so the TUI logic can be unit-tested.
@@ -226,7 +227,8 @@ pub fn run(store: GitStore) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
     terminal.hide_cursor()?;
 
-    let result = run_event_loop(&mut terminal, store);
+    let result =
+        tracing::subscriber::with_default(NoSubscriber::default(), || run_event_loop(&mut terminal, store));
 
     disable_raw_mode().ok();
     execute!(terminal.backend_mut(), LeaveAlternateScreen).ok();
