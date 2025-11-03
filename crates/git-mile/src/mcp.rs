@@ -1,8 +1,11 @@
 //! MCP server implementation for git-mile.
 
+use git_mile_core::event::{Actor, Event, EventKind};
+use git_mile_core::id::TaskId;
 use git_mile_core::TaskSnapshot;
 use git_mile_store_git::GitStore;
 use rmcp::handler::server::tool::{ToolCallContext, ToolRouter};
+use rmcp::handler::server::wrapper::Parameters;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
     CallToolRequestParam, CallToolResult, Content, Implementation, InitializeResult,
@@ -10,8 +13,43 @@ use rmcp::model::{
 };
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{tool, tool_router, ErrorData as McpError};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+
+/// Parameters for creating a new task.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct CreateTaskParams {
+    /// Human-readable title for the task.
+    pub title: String,
+    /// Optional workflow state label.
+    #[serde(default)]
+    pub state: Option<String>,
+    /// Labels to attach to the task.
+    #[serde(default)]
+    pub labels: Vec<String>,
+    /// Initial assignees.
+    #[serde(default)]
+    pub assignees: Vec<String>,
+    /// Optional description in Markdown.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Actor name (defaults to "git-mile").
+    #[serde(default = "default_actor_name")]
+    pub actor_name: String,
+    /// Actor email (defaults to "git-mile@example.invalid").
+    #[serde(default = "default_actor_email")]
+    pub actor_email: String,
+}
+
+fn default_actor_name() -> String {
+    "git-mile".to_owned()
+}
+
+fn default_actor_email() -> String {
+    "git-mile@example.invalid".to_owned()
+}
 
 /// MCP server for git-mile.
 #[derive(Clone)]
@@ -48,6 +86,47 @@ impl GitMileServer {
         }
 
         let json_str = serde_json::to_string_pretty(&tasks)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json_str)]))
+    }
+
+    /// Create a new task.
+    #[tool(description = "Create a new task with title, labels, assignees, description, and state")]
+    async fn create_task(
+        &self,
+        Parameters(params): Parameters<CreateTaskParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let store = self.store.lock().await;
+        let task = TaskId::new();
+        let actor = Actor {
+            name: params.actor_name,
+            email: params.actor_email,
+        };
+
+        let event = Event::new(
+            task,
+            &actor,
+            EventKind::TaskCreated {
+                title: params.title,
+                labels: params.labels,
+                assignees: params.assignees,
+                description: params.description,
+                state: params.state,
+            },
+        );
+
+        store
+            .append_event(&event)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        // Load the newly created task to return its snapshot
+        let events = store
+            .load_events(task)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let snapshot = TaskSnapshot::replay(&events);
+
+        let json_str = serde_json::to_string_pretty(&snapshot)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         Ok(CallToolResult::success(vec![Content::text(json_str)]))
