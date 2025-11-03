@@ -70,7 +70,7 @@ impl TaskView {
             Ordering::Equal => a.id.cmp(&b.id),
             other => other,
         });
-        let snapshot = TaskSnapshot::replay(events.clone());
+        let snapshot = TaskSnapshot::replay(&mut events);
         let comments = events
             .iter()
             .filter_map(|ev| {
@@ -468,7 +468,7 @@ impl<S: TaskStore> Ui<S> {
                 .iter()
                 .map(|view| {
                     let title = Span::styled(
-                        view.snapshot.title.clone(),
+                        &view.snapshot.title,
                         Style::default().add_modifier(Modifier::BOLD),
                     );
                     let meta = format!(
@@ -476,8 +476,8 @@ impl<S: TaskStore> Ui<S> {
                         view.snapshot.id,
                         view.snapshot
                             .state
-                            .clone()
-                            .unwrap_or_else(|| "state/unknown".into())
+                            .as_deref()
+                            .unwrap_or("state/unknown")
                     );
                     let meta_span = Span::styled(meta, Style::default().fg(Color::DarkGray));
                     ListItem::new(vec![Line::from(vec![title]), Line::from(vec![meta_span])])
@@ -504,7 +504,7 @@ impl<S: TaskStore> Ui<S> {
         if let Some(task) = self.app.selected_task() {
             let mut lines = Vec::new();
             lines.push(Line::from(Span::styled(
-                task.snapshot.title.clone(),
+                &task.snapshot.title,
                 Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
             )));
             lines.push(Line::from(format!("ID: {}", task.snapshot.id)));
@@ -839,16 +839,16 @@ fn parse_comment_editor_output(raw: &str) -> Option<String> {
 
 fn edit_task_editor_template(task: &TaskView) -> String {
     let snapshot = &task.snapshot;
-    let state = snapshot.state.clone().unwrap_or_default();
+    let state = snapshot.state.as_deref().unwrap_or_default();
     let labels = if snapshot.labels.is_empty() {
         String::new()
     } else {
-        snapshot.labels.iter().cloned().collect::<Vec<_>>().join(", ")
+        snapshot.labels.iter().map(String::as_str).collect::<Vec<_>>().join(", ")
     };
     let assignees = if snapshot.assignees.is_empty() {
         String::new()
     } else {
-        snapshot.assignees.iter().cloned().collect::<Vec<_>>().join(", ")
+        snapshot.assignees.iter().map(String::as_str).collect::<Vec<_>>().join(", ")
     };
 
     let mut lines = vec![
@@ -1231,7 +1231,7 @@ mod tests {
 
         let app = App::new(store)?;
         assert_eq!(app.tasks.len(), 2);
-        let titles: Vec<_> = app.tasks.iter().map(|view| view.snapshot.title.clone()).collect();
+        let titles: Vec<_> = app.tasks.iter().map(|view| view.snapshot.title.as_str()).collect();
         assert_eq!(titles, vec!["A", "B"]);
         Ok(())
     }
