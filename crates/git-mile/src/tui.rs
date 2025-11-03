@@ -1043,9 +1043,19 @@ fn parse_list(input: &str) -> Vec<String> {
 fn resolve_actor() -> Actor {
     let name = std::env::var("GIT_MILE_ACTOR_NAME")
         .or_else(|_| std::env::var("GIT_AUTHOR_NAME"))
+        .or_else(|_| {
+            git2::Config::open_default()
+                .and_then(|config| config.get_string("user.name"))
+                .map_err(|_| std::env::VarError::NotPresent)
+        })
         .unwrap_or_else(|_| "git-mile".to_owned());
     let email = std::env::var("GIT_MILE_ACTOR_EMAIL")
         .or_else(|_| std::env::var("GIT_AUTHOR_EMAIL"))
+        .or_else(|_| {
+            git2::Config::open_default()
+                .and_then(|config| config.get_string("user.email"))
+                .map_err(|_| std::env::VarError::NotPresent)
+        })
         .unwrap_or_else(|_| "git-mile@example.invalid".to_owned());
     Actor { name, email }
 }

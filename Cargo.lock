@@ -360,6 +360,7 @@ dependencies = [
  "crossterm 0.27.0",
  "git-mile-core",
  "git-mile-store-git",
+ "git2",
  "ratatui",
  "serde_json",
  "shell-words",
