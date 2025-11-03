@@ -291,7 +291,7 @@ impl<S: TaskStore> Ui<S> {
         let size = f.area();
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(5), Constraint::Length(3)])
+            .constraints([Constraint::Min(5), Constraint::Length(7)])
             .split(size);
 
         self.draw_main(f, chunks[0]);
@@ -460,7 +460,7 @@ impl<S: TaskStore> Ui<S> {
     fn draw_status(&self, f: &mut ratatui::Frame<'_>, area: Rect) {
         let rows = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(2), Constraint::Length(1)])
+            .constraints([Constraint::Length(4), Constraint::Length(3)])
             .split(area);
 
         let instructions = Paragraph::new(self.instructions())
