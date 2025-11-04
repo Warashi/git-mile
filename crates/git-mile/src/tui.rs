@@ -217,6 +217,13 @@ impl<S: TaskStore> App<S> {
             },
         );
         self.store.append_event(&event)?;
+
+        // Create ChildLinked event if parent is specified
+        if let Some(parent) = data.parent {
+            let link_event = Event::new(task, actor, EventKind::ChildLinked { parent, child: task });
+            self.store.append_event(&link_event)?;
+        }
+
         self.refresh_tasks_with(Some(task))?;
         Ok(task)
     }
@@ -245,6 +252,7 @@ impl<S: TaskStore> App<S> {
             labels,
             assignees,
             description,
+            parent: _,
         } = data;
 
         let mut events = Vec::new();
@@ -353,6 +361,7 @@ pub struct NewTaskData {
     pub labels: Vec<String>,
     pub assignees: Vec<String>,
     pub description: Option<String>,
+    pub parent: Option<TaskId>,
 }
 
 /// Launch the interactive TUI.
@@ -649,6 +658,13 @@ impl<S: TaskStore> Ui<S> {
                 |task| Ok(Some(UiAction::EditTask { task })),
             ),
             KeyCode::Char('n' | 'N') => Ok(Some(UiAction::CreateTask)),
+            KeyCode::Char('s' | 'S') => self.app.selected_task_id().map_or_else(
+                || {
+                    self.error("子タスクを作成する親タスクが選択されていません");
+                    Ok(None)
+                },
+                |parent| Ok(Some(UiAction::CreateSubtask { parent })),
+            ),
             _ => Ok(None),
         }
     }
@@ -674,6 +690,22 @@ impl<S: TaskStore> Ui<S> {
                     .create_task(data, &self.actor)
                     .context("タスクの作成に失敗しました")?;
                 self.info(format!("タスクを作成しました: {id}"));
+            }
+            Ok(None) => self.info("タスク作成をキャンセルしました"),
+            Err(msg) => self.error(msg),
+        }
+        Ok(())
+    }
+
+    fn apply_new_subtask_input(&mut self, parent: TaskId, raw: &str) -> Result<()> {
+        match parse_new_task_editor_output(raw) {
+            Ok(Some(mut data)) => {
+                data.parent = Some(parent);
+                let id = self
+                    .app
+                    .create_task(data, &self.actor)
+                    .context("タスクの作成に失敗しました")?;
+                self.info(format!("子タスクを作成しました: {id}"));
             }
             Ok(None) => self.info("タスク作成をキャンセルしました"),
             Err(msg) => self.error(msg),
@@ -710,7 +742,7 @@ impl<S: TaskStore> Ui<S> {
 
     fn instructions(&self) -> String {
         format!(
-            "j/k・↑↓:移動  n:新規  e:編集  c:コメント  r:再読込  q/Esc:終了  [{} <{}>]",
+            "j/k・↑↓:移動  n:新規  s:子タスク  e:編集  c:コメント  r:再読込  q/Esc:終了  [{} <{}>]",
             self.actor.name, self.actor.email
         )
     }
@@ -740,6 +772,7 @@ enum UiAction {
     AddComment { task: TaskId },
     EditTask { task: TaskId },
     CreateTask,
+    CreateSubtask { parent: TaskId },
 }
 
 fn handle_ui_action<S: TaskStore>(
@@ -764,9 +797,20 @@ fn handle_ui_action<S: TaskStore>(
             ui.apply_edit_task_input(task, &raw)?;
         }
         UiAction::CreateTask => {
-            let template = new_task_editor_template();
+            let template = new_task_editor_template(None);
             let raw = with_terminal_suspended(terminal, || launch_editor(&template))?;
             ui.apply_new_task_input(&raw)?;
+        }
+        UiAction::CreateSubtask { parent } => {
+            let parent_view = ui
+                .app
+                .tasks
+                .iter()
+                .find(|view| view.snapshot.id == parent)
+                .cloned();
+            let template = new_task_editor_template(parent_view.as_ref());
+            let raw = with_terminal_suspended(terminal, || launch_editor(&template))?;
+            ui.apply_new_subtask_input(parent, &raw)?;
         }
     }
     Ok(())
@@ -876,9 +920,21 @@ fn edit_task_editor_template(task: &TaskView) -> String {
     lines.join("\n")
 }
 
-fn new_task_editor_template() -> String {
+fn new_task_editor_template(parent: Option<&TaskView>) -> String {
+    let header = parent.map_or_else(
+        || "# 新規タスクを作成します。".to_owned(),
+        |p| {
+            format!(
+                "# 新規タスク（親: {} [{}...]）を作成します。",
+                p.snapshot.title,
+                &p.snapshot.id.to_string()[..12]
+            )
+        },
+    );
+
     [
-        "# 新規タスクを作成します。タイトルは必須です。",
+        header.as_str(),
+        "# タイトルは必須です。",
         "# 空のまま保存すると作成をキャンセルしたものとして扱います。",
         "title: ",
         "state: ",
@@ -970,6 +1026,7 @@ fn parse_new_task_editor_output(raw: &str) -> Result<Option<NewTaskData>, String
         labels,
         assignees,
         description,
+        parent: None,
     }))
 }
 
@@ -1311,6 +1368,7 @@ mod tests {
             labels: vec!["type/docs".into()],
             assignees: Vec::new(),
             description: Some("Write documentation".into()),
+            parent: None,
         };
 
         let id = app.create_task(data, &actor())?;
@@ -1421,6 +1479,7 @@ assignees:
                 labels: vec!["type/docs".into()],
                 assignees: vec!["bob".into()],
                 description: Some("new description".into()),
+                parent: None,
             },
             &actor(),
         )?;
@@ -1507,6 +1566,7 @@ assignees:
                 } else {
                     Some(snapshot.description)
                 },
+                parent: None,
             },
             &actor(),
         )?;
