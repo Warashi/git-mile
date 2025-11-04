@@ -374,18 +374,10 @@ mod tests {
         );
         created.ts = OffsetDateTime::now_utc() - Duration::seconds(30);
 
-        let mut link_child = Event::new(
-            task,
-            &actor,
-            EventKind::ChildLinked { parent: task, child },
-        );
+        let mut link_child = Event::new(task, &actor, EventKind::ChildLinked { parent: task, child });
         link_child.ts = created.ts + Duration::seconds(5);
 
-        let mut unlink_child = Event::new(
-            task,
-            &actor,
-            EventKind::ChildUnlinked { parent: task, child },
-        );
+        let mut unlink_child = Event::new(task, &actor, EventKind::ChildUnlinked { parent: task, child });
         unlink_child.ts = link_child.ts + Duration::seconds(5);
 
         let mut relation_add = Event::new(

@@ -250,11 +250,7 @@ impl<S: TaskStore> App<S> {
         let mut events = Vec::new();
 
         if title != current.snapshot.title {
-            events.push(Event::new(
-                task,
-                actor,
-                EventKind::TaskTitleSet { title },
-            ));
+            events.push(Event::new(task, actor, EventKind::TaskTitleSet { title }));
         }
 
         match (current.snapshot.state.as_ref(), state.as_ref()) {
@@ -477,10 +473,7 @@ impl<S: TaskStore> Ui<S> {
                     let meta = format!(
                         "{} | {}",
                         view.snapshot.id,
-                        view.snapshot
-                            .state
-                            .as_deref()
-                            .unwrap_or("state/unknown")
+                        view.snapshot.state.as_deref().unwrap_or("state/unknown")
                     );
                     let meta_span = Span::styled(meta, Style::default().fg(Color::DarkGray));
                     ListItem::new(vec![Line::from(vec![title]), Line::from(vec![meta_span])])
@@ -846,12 +839,22 @@ fn edit_task_editor_template(task: &TaskView) -> String {
     let labels = if snapshot.labels.is_empty() {
         String::new()
     } else {
-        snapshot.labels.iter().map(String::as_str).collect::<Vec<_>>().join(", ")
+        snapshot
+            .labels
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", ")
     };
     let assignees = if snapshot.assignees.is_empty() {
         String::new()
     } else {
-        snapshot.assignees.iter().map(String::as_str).collect::<Vec<_>>().join(", ")
+        snapshot
+            .assignees
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", ")
     };
 
     let mut lines = vec![
@@ -1234,7 +1237,11 @@ mod tests {
 
         let app = App::new(store)?;
         assert_eq!(app.tasks.len(), 2);
-        let titles: Vec<_> = app.tasks.iter().map(|view| view.snapshot.title.as_str()).collect();
+        let titles: Vec<_> = app
+            .tasks
+            .iter()
+            .map(|view| view.snapshot.title.as_str())
+            .collect();
         assert_eq!(titles, vec!["A", "B"]);
         Ok(())
     }

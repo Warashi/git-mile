@@ -8,8 +8,8 @@ use rmcp::handler::server::tool::{ToolCallContext, ToolRouter};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
-    CallToolRequestParam, CallToolResult, Content, Implementation, InitializeResult,
-    ListToolsResult, ProtocolVersion, ServerCapabilities,
+    CallToolRequestParam, CallToolResult, Content, Implementation, InitializeResult, ListToolsResult,
+    ProtocolVersion, ServerCapabilities,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{tool, tool_router, ErrorData as McpError};
@@ -345,9 +345,9 @@ impl GitMileServer {
             .load_events(task)
             .map_err(|e| McpError::invalid_params(format!("Task not found: {}", e), None))?;
 
-        let comment_exists = events.iter().any(|ev| {
-            matches!(&ev.kind, EventKind::CommentAdded { comment_id: cid, .. } if *cid == comment_id)
-        });
+        let comment_exists = events.iter().any(
+            |ev| matches!(&ev.kind, EventKind::CommentAdded { comment_id: cid, .. } if *cid == comment_id),
+        );
 
         if !comment_exists {
             return Err(McpError::invalid_params(

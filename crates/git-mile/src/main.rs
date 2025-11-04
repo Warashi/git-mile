@@ -167,7 +167,10 @@ fn execute_command(repo_path: &str, command: Command) -> Result<()> {
             let server = mcp::GitMileServer::new(store);
             tokio::runtime::Runtime::new()?.block_on(async move {
                 let transport = (tokio::io::stdin(), tokio::io::stdout());
-                let server = server.serve(transport).await.map_err(|e| anyhow::anyhow!("{:?}", e))?;
+                let server = server
+                    .serve(transport)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{:?}", e))?;
                 server.waiting().await.map_err(|e| anyhow::anyhow!("{:?}", e))
             })?;
         }
