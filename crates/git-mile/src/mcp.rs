@@ -88,6 +88,23 @@ pub struct UpdateTaskParams {
     pub actor_email: String,
 }
 
+/// Parameters for updating a comment.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct UpdateCommentParams {
+    /// Task ID containing the comment.
+    pub task_id: String,
+    /// Comment ID to update.
+    pub comment_id: String,
+    /// New comment body in Markdown.
+    pub body_md: String,
+    /// Actor name (defaults to "git-mile").
+    #[serde(default = "default_actor_name")]
+    pub actor_name: String,
+    /// Actor email (defaults to "git-mile@example.invalid").
+    #[serde(default = "default_actor_email")]
+    pub actor_email: String,
+}
+
 /// MCP server for git-mile.
 #[derive(Clone)]
 pub struct GitMileServer {
@@ -296,6 +313,76 @@ impl GitMileServer {
         let snapshot = TaskSnapshot::replay(&events);
 
         let json_str = serde_json::to_string_pretty(&snapshot)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json_str)]))
+    }
+
+    /// Update a comment.
+    #[tool(description = "Update an existing comment's body")]
+    async fn update_comment(
+        &self,
+        Parameters(params): Parameters<UpdateCommentParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use git_mile_core::id::EventId;
+
+        let store = self.store.lock().await;
+
+        // Parse task ID
+        let task: TaskId = params
+            .task_id
+            .parse()
+            .map_err(|e| McpError::invalid_params(format!("Invalid task ID: {}", e), None))?;
+
+        // Parse comment ID
+        let comment_id: EventId = params
+            .comment_id
+            .parse()
+            .map_err(|e| McpError::invalid_params(format!("Invalid comment ID: {}", e), None))?;
+
+        // Load events and verify comment exists
+        let events = store
+            .load_events(task)
+            .map_err(|e| McpError::invalid_params(format!("Task not found: {}", e), None))?;
+
+        let comment_exists = events.iter().any(|ev| {
+            matches!(&ev.kind, EventKind::CommentAdded { comment_id: cid, .. } if *cid == comment_id)
+        });
+
+        if !comment_exists {
+            return Err(McpError::invalid_params(
+                format!("Comment {} not found in task {}", comment_id, task),
+                None,
+            ));
+        }
+
+        let actor = Actor {
+            name: params.actor_name,
+            email: params.actor_email,
+        };
+
+        // Create CommentUpdated event
+        let event = Event::new(
+            task,
+            &actor,
+            EventKind::CommentUpdated {
+                comment_id,
+                body_md: params.body_md,
+            },
+        );
+
+        store
+            .append_event(&event)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        // Return success with the updated comment info
+        let result = serde_json::json!({
+            "task_id": task.to_string(),
+            "comment_id": comment_id.to_string(),
+            "status": "updated"
+        });
+
+        let json_str = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         Ok(CallToolResult::success(vec![Content::text(json_str)]))

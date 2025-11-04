@@ -95,6 +95,13 @@ pub enum EventKind {
         /// Comment body in Markdown.
         body_md: String,
     },
+    /// A Markdown comment is updated.
+    CommentUpdated {
+        /// Identifier for the comment event to update.
+        comment_id: EventId,
+        /// New comment body in Markdown.
+        body_md: String,
+    },
     /// A parent-child relationship is established.
     ChildLinked {
         /// Parent task identifier.

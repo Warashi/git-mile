@@ -166,7 +166,7 @@ impl TaskCrdt {
             EventKind::AssigneesRemoved { assignees } => {
                 remove_all(&mut self.assignees, assignees.iter().cloned());
             }
-            EventKind::CommentAdded { .. } => {
+            EventKind::CommentAdded { .. } | EventKind::CommentUpdated { .. } => {
                 // Snapshot ignores comment bodies; updated timestamp handled above.
             }
             EventKind::ChildLinked { parent, child } => {
