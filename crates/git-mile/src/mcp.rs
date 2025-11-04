@@ -114,6 +114,21 @@ pub struct UpdateCommentParams {
     pub actor_email: String,
 }
 
+/// Parameters for adding a comment.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct AddCommentParams {
+    /// Task ID to add comment to.
+    pub task_id: String,
+    /// Comment body in Markdown.
+    pub body_md: String,
+    /// Actor name (defaults to "git-mile").
+    #[serde(default = "default_actor_name")]
+    pub actor_name: String,
+    /// Actor email (defaults to "git-mile@example.invalid").
+    #[serde(default = "default_actor_email")]
+    pub actor_email: String,
+}
+
 /// MCP server for git-mile.
 #[derive(Clone)]
 pub struct GitMileServer {
@@ -447,6 +462,63 @@ impl GitMileServer {
             "task_id": task.to_string(),
             "comment_id": comment_id.to_string(),
             "status": "updated"
+        });
+
+        let json_str = serde_json::to_string_pretty(&result)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json_str)]))
+    }
+
+    /// Add a comment to a task.
+    #[tool(description = "Add a comment to a task")]
+    async fn add_comment(
+        &self,
+        Parameters(params): Parameters<AddCommentParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use git_mile_core::id::EventId;
+
+        let store = self.store.lock().await;
+
+        // Parse task ID
+        let task: TaskId = params
+            .task_id
+            .parse()
+            .map_err(|e| McpError::invalid_params(format!("Invalid task ID: {e}"), None))?;
+
+        // Verify task exists
+        let _events = store
+            .load_events(task)
+            .map_err(|e| McpError::invalid_params(format!("Task not found: {e}"), None))?;
+
+        let actor = Actor {
+            name: params.actor_name,
+            email: params.actor_email,
+        };
+
+        let comment_id = EventId::new();
+
+        // Create CommentAdded event
+        let event = Event::new(
+            task,
+            &actor,
+            EventKind::CommentAdded {
+                comment_id,
+                body_md: params.body_md,
+            },
+        );
+
+        store
+            .append_event(&event)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        drop(store);
+
+        // Return success with the new comment info
+        let result = serde_json::json!({
+            "task_id": task.to_string(),
+            "comment_id": comment_id.to_string(),
+            "status": "added"
         });
 
         let json_str = serde_json::to_string_pretty(&result)
