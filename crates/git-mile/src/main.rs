@@ -44,6 +44,8 @@ enum Command {
         assignees: Vec<String>,
         #[arg(long)]
         description: Option<String>,
+        #[arg(short = 'p', long = "parent")]
+        parents: Vec<String>,
         #[arg(long, default_value = "git-mile")]
         actor_name: String,
         #[arg(long, default_value = "git-mile@example.invalid")]
@@ -94,6 +96,7 @@ fn execute_command(repo_path: &str, command: Command) -> Result<()> {
             labels,
             assignees,
             description,
+            parents,
             actor_name,
             actor_email,
         } => {
@@ -116,6 +119,19 @@ fn execute_command(repo_path: &str, command: Command) -> Result<()> {
             );
             let oid = store.append_event(&ev)?;
             println!("created task: {task} ({oid})");
+
+            // Create ChildLinked events for each parent
+            for parent_str in parents {
+                let parent = TaskId::from_str(&parent_str).context("Invalid parent task id")?;
+                // Verify parent task exists
+                let _ = store
+                    .load_events(parent)
+                    .with_context(|| format!("Parent task not found: {parent}"))?;
+
+                let link_ev = Event::new(task, &actor, EventKind::ChildLinked { parent, child: task });
+                let link_oid = store.append_event(&link_ev)?;
+                println!("linked to parent: {parent} ({link_oid})");
+            }
         }
 
         Command::Comment {
