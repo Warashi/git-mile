@@ -1206,49 +1206,91 @@ impl<S: TaskStore> Ui<S> {
         self.detail_focus = DetailFocus::TreeView;
     }
 
-    #[allow(
-        clippy::unused_self,
-        clippy::missing_const_for_fn,
-        clippy::needless_pass_by_ref_mut
-    )]
+    #[allow(clippy::missing_const_for_fn)]
     fn tree_view_down(&mut self) {
-        // TODO: Move selection down in tree view
+        if self.tree_state.selected + 1 < self.tree_state.visible_nodes.len() {
+            self.tree_state.selected += 1;
+        }
     }
 
-    #[allow(
-        clippy::unused_self,
-        clippy::missing_const_for_fn,
-        clippy::needless_pass_by_ref_mut
-    )]
+    #[allow(clippy::missing_const_for_fn)]
     fn tree_view_up(&mut self) {
-        // TODO: Move selection up in tree view
+        if self.tree_state.selected > 0 {
+            self.tree_state.selected -= 1;
+        }
     }
 
-    #[allow(
-        clippy::unused_self,
-        clippy::missing_const_for_fn,
-        clippy::needless_pass_by_ref_mut
-    )]
     fn tree_view_collapse(&mut self) {
-        // TODO: Collapse selected node or move to parent
+        let Some(task_id) = self.tree_state.selected_task_id() else {
+            return;
+        };
+
+        if let Some(node) = self.tree_state.find_node_mut(task_id) {
+            if node.expanded && !node.children.is_empty() {
+                // Collapse current node
+                node.expanded = false;
+                self.tree_state.rebuild_visible_nodes();
+            } else {
+                // Not expanded or no children, move to parent
+                self.move_to_parent_in_tree(task_id);
+            }
+        }
     }
 
-    #[allow(
-        clippy::unused_self,
-        clippy::missing_const_for_fn,
-        clippy::needless_pass_by_ref_mut
-    )]
+    fn move_to_parent_in_tree(&mut self, task_id: TaskId) {
+        let parents = self.app.get_parents(task_id);
+        if let Some(parent) = parents.first() {
+            if let Some(index) = self
+                .tree_state
+                .visible_nodes
+                .iter()
+                .position(|(_, id)| *id == parent.snapshot.id)
+            {
+                self.tree_state.selected = index;
+            }
+        }
+    }
+
     fn tree_view_expand(&mut self) {
-        // TODO: Expand selected node or move to first child
+        let Some(task_id) = self.tree_state.selected_task_id() else {
+            return;
+        };
+
+        let children = self.app.get_children(task_id);
+        if children.is_empty() {
+            // No children, try to move to first child
+            return;
+        }
+
+        // Expand node
+        if let Some(node) = self.tree_state.find_node_mut(task_id) {
+            if node.expanded {
+                // Already expanded, move to first child
+                if self.tree_state.selected + 1 < self.tree_state.visible_nodes.len() {
+                    self.tree_state.selected += 1;
+                }
+            } else {
+                node.expanded = true;
+                self.tree_state.rebuild_visible_nodes();
+            }
+        }
     }
 
-    #[allow(
-        clippy::unused_self,
-        clippy::missing_const_for_fn,
-        clippy::needless_pass_by_ref_mut
-    )]
     fn tree_view_jump(&mut self) {
-        // TODO: Jump to selected task and close tree view
+        let Some(task_id) = self.tree_state.selected_task_id() else {
+            return;
+        };
+
+        // Jump to selected task
+        self.app.jump_to_task(task_id);
+
+        // Close tree view
+        self.detail_focus = DetailFocus::None;
+
+        // Get task title for message
+        if let Some(task) = self.app.selected_task() {
+            self.info(format!("タスクへジャンプ: {}", task.snapshot.title));
+        }
     }
 
     fn apply_comment_input(&mut self, task: TaskId, raw: &str) -> Result<()> {
