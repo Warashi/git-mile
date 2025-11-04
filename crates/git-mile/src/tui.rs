@@ -25,7 +25,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
     Terminal,
 };
 use tempfile::NamedTempFile;
@@ -601,6 +601,11 @@ impl<S: TaskStore> Ui<S> {
 
         self.draw_main(f, chunks[0]);
         self.draw_status(f, chunks[1]);
+
+        // Draw tree view on top if active
+        if self.detail_focus == DetailFocus::TreeView {
+            self.draw_tree_view_popup(f);
+        }
     }
 
     fn draw_main(&self, f: &mut ratatui::Frame<'_>, area: Rect) {
@@ -908,6 +913,128 @@ impl<S: TaskStore> Ui<S> {
         f.render_widget(message, rows[1]);
     }
 
+    fn draw_tree_view_popup(&self, f: &mut ratatui::Frame<'_>) {
+        let area = f.area();
+
+        // Create centered popup (80% of screen)
+        let popup_width = (area.width * 80) / 100;
+        let popup_height = (area.height * 80) / 100;
+        let popup_x = (area.width - popup_width) / 2;
+        let popup_y = (area.height - popup_height) / 2;
+
+        let popup_area = Rect {
+            x: popup_x,
+            y: popup_y,
+            width: popup_width,
+            height: popup_height,
+        };
+
+        // Clear background
+        let block = Block::default()
+            .title("タスクツリー")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow))
+            .style(Style::default().bg(Color::Black));
+
+        f.render_widget(Clear, popup_area);
+        let inner = block.inner(popup_area);
+        f.render_widget(block, popup_area);
+
+        // Draw tree content
+        self.draw_tree_content(f, inner);
+    }
+
+    fn draw_tree_content(&self, f: &mut ratatui::Frame<'_>, area: Rect) {
+        let mut lines = Vec::new();
+
+        for (i, (depth, task_id)) in self.tree_state.visible_nodes.iter().enumerate() {
+            let is_selected = i == self.tree_state.selected;
+
+            // Find task view
+            let Some(task) = self.app.tasks.iter().find(|t| t.snapshot.id == *task_id) else {
+                continue;
+            };
+
+            // Build line with indentation and tree characters
+            let indent = "  ".repeat(*depth);
+            let children = self.app.get_children(*task_id);
+            let has_children = !children.is_empty();
+
+            // Determine tree character
+            let tree_char = if has_children {
+                // Check if expanded
+                self.find_node_in_state(*task_id)
+                    .map_or("▶", |node| if node.expanded { "▼" } else { "▶" })
+            } else {
+                "■"
+            };
+
+            // State marker
+            let state_marker = task.snapshot.state.as_ref().map_or("", |s| {
+                if s.contains("done") || s.contains("完了") {
+                    " ✓"
+                } else if s.contains("progress") || s.contains("進行") {
+                    " →"
+                } else {
+                    ""
+                }
+            });
+
+            let line_text = format!(
+                "{}{} {} [{}]{}",
+                indent,
+                tree_char,
+                task.snapshot.title,
+                task.snapshot.state.as_deref().unwrap_or("未設定"),
+                state_marker
+            );
+
+            let style = if is_selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            lines.push(Line::from(Span::styled(line_text, style)));
+        }
+
+        #[allow(clippy::cast_possible_truncation)]
+        let paragraph = Paragraph::new(lines).scroll((self.tree_scroll_offset() as u16, 0));
+        f.render_widget(paragraph, area);
+    }
+
+    /// Helper to find node in current tree state (read-only).
+    fn find_node_in_state(&self, task_id: TaskId) -> Option<&TreeNode> {
+        for root in &self.tree_state.roots {
+            if let Some(node) = Self::find_node_in_tree(root, task_id) {
+                return Some(node);
+            }
+        }
+        None
+    }
+
+    fn find_node_in_tree(node: &TreeNode, task_id: TaskId) -> Option<&TreeNode> {
+        if node.task_id == task_id {
+            return Some(node);
+        }
+        for child in &node.children {
+            if let Some(found) = Self::find_node_in_tree(child, task_id) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// Calculate scroll offset to keep selected item visible.
+    #[allow(clippy::unused_self, clippy::missing_const_for_fn)]
+    fn tree_scroll_offset(&self) -> usize {
+        // TODO: Implement scroll logic based on area height
+        0
+    }
+
     fn handle_key(&mut self, key: KeyEvent) -> Result<Option<UiAction>> {
         if key.kind != KeyEventKind::Press {
             return Ok(None);
@@ -1079,27 +1206,47 @@ impl<S: TaskStore> Ui<S> {
         self.detail_focus = DetailFocus::TreeView;
     }
 
-    #[allow(clippy::unused_self, clippy::missing_const_for_fn, clippy::needless_pass_by_ref_mut)]
+    #[allow(
+        clippy::unused_self,
+        clippy::missing_const_for_fn,
+        clippy::needless_pass_by_ref_mut
+    )]
     fn tree_view_down(&mut self) {
         // TODO: Move selection down in tree view
     }
 
-    #[allow(clippy::unused_self, clippy::missing_const_for_fn, clippy::needless_pass_by_ref_mut)]
+    #[allow(
+        clippy::unused_self,
+        clippy::missing_const_for_fn,
+        clippy::needless_pass_by_ref_mut
+    )]
     fn tree_view_up(&mut self) {
         // TODO: Move selection up in tree view
     }
 
-    #[allow(clippy::unused_self, clippy::missing_const_for_fn, clippy::needless_pass_by_ref_mut)]
+    #[allow(
+        clippy::unused_self,
+        clippy::missing_const_for_fn,
+        clippy::needless_pass_by_ref_mut
+    )]
     fn tree_view_collapse(&mut self) {
         // TODO: Collapse selected node or move to parent
     }
 
-    #[allow(clippy::unused_self, clippy::missing_const_for_fn, clippy::needless_pass_by_ref_mut)]
+    #[allow(
+        clippy::unused_self,
+        clippy::missing_const_for_fn,
+        clippy::needless_pass_by_ref_mut
+    )]
     fn tree_view_expand(&mut self) {
         // TODO: Expand selected node or move to first child
     }
 
-    #[allow(clippy::unused_self, clippy::missing_const_for_fn, clippy::needless_pass_by_ref_mut)]
+    #[allow(
+        clippy::unused_self,
+        clippy::missing_const_for_fn,
+        clippy::needless_pass_by_ref_mut
+    )]
     fn tree_view_jump(&mut self) {
         // TODO: Jump to selected task and close tree view
     }
