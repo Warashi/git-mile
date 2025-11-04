@@ -2,9 +2,14 @@ msrv = "1.90"
 doc-valid-idents = ["UUID"]
 allowed-duplicate-crates = [
     "crossterm",
+    "darling",
+    "darling_core",
+    "darling_macro",
     "linux-raw-sys",
     "mio",
     "rustix",
+    "thiserror",
+    "thiserror-impl",
     "unicode-width",
     "windows-sys",
     "windows-targets",

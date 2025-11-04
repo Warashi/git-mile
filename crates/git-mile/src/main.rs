@@ -170,8 +170,8 @@ fn execute_command(repo_path: &str, command: Command) -> Result<()> {
                 let server = server
                     .serve(transport)
                     .await
-                    .map_err(|e| anyhow::anyhow!("{:?}", e))?;
-                server.waiting().await.map_err(|e| anyhow::anyhow!("{:?}", e))
+                    .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                server.waiting().await.map_err(|e| anyhow::anyhow!("{e:?}"))
             })?;
         }
     }

@@ -139,6 +139,8 @@ impl GitMileServer {
             tasks.push(snapshot);
         }
 
+        drop(store);
+
         let json_str = serde_json::to_string_pretty(&tasks)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
@@ -180,6 +182,8 @@ impl GitMileServer {
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         let snapshot = TaskSnapshot::replay(&events);
 
+        drop(store);
+
         let json_str = serde_json::to_string_pretty(&snapshot)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
@@ -198,12 +202,12 @@ impl GitMileServer {
         let task: TaskId = params
             .task_id
             .parse()
-            .map_err(|e| McpError::invalid_params(format!("Invalid task ID: {}", e), None))?;
+            .map_err(|e| McpError::invalid_params(format!("Invalid task ID: {e}"), None))?;
 
         // Verify task exists
         let _events = store
             .load_events(task)
-            .map_err(|e| McpError::invalid_params(format!("Task not found: {}", e), None))?;
+            .map_err(|e| McpError::invalid_params(format!("Task not found: {e}"), None))?;
 
         let actor = Actor {
             name: params.actor_name,
@@ -312,6 +316,8 @@ impl GitMileServer {
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         let snapshot = TaskSnapshot::replay(&events);
 
+        drop(store);
+
         let json_str = serde_json::to_string_pretty(&snapshot)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
@@ -332,18 +338,18 @@ impl GitMileServer {
         let task: TaskId = params
             .task_id
             .parse()
-            .map_err(|e| McpError::invalid_params(format!("Invalid task ID: {}", e), None))?;
+            .map_err(|e| McpError::invalid_params(format!("Invalid task ID: {e}"), None))?;
 
         // Parse comment ID
         let comment_id: EventId = params
             .comment_id
             .parse()
-            .map_err(|e| McpError::invalid_params(format!("Invalid comment ID: {}", e), None))?;
+            .map_err(|e| McpError::invalid_params(format!("Invalid comment ID: {e}"), None))?;
 
         // Load events and verify comment exists
         let events = store
             .load_events(task)
-            .map_err(|e| McpError::invalid_params(format!("Task not found: {}", e), None))?;
+            .map_err(|e| McpError::invalid_params(format!("Task not found: {e}"), None))?;
 
         let comment_exists = events.iter().any(
             |ev| matches!(&ev.kind, EventKind::CommentAdded { comment_id: cid, .. } if *cid == comment_id),
@@ -351,7 +357,7 @@ impl GitMileServer {
 
         if !comment_exists {
             return Err(McpError::invalid_params(
-                format!("Comment {} not found in task {}", comment_id, task),
+                format!("Comment {comment_id} not found in task {task}"),
                 None,
             ));
         }
@@ -374,6 +380,8 @@ impl GitMileServer {
         store
             .append_event(&event)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        drop(store);
 
         // Return success with the updated comment info
         let result = serde_json::json!({
