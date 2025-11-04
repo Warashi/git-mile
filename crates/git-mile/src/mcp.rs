@@ -51,6 +51,43 @@ fn default_actor_email() -> String {
     "git-mile@example.invalid".to_owned()
 }
 
+/// Parameters for updating an existing task.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct UpdateTaskParams {
+    /// Task ID to update.
+    pub task_id: String,
+    /// New title (if provided, overwrites the current title).
+    #[serde(default)]
+    pub title: Option<String>,
+    /// New description (if provided, overwrites the current description).
+    #[serde(default)]
+    pub description: Option<String>,
+    /// New state (if provided, sets the workflow state).
+    #[serde(default)]
+    pub state: Option<String>,
+    /// If true, clears the workflow state.
+    #[serde(default)]
+    pub clear_state: bool,
+    /// Labels to add.
+    #[serde(default)]
+    pub add_labels: Vec<String>,
+    /// Labels to remove.
+    #[serde(default)]
+    pub remove_labels: Vec<String>,
+    /// Assignees to add.
+    #[serde(default)]
+    pub add_assignees: Vec<String>,
+    /// Assignees to remove.
+    #[serde(default)]
+    pub remove_assignees: Vec<String>,
+    /// Actor name (defaults to "git-mile").
+    #[serde(default = "default_actor_name")]
+    pub actor_name: String,
+    /// Actor email (defaults to "git-mile@example.invalid").
+    #[serde(default = "default_actor_email")]
+    pub actor_email: String,
+}
+
 /// MCP server for git-mile.
 #[derive(Clone)]
 pub struct GitMileServer {
@@ -121,6 +158,138 @@ impl GitMileServer {
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         // Load the newly created task to return its snapshot
+        let events = store
+            .load_events(task)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let snapshot = TaskSnapshot::replay(&events);
+
+        let json_str = serde_json::to_string_pretty(&snapshot)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json_str)]))
+    }
+
+    /// Update an existing task.
+    #[tool(description = "Update an existing task's title, description, state, labels, or assignees")]
+    async fn update_task(
+        &self,
+        Parameters(params): Parameters<UpdateTaskParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let store = self.store.lock().await;
+
+        // Parse task ID
+        let task: TaskId = params
+            .task_id
+            .parse()
+            .map_err(|e| McpError::invalid_params(format!("Invalid task ID: {}", e), None))?;
+
+        // Verify task exists
+        let _events = store
+            .load_events(task)
+            .map_err(|e| McpError::invalid_params(format!("Task not found: {}", e), None))?;
+
+        let actor = Actor {
+            name: params.actor_name,
+            email: params.actor_email,
+        };
+
+        // Process updates in order: title, description, state, labels, assignees
+
+        // Update title
+        if let Some(title) = params.title {
+            let event = Event::new(task, &actor, EventKind::TaskTitleSet { title });
+            store
+                .append_event(&event)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        }
+
+        // Update description
+        if let Some(description) = params.description {
+            let event = Event::new(
+                task,
+                &actor,
+                EventKind::TaskDescriptionSet {
+                    description: Some(description),
+                },
+            );
+            store
+                .append_event(&event)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        }
+
+        // Clear state if requested
+        if params.clear_state {
+            let event = Event::new(task, &actor, EventKind::TaskStateCleared);
+            store
+                .append_event(&event)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        }
+
+        // Set state
+        if let Some(state) = params.state {
+            let event = Event::new(task, &actor, EventKind::TaskStateSet { state });
+            store
+                .append_event(&event)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        }
+
+        // Add labels
+        if !params.add_labels.is_empty() {
+            let event = Event::new(
+                task,
+                &actor,
+                EventKind::LabelsAdded {
+                    labels: params.add_labels,
+                },
+            );
+            store
+                .append_event(&event)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        }
+
+        // Remove labels
+        if !params.remove_labels.is_empty() {
+            let event = Event::new(
+                task,
+                &actor,
+                EventKind::LabelsRemoved {
+                    labels: params.remove_labels,
+                },
+            );
+            store
+                .append_event(&event)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        }
+
+        // Add assignees
+        if !params.add_assignees.is_empty() {
+            let event = Event::new(
+                task,
+                &actor,
+                EventKind::AssigneesAdded {
+                    assignees: params.add_assignees,
+                },
+            );
+            store
+                .append_event(&event)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        }
+
+        // Remove assignees
+        if !params.remove_assignees.is_empty() {
+            let event = Event::new(
+                task,
+                &actor,
+                EventKind::AssigneesRemoved {
+                    assignees: params.remove_assignees,
+                },
+            );
+            store
+                .append_event(&event)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        }
+
+        // Load the updated task to return its snapshot
         let events = store
             .load_events(task)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
