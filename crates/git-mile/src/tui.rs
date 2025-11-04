@@ -138,14 +138,8 @@ impl<S: TaskStore> App<S> {
     pub fn get_children(&self, task_id: TaskId) -> Vec<&TaskView> {
         self.tasks
             .iter()
-            .find(|t| t.snapshot.id == task_id)
-            .map_or_else(Vec::new, |task| {
-                task.snapshot
-                    .children
-                    .iter()
-                    .filter_map(|child_id| self.tasks.iter().find(|t| t.snapshot.id == *child_id))
-                    .collect()
-            })
+            .filter(|task| task.snapshot.parents.contains(&task_id))
+            .collect()
     }
 
     /// Jump to a specific task by ID.
@@ -791,12 +785,10 @@ impl<S: TaskStore> Ui<S> {
             lines.push(Line::from(parent_info));
         }
 
-        // Show children count
-        if !task.snapshot.children.is_empty() {
-            lines.push(Line::from(format!(
-                "子タスク: {} 件",
-                task.snapshot.children.len()
-            )));
+        // Show children count using parent relationships
+        let child_count = self.app.get_children(task.snapshot.id).len();
+        if child_count > 0 {
+            lines.push(Line::from(format!("子タスク: {child_count} 件")));
         }
 
         if let Some(updated) = task.last_updated {
@@ -1927,6 +1919,97 @@ mod tests {
             .map(|view| view.snapshot.title.as_str())
             .collect();
         assert_eq!(titles, vec!["A", "B"]);
+        Ok(())
+    }
+
+    #[test]
+    fn app_get_children_uses_parent_links() -> Result<()> {
+        let parent = TaskId::new();
+        let child = TaskId::new();
+
+        let parent_events = vec![event(
+            parent,
+            ts(0),
+            EventKind::TaskCreated {
+                title: "Parent".into(),
+                labels: Vec::new(),
+                assignees: Vec::new(),
+                description: None,
+                state: None,
+            },
+        )];
+        let child_events = vec![
+            event(
+                child,
+                ts(10),
+                EventKind::TaskCreated {
+                    title: "Child".into(),
+                    labels: Vec::new(),
+                    assignees: Vec::new(),
+                    description: None,
+                    state: None,
+                },
+            ),
+            event(child, ts(20), EventKind::ChildLinked { parent, child }),
+        ];
+
+        let store = MockStore::new()
+            .with_task(parent, parent_events)
+            .with_task(child, child_events);
+        let app = App::new(store)?;
+
+        let children = app.get_children(parent);
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].snapshot.id, child);
+        Ok(())
+    }
+
+    #[test]
+    fn tree_view_includes_parent_and_child() -> Result<()> {
+        let parent = TaskId::new();
+        let child = TaskId::new();
+
+        let parent_events = vec![event(
+            parent,
+            ts(0),
+            EventKind::TaskCreated {
+                title: "Parent".into(),
+                labels: Vec::new(),
+                assignees: Vec::new(),
+                description: None,
+                state: None,
+            },
+        )];
+        let child_events = vec![
+            event(
+                child,
+                ts(10),
+                EventKind::TaskCreated {
+                    title: "Child".into(),
+                    labels: Vec::new(),
+                    assignees: Vec::new(),
+                    description: None,
+                    state: None,
+                },
+            ),
+            event(child, ts(20), EventKind::ChildLinked { parent, child }),
+        ];
+
+        let store = MockStore::new()
+            .with_task(parent, parent_events)
+            .with_task(child, child_events);
+        let app = App::new(store)?;
+        let mut ui = Ui::new(app, actor());
+        ui.open_tree_view();
+
+        assert_eq!(ui.detail_focus, DetailFocus::TreeView);
+        let visible: Vec<TaskId> = ui
+            .tree_state
+            .visible_nodes
+            .iter()
+            .map(|(_, task_id)| *task_id)
+            .collect();
+        assert_eq!(visible, vec![parent, child]);
         Ok(())
     }
 
