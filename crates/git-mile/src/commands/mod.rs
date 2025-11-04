@@ -18,15 +18,15 @@ pub trait TaskRepository {
 
 impl TaskRepository for GitStore {
     fn append_event(&self, event: &Event) -> Result<Oid> {
-        GitStore::append_event(self, event)
+        Self::append_event(self, event)
     }
 
     fn load_events(&self, task: TaskId) -> Result<Vec<Event>> {
-        GitStore::load_events(self, task)
+        Self::load_events(self, task)
     }
 
     fn list_tasks(&self) -> Result<Vec<TaskId>> {
-        GitStore::list_tasks(self)
+        Self::list_tasks(self)
     }
 }
 
@@ -36,7 +36,7 @@ pub struct TaskService<S> {
 }
 
 impl<S> TaskService<S> {
-    pub fn new(store: S) -> Self {
+    pub const fn new(store: S) -> Self {
         Self { store }
     }
 }
@@ -219,7 +219,7 @@ mod tests {
     use anyhow::anyhow;
     use git_mile_core::event::EventKind;
     use std::collections::HashSet;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
     #[derive(Clone, Default)]
     struct MockStore {
@@ -237,40 +237,47 @@ mod tests {
 
     impl TaskRepository for MockStore {
         fn append_event(&self, event: &Event) -> Result<Oid> {
-            self.inner.appended.lock().unwrap().push(event.clone());
-            let mut counter = self.inner.next_oid.lock().unwrap();
-            let oid = fake_oid(*counter);
-            *counter = counter.wrapping_add(1);
+            guard(&self.inner.appended).push(event.clone());
+            let oid = {
+                let mut counter = guard(&self.inner.next_oid);
+                let oid = fake_oid(*counter);
+                *counter = counter.wrapping_add(1);
+                oid
+            };
             Ok(oid)
         }
 
         fn load_events(&self, task: TaskId) -> Result<Vec<Event>> {
-            self.inner.load_calls.lock().unwrap().push(task);
-            if self.inner.fail_on_load.lock().unwrap().contains(&task) {
+            guard(&self.inner.load_calls).push(task);
+            if guard(&self.inner.fail_on_load).contains(&task) {
                 return Err(anyhow!("missing task {task}"));
             }
             Ok(Vec::new())
         }
 
         fn list_tasks(&self) -> Result<Vec<TaskId>> {
-            Ok(self.inner.list.lock().unwrap().clone())
+            Ok(guard(&self.inner.list).clone())
         }
     }
 
     impl MockStore {
         fn appended(&self) -> Vec<Event> {
-            self.inner.appended.lock().unwrap().clone()
+            guard(&self.inner.appended).clone()
         }
 
         fn fail_on_load(&self, task: TaskId) {
-            self.inner.fail_on_load.lock().unwrap().insert(task);
+            guard(&self.inner.fail_on_load).insert(task);
         }
     }
 
     fn fake_oid(counter: u8) -> Oid {
         let mut bytes = [0u8; 20];
         bytes[19] = counter;
-        Oid::from_bytes(&bytes).expect("valid oid")
+        Oid::from_bytes(&bytes).unwrap_or_else(|_| unreachable!("fixed-length byte array"))
+    }
+
+    fn guard<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+        mutex.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn sample_actor() -> Actor {
