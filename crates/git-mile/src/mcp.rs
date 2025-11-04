@@ -38,20 +38,34 @@ pub struct CreateTaskParams {
     /// Parent task IDs to link this task to.
     #[serde(default)]
     pub parents: Vec<String>,
-    /// Actor name (defaults to "git-mile").
+    /// Actor name (defaults from `GIT_MILE_ACTOR_NAME`, `GIT_AUTHOR_NAME`, `user.name`, or "git-mile").
     #[serde(default = "default_actor_name")]
     pub actor_name: String,
-    /// Actor email (defaults to "git-mile@example.invalid").
+    /// Actor email (defaults from `GIT_MILE_ACTOR_EMAIL`, `GIT_AUTHOR_EMAIL`, `user.email`, or "git-mile@example.invalid").
     #[serde(default = "default_actor_email")]
     pub actor_email: String,
 }
 
 fn default_actor_name() -> String {
-    "git-mile".to_owned()
+    std::env::var("GIT_MILE_ACTOR_NAME")
+        .or_else(|_| std::env::var("GIT_AUTHOR_NAME"))
+        .or_else(|_| {
+            git2::Config::open_default()
+                .and_then(|config| config.get_string("user.name"))
+                .map_err(|_| std::env::VarError::NotPresent)
+        })
+        .unwrap_or_else(|_| "git-mile".to_owned())
 }
 
 fn default_actor_email() -> String {
-    "git-mile@example.invalid".to_owned()
+    std::env::var("GIT_MILE_ACTOR_EMAIL")
+        .or_else(|_| std::env::var("GIT_AUTHOR_EMAIL"))
+        .or_else(|_| {
+            git2::Config::open_default()
+                .and_then(|config| config.get_string("user.email"))
+                .map_err(|_| std::env::VarError::NotPresent)
+        })
+        .unwrap_or_else(|_| "git-mile@example.invalid".to_owned())
 }
 
 /// Parameters for updating an existing task.
@@ -89,10 +103,10 @@ pub struct UpdateTaskParams {
     /// Parent task IDs to unlink.
     #[serde(default)]
     pub unlink_parents: Vec<String>,
-    /// Actor name (defaults to "git-mile").
+    /// Actor name (defaults from `GIT_MILE_ACTOR_NAME`, `GIT_AUTHOR_NAME`, `user.name`, or "git-mile").
     #[serde(default = "default_actor_name")]
     pub actor_name: String,
-    /// Actor email (defaults to "git-mile@example.invalid").
+    /// Actor email (defaults from `GIT_MILE_ACTOR_EMAIL`, `GIT_AUTHOR_EMAIL`, `user.email`, or "git-mile@example.invalid").
     #[serde(default = "default_actor_email")]
     pub actor_email: String,
 }
@@ -106,10 +120,10 @@ pub struct UpdateCommentParams {
     pub comment_id: String,
     /// New comment body in Markdown.
     pub body_md: String,
-    /// Actor name (defaults to "git-mile").
+    /// Actor name (defaults from `GIT_MILE_ACTOR_NAME`, `GIT_AUTHOR_NAME`, `user.name`, or "git-mile").
     #[serde(default = "default_actor_name")]
     pub actor_name: String,
-    /// Actor email (defaults to "git-mile@example.invalid").
+    /// Actor email (defaults from `GIT_MILE_ACTOR_EMAIL`, `GIT_AUTHOR_EMAIL`, `user.email`, or "git-mile@example.invalid").
     #[serde(default = "default_actor_email")]
     pub actor_email: String,
 }
@@ -121,10 +135,10 @@ pub struct AddCommentParams {
     pub task_id: String,
     /// Comment body in Markdown.
     pub body_md: String,
-    /// Actor name (defaults to "git-mile").
+    /// Actor name (defaults from `GIT_MILE_ACTOR_NAME`, `GIT_AUTHOR_NAME`, `user.name`, or "git-mile").
     #[serde(default = "default_actor_name")]
     pub actor_name: String,
-    /// Actor email (defaults to "git-mile@example.invalid").
+    /// Actor email (defaults from `GIT_MILE_ACTOR_EMAIL`, `GIT_AUTHOR_EMAIL`, `user.email`, or "git-mile@example.invalid").
     #[serde(default = "default_actor_email")]
     pub actor_email: String,
 }
