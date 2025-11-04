@@ -1,16 +1,14 @@
 //! CLI entry point for git-mile.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::str::FromStr;
 use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
 
-use git_mile_core::event::{Actor, Event, EventKind};
-use git_mile_core::id::{EventId, TaskId};
-use git_mile_core::TaskSnapshot;
+use commands::TaskService;
 use git_mile_store_git::GitStore;
 use rmcp::ServiceExt;
 
+mod commands;
 mod mcp;
 mod tui;
 
@@ -90,109 +88,32 @@ fn main() -> Result<()> {
 
 fn execute_command(repo_path: &str, command: Command) -> Result<()> {
     match command {
-        Command::New {
-            title,
-            state,
-            labels,
-            assignees,
-            description,
-            parents,
-            actor_name,
-            actor_email,
-        } => {
-            let store = GitStore::open(repo_path)?;
-            let task = TaskId::new();
-            let actor = Actor {
-                name: actor_name,
-                email: actor_email,
-            };
-            let ev = Event::new(
-                task,
-                &actor,
-                EventKind::TaskCreated {
-                    title,
-                    labels,
-                    assignees,
-                    description,
-                    state,
-                },
-            );
-            let oid = store.append_event(&ev)?;
-            println!("created task: {task} ({oid})");
-
-            // Create ChildLinked events for each parent
-            for parent_str in parents {
-                let parent = TaskId::from_str(&parent_str).context("Invalid parent task id")?;
-                // Verify parent task exists
-                let _ = store
-                    .load_events(parent)
-                    .with_context(|| format!("Parent task not found: {parent}"))?;
-
-                let link_ev = Event::new(task, &actor, EventKind::ChildLinked { parent, child: task });
-                let link_oid = store.append_event(&link_ev)?;
-                println!("linked to parent: {parent} ({link_oid})");
-            }
-        }
-
-        Command::Comment {
-            task,
-            message,
-            actor_name,
-            actor_email,
-        } => {
-            let store = GitStore::open(repo_path)?;
-            let task = TaskId::from_str(&task).context("Invalid task id")?;
-            let actor = Actor {
-                name: actor_name,
-                email: actor_email,
-            };
-            let ev = Event::new(
-                task,
-                &actor,
-                EventKind::CommentAdded {
-                    comment_id: EventId::new(),
-                    body_md: message,
-                },
-            );
-            let oid = store.append_event(&ev)?;
-            println!("commented: {task} ({oid})");
-        }
-
-        Command::Show { task } => {
-            let store = GitStore::open(repo_path)?;
-            let task = TaskId::from_str(&task).context("Invalid task id")?;
-            let events = store.load_events(task)?;
-            let snap = TaskSnapshot::replay(&events);
-            println!("{}", serde_json::to_string_pretty(&snap)?);
-        }
-
-        Command::Ls => {
-            let store = GitStore::open(repo_path)?;
-            for id in store.list_tasks()? {
-                println!("{id}");
-            }
-        }
-
         Command::Tui => {
             let store = GitStore::open(repo_path)?;
-            tui::run(store)?;
+            tui::run(store)
         }
 
         Command::Mcp => {
             let store = GitStore::open(repo_path)?;
             let server = mcp::GitMileServer::new(store);
-            tokio::runtime::Runtime::new()?.block_on(async move {
-                let transport = (tokio::io::stdin(), tokio::io::stdout());
-                let server = server
-                    .serve(transport)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-                server.waiting().await.map_err(|e| anyhow::anyhow!("{e:?}"))
-            })?;
+            tokio::runtime::Runtime::new()?
+                .block_on(async move {
+                    let transport = (tokio::io::stdin(), tokio::io::stdout());
+                    let server = server
+                        .serve(transport)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                    server.waiting().await.map_err(|e| anyhow::anyhow!("{e:?}"))
+                })
+                .map(|_| ())
+        }
+
+        other => {
+            let store = GitStore::open(repo_path)?;
+            let service = TaskService::new(store);
+            commands::run(other, &service)
         }
     }
-
-    Ok(())
 }
 
 fn install_tracing() {
