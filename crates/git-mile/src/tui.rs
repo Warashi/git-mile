@@ -1,7 +1,7 @@
 //! Terminal UI for browsing and updating tasks.
 
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::env;
 use std::fs;
 use std::io::{self, Stdout, Write};
@@ -106,6 +106,9 @@ pub struct App<S: TaskStore> {
     pub tasks: Vec<TaskView>,
     /// Currently selected task index.
     pub selected: usize,
+    task_index: HashMap<TaskId, usize>,
+    parents_index: HashMap<TaskId, Vec<TaskId>>,
+    children_index: HashMap<TaskId, Vec<TaskId>>,
 }
 
 impl<S: TaskStore> App<S> {
@@ -115,6 +118,9 @@ impl<S: TaskStore> App<S> {
             store,
             tasks: Vec::new(),
             selected: 0,
+            task_index: HashMap::new(),
+            parents_index: HashMap::new(),
+            children_index: HashMap::new(),
         };
         app.refresh_tasks()?;
         Ok(app)
@@ -122,29 +128,35 @@ impl<S: TaskStore> App<S> {
 
     /// Get parent tasks of the given task.
     pub fn get_parents(&self, task_id: TaskId) -> Vec<&TaskView> {
-        self.tasks
-            .iter()
-            .find(|t| t.snapshot.id == task_id)
-            .map_or_else(Vec::new, |task| {
-                task.snapshot
-                    .parents
-                    .iter()
-                    .filter_map(|parent_id| self.tasks.iter().find(|t| t.snapshot.id == *parent_id))
-                    .collect()
+        self.parents_index
+            .get(&task_id)
+            .into_iter()
+            .flat_map(|parents| {
+                parents.iter().filter_map(|parent_id| {
+                    self.task_index
+                        .get(parent_id)
+                        .and_then(|&idx| self.tasks.get(idx))
+                })
             })
+            .collect()
     }
 
     /// Get child tasks of the given task.
     pub fn get_children(&self, task_id: TaskId) -> Vec<&TaskView> {
-        self.tasks
-            .iter()
-            .filter(|task| task.snapshot.parents.contains(&task_id))
+        self.children_index
+            .get(&task_id)
+            .into_iter()
+            .flat_map(|children| {
+                children
+                    .iter()
+                    .filter_map(|child_id| self.task_index.get(child_id).and_then(|&idx| self.tasks.get(idx)))
+            })
             .collect()
     }
 
     /// Jump to a specific task by ID.
     pub fn jump_to_task(&mut self, task_id: TaskId) {
-        if let Some(index) = self.tasks.iter().position(|t| t.snapshot.id == task_id) {
+        if let Some(index) = self.task_index.get(&task_id).copied() {
             self.selected = index;
         }
     }
@@ -152,18 +164,26 @@ impl<S: TaskStore> App<S> {
     /// Get root (topmost parent) task of the given task.
     /// Returns the task itself if it has no parents.
     pub fn get_root(&self, task_id: TaskId) -> Option<&TaskView> {
-        let mut current_task = self.tasks.iter().find(|t| t.snapshot.id == task_id)?;
+        let mut queue = VecDeque::from([task_id]);
+        let mut visited = HashSet::new();
 
-        // Follow parent chain to find root
-        loop {
-            let parents = self.get_parents(current_task.snapshot.id);
-            if let Some(parent) = parents.first() {
-                current_task = parent;
-            } else {
-                // No more parents, this is the root
-                return Some(current_task);
+        while let Some(current) = queue.pop_front() {
+            if !visited.insert(current) {
+                continue;
+            }
+
+            match self.parents_index.get(&current) {
+                Some(parents) if !parents.is_empty() => {
+                    for parent in parents {
+                        queue.push_back(*parent);
+                    }
+                }
+                _ => {
+                    return self.task_index.get(&current).and_then(|&idx| self.tasks.get(idx));
+                }
             }
         }
+        None
     }
 
     /// Reload tasks from the store and keep the selection in bounds.
@@ -185,17 +205,42 @@ impl<S: TaskStore> App<S> {
             (None, Some(_)) => Ordering::Greater,
             (None, None) => a.snapshot.id.cmp(&b.snapshot.id),
         });
+
+        let mut task_index = HashMap::new();
+        let mut parents_index = HashMap::new();
+        let mut children_index: HashMap<TaskId, Vec<TaskId>> = HashMap::new();
+
+        for (idx, view) in views.iter().enumerate() {
+            task_index.insert(view.snapshot.id, idx);
+        }
+
+        for view in &views {
+            let parents: Vec<TaskId> = view.snapshot.parents.iter().copied().collect();
+            for parent in &parents {
+                children_index
+                    .entry(*parent)
+                    .or_insert_with(Vec::new)
+                    .push(view.snapshot.id);
+            }
+            children_index.entry(view.snapshot.id).or_insert_with(Vec::new);
+            parents_index.insert(view.snapshot.id, parents);
+        }
+
         self.tasks = views;
+        self.task_index = task_index;
+        self.parents_index = parents_index;
+        self.children_index = children_index;
+
         if let Some(id) = keep_id {
-            self.selected = self
-                .tasks
-                .iter()
-                .position(|view| view.snapshot.id == id)
-                .unwrap_or(0);
+            self.selected = if self.tasks.is_empty() {
+                0
+            } else {
+                self.task_index.get(&id).copied().unwrap_or(0)
+            };
         } else if self.tasks.is_empty() {
             self.selected = 0;
-        } else if self.selected >= self.tasks.len() {
-            self.selected = self.tasks.len() - 1;
+        } else {
+            self.selected = self.selected.min(self.tasks.len() - 1);
         }
         Ok(())
     }
@@ -1768,6 +1813,7 @@ mod tests {
     use git_mile_core::event::EventKind;
     use std::cell::RefCell;
     use std::collections::HashMap;
+    use std::str::FromStr;
     use time::OffsetDateTime;
 
     struct MockStore {
@@ -1826,6 +1872,10 @@ mod tests {
 
     fn ts(secs: i64) -> OffsetDateTime {
         OffsetDateTime::from_unix_timestamp(secs).expect("must create timestamp from unix seconds")
+    }
+
+    fn fixed_task_id(n: u8) -> TaskId {
+        TaskId::from_str(&format!("00000000-0000-0000-0000-0000000000{n:02}")).expect("must parse task id")
     }
 
     #[test]
@@ -1961,6 +2011,193 @@ mod tests {
         let children = app.get_children(parent);
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].snapshot.id, child);
+        Ok(())
+    }
+
+    #[test]
+    fn app_get_children_preserves_task_order() -> Result<()> {
+        let parent = TaskId::new();
+        let recent_child = TaskId::new();
+        let older_child = TaskId::new();
+
+        let parent_events = vec![event(
+            parent,
+            ts(0),
+            EventKind::TaskCreated {
+                title: "Parent".into(),
+                labels: Vec::new(),
+                assignees: Vec::new(),
+                description: None,
+                state: None,
+            },
+        )];
+
+        let older_events = vec![
+            event(
+                older_child,
+                ts(10),
+                EventKind::TaskCreated {
+                    title: "Older".into(),
+                    labels: Vec::new(),
+                    assignees: Vec::new(),
+                    description: None,
+                    state: None,
+                },
+            ),
+            event(
+                older_child,
+                ts(11),
+                EventKind::ChildLinked {
+                    parent,
+                    child: older_child,
+                },
+            ),
+        ];
+
+        let recent_events = vec![
+            event(
+                recent_child,
+                ts(20),
+                EventKind::TaskCreated {
+                    title: "Recent".into(),
+                    labels: Vec::new(),
+                    assignees: Vec::new(),
+                    description: None,
+                    state: None,
+                },
+            ),
+            event(
+                recent_child,
+                ts(21),
+                EventKind::ChildLinked {
+                    parent,
+                    child: recent_child,
+                },
+            ),
+        ];
+
+        let store = MockStore::new()
+            .with_task(parent, parent_events)
+            .with_task(older_child, older_events)
+            .with_task(recent_child, recent_events);
+        let app = App::new(store)?;
+
+        let children = app.get_children(parent);
+        let ids: Vec<TaskId> = children.iter().map(|view| view.snapshot.id).collect();
+        assert_eq!(ids, vec![recent_child, older_child]);
+        Ok(())
+    }
+
+    #[test]
+    fn app_get_root_handles_cyclic_parent_graph() -> Result<()> {
+        let root = fixed_task_id(1);
+        let loop_a = fixed_task_id(2);
+        let loop_b = fixed_task_id(3);
+        let leaf = fixed_task_id(4);
+
+        let root_events = vec![event(
+            root,
+            ts(0),
+            EventKind::TaskCreated {
+                title: "Root".into(),
+                labels: Vec::new(),
+                assignees: Vec::new(),
+                description: None,
+                state: None,
+            },
+        )];
+
+        let loop_a_events = vec![
+            event(
+                loop_a,
+                ts(1),
+                EventKind::TaskCreated {
+                    title: "LoopA".into(),
+                    labels: Vec::new(),
+                    assignees: Vec::new(),
+                    description: None,
+                    state: None,
+                },
+            ),
+            event(
+                loop_a,
+                ts(2),
+                EventKind::ChildLinked {
+                    parent: root,
+                    child: loop_a,
+                },
+            ),
+            event(
+                loop_a,
+                ts(3),
+                EventKind::ChildLinked {
+                    parent: loop_b,
+                    child: loop_a,
+                },
+            ),
+        ];
+
+        let loop_b_events = vec![
+            event(
+                loop_b,
+                ts(4),
+                EventKind::TaskCreated {
+                    title: "LoopB".into(),
+                    labels: Vec::new(),
+                    assignees: Vec::new(),
+                    description: None,
+                    state: None,
+                },
+            ),
+            event(
+                loop_b,
+                ts(5),
+                EventKind::ChildLinked {
+                    parent: loop_a,
+                    child: loop_b,
+                },
+            ),
+        ];
+
+        let leaf_events = vec![
+            event(
+                leaf,
+                ts(6),
+                EventKind::TaskCreated {
+                    title: "Leaf".into(),
+                    labels: Vec::new(),
+                    assignees: Vec::new(),
+                    description: None,
+                    state: None,
+                },
+            ),
+            event(
+                leaf,
+                ts(7),
+                EventKind::ChildLinked {
+                    parent: loop_a,
+                    child: leaf,
+                },
+            ),
+            event(
+                leaf,
+                ts(8),
+                EventKind::ChildLinked {
+                    parent: loop_b,
+                    child: leaf,
+                },
+            ),
+        ];
+
+        let store = MockStore::new()
+            .with_task(root, root_events)
+            .with_task(loop_a, loop_a_events)
+            .with_task(loop_b, loop_b_events)
+            .with_task(leaf, leaf_events);
+        let app = App::new(store)?;
+
+        let root_view = app.get_root(leaf).expect("must locate a root despite cycle");
+        assert_eq!(root_view.snapshot.id, root);
         Ok(())
     }
 
