@@ -22,6 +22,16 @@
         };
       in
       {
+        packages.default = pkgs.callPackage ./. {
+          rustPlatform =
+            let
+              toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+            in
+            pkgs.makeRustPlatform {
+              cargo = toolchain;
+              rustc = toolchain;
+            };
+        };
         devShells.default =
           with pkgs;
           mkShell {
