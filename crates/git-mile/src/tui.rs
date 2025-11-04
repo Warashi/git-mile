@@ -217,12 +217,9 @@ impl<S: TaskStore> App<S> {
         for view in &views {
             let parents: Vec<TaskId> = view.snapshot.parents.iter().copied().collect();
             for parent in &parents {
-                children_index
-                    .entry(*parent)
-                    .or_insert_with(Vec::new)
-                    .push(view.snapshot.id);
+                children_index.entry(*parent).or_default().push(view.snapshot.id);
             }
-            children_index.entry(view.snapshot.id).or_insert_with(Vec::new);
+            children_index.entry(view.snapshot.id).or_default();
             parents_index.insert(view.snapshot.id, parents);
         }
 
@@ -1834,6 +1831,19 @@ mod tests {
             self.events.borrow_mut().insert(id, events);
             self
         }
+
+        fn from_tasks(entries: Vec<(TaskId, Vec<Event>)>) -> Self {
+            let store = Self::new();
+            {
+                let mut tasks = store.tasks.borrow_mut();
+                let mut map = store.events.borrow_mut();
+                for (id, events) in entries {
+                    tasks.push(id);
+                    map.insert(id, events);
+                }
+            }
+            store
+        }
     }
 
     impl TaskStore for MockStore {
@@ -1876,6 +1886,24 @@ mod tests {
 
     fn fixed_task_id(n: u8) -> TaskId {
         TaskId::from_str(&format!("00000000-0000-0000-0000-0000000000{n:02}")).expect("must parse task id")
+    }
+
+    fn created(task: TaskId, secs: i64, title: &str) -> Event {
+        event(
+            task,
+            ts(secs),
+            EventKind::TaskCreated {
+                title: title.into(),
+                labels: Vec::new(),
+                assignees: Vec::new(),
+                description: None,
+                state: None,
+            },
+        )
+    }
+
+    fn child_link(secs: i64, parent: TaskId, child: TaskId) -> Event {
+        event(child, ts(secs), EventKind::ChildLinked { parent, child })
     }
 
     #[test]
@@ -1977,31 +2005,8 @@ mod tests {
         let parent = TaskId::new();
         let child = TaskId::new();
 
-        let parent_events = vec![event(
-            parent,
-            ts(0),
-            EventKind::TaskCreated {
-                title: "Parent".into(),
-                labels: Vec::new(),
-                assignees: Vec::new(),
-                description: None,
-                state: None,
-            },
-        )];
-        let child_events = vec![
-            event(
-                child,
-                ts(10),
-                EventKind::TaskCreated {
-                    title: "Child".into(),
-                    labels: Vec::new(),
-                    assignees: Vec::new(),
-                    description: None,
-                    state: None,
-                },
-            ),
-            event(child, ts(20), EventKind::ChildLinked { parent, child }),
-        ];
+        let parent_events = vec![created(parent, 0, "Parent")];
+        let child_events = vec![created(child, 10, "Child"), child_link(20, parent, child)];
 
         let store = MockStore::new()
             .with_task(parent, parent_events)
@@ -2020,66 +2025,22 @@ mod tests {
         let recent_child = TaskId::new();
         let older_child = TaskId::new();
 
-        let parent_events = vec![event(
-            parent,
-            ts(0),
-            EventKind::TaskCreated {
-                title: "Parent".into(),
-                labels: Vec::new(),
-                assignees: Vec::new(),
-                description: None,
-                state: None,
-            },
-        )];
-
-        let older_events = vec![
-            event(
-                older_child,
-                ts(10),
-                EventKind::TaskCreated {
-                    title: "Older".into(),
-                    labels: Vec::new(),
-                    assignees: Vec::new(),
-                    description: None,
-                    state: None,
-                },
-            ),
-            event(
-                older_child,
-                ts(11),
-                EventKind::ChildLinked {
-                    parent,
-                    child: older_child,
-                },
-            ),
-        ];
-
-        let recent_events = vec![
-            event(
-                recent_child,
-                ts(20),
-                EventKind::TaskCreated {
-                    title: "Recent".into(),
-                    labels: Vec::new(),
-                    assignees: Vec::new(),
-                    description: None,
-                    state: None,
-                },
-            ),
-            event(
-                recent_child,
-                ts(21),
-                EventKind::ChildLinked {
-                    parent,
-                    child: recent_child,
-                },
-            ),
-        ];
-
         let store = MockStore::new()
-            .with_task(parent, parent_events)
-            .with_task(older_child, older_events)
-            .with_task(recent_child, recent_events);
+            .with_task(parent, vec![created(parent, 0, "Parent")])
+            .with_task(
+                older_child,
+                vec![
+                    created(older_child, 10, "Older"),
+                    child_link(11, parent, older_child),
+                ],
+            )
+            .with_task(
+                recent_child,
+                vec![
+                    created(recent_child, 20, "Recent"),
+                    child_link(21, parent, recent_child),
+                ],
+            );
         let app = App::new(store)?;
 
         let children = app.get_children(parent);
@@ -2095,105 +2056,29 @@ mod tests {
         let loop_b = fixed_task_id(3);
         let leaf = fixed_task_id(4);
 
-        let root_events = vec![event(
-            root,
-            ts(0),
-            EventKind::TaskCreated {
-                title: "Root".into(),
-                labels: Vec::new(),
-                assignees: Vec::new(),
-                description: None,
-                state: None,
-            },
-        )];
-
-        let loop_a_events = vec![
-            event(
+        let store = MockStore::from_tasks(vec![
+            (root, vec![created(root, 0, "Root")]),
+            (
                 loop_a,
-                ts(1),
-                EventKind::TaskCreated {
-                    title: "LoopA".into(),
-                    labels: Vec::new(),
-                    assignees: Vec::new(),
-                    description: None,
-                    state: None,
-                },
+                vec![
+                    created(loop_a, 1, "LoopA"),
+                    child_link(2, root, loop_a),
+                    child_link(3, loop_b, loop_a),
+                ],
             ),
-            event(
-                loop_a,
-                ts(2),
-                EventKind::ChildLinked {
-                    parent: root,
-                    child: loop_a,
-                },
-            ),
-            event(
-                loop_a,
-                ts(3),
-                EventKind::ChildLinked {
-                    parent: loop_b,
-                    child: loop_a,
-                },
-            ),
-        ];
-
-        let loop_b_events = vec![
-            event(
+            (
                 loop_b,
-                ts(4),
-                EventKind::TaskCreated {
-                    title: "LoopB".into(),
-                    labels: Vec::new(),
-                    assignees: Vec::new(),
-                    description: None,
-                    state: None,
-                },
+                vec![created(loop_b, 4, "LoopB"), child_link(5, loop_a, loop_b)],
             ),
-            event(
-                loop_b,
-                ts(5),
-                EventKind::ChildLinked {
-                    parent: loop_a,
-                    child: loop_b,
-                },
-            ),
-        ];
-
-        let leaf_events = vec![
-            event(
+            (
                 leaf,
-                ts(6),
-                EventKind::TaskCreated {
-                    title: "Leaf".into(),
-                    labels: Vec::new(),
-                    assignees: Vec::new(),
-                    description: None,
-                    state: None,
-                },
+                vec![
+                    created(leaf, 6, "Leaf"),
+                    child_link(7, loop_a, leaf),
+                    child_link(8, loop_b, leaf),
+                ],
             ),
-            event(
-                leaf,
-                ts(7),
-                EventKind::ChildLinked {
-                    parent: loop_a,
-                    child: leaf,
-                },
-            ),
-            event(
-                leaf,
-                ts(8),
-                EventKind::ChildLinked {
-                    parent: loop_b,
-                    child: leaf,
-                },
-            ),
-        ];
-
-        let store = MockStore::new()
-            .with_task(root, root_events)
-            .with_task(loop_a, loop_a_events)
-            .with_task(loop_b, loop_b_events)
-            .with_task(leaf, leaf_events);
+        ]);
         let app = App::new(store)?;
 
         let root_view = app.get_root(leaf).expect("must locate a root despite cycle");
