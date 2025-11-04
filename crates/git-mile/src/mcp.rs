@@ -35,6 +35,9 @@ pub struct CreateTaskParams {
     /// Optional description in Markdown.
     #[serde(default)]
     pub description: Option<String>,
+    /// Parent task IDs to link this task to.
+    #[serde(default)]
+    pub parents: Vec<String>,
     /// Actor name (defaults to "git-mile").
     #[serde(default = "default_actor_name")]
     pub actor_name: String,
@@ -80,6 +83,12 @@ pub struct UpdateTaskParams {
     /// Assignees to remove.
     #[serde(default)]
     pub remove_assignees: Vec<String>,
+    /// Parent task IDs to link.
+    #[serde(default)]
+    pub link_parents: Vec<String>,
+    /// Parent task IDs to unlink.
+    #[serde(default)]
+    pub unlink_parents: Vec<String>,
     /// Actor name (defaults to "git-mile").
     #[serde(default = "default_actor_name")]
     pub actor_name: String,
@@ -148,7 +157,9 @@ impl GitMileServer {
     }
 
     /// Create a new task.
-    #[tool(description = "Create a new task with title, labels, assignees, description, and state")]
+    #[tool(
+        description = "Create a new task with title, labels, assignees, description, state, and parent tasks"
+    )]
     async fn create_task(
         &self,
         Parameters(params): Parameters<CreateTaskParams>,
@@ -176,6 +187,23 @@ impl GitMileServer {
             .append_event(&event)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
+        // Create ChildLinked events for each parent
+        for parent_str in params.parents {
+            let parent: TaskId = parent_str
+                .parse()
+                .map_err(|e| McpError::invalid_params(format!("Invalid parent task ID: {e}"), None))?;
+
+            // Verify parent task exists
+            let _ = store
+                .load_events(parent)
+                .map_err(|e| McpError::invalid_params(format!("Parent task not found: {e}"), None))?;
+
+            let link_event = Event::new(task, &actor, EventKind::ChildLinked { parent, child: task });
+            store
+                .append_event(&link_event)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        }
+
         // Load the newly created task to return its snapshot
         let events = store
             .load_events(task)
@@ -191,7 +219,9 @@ impl GitMileServer {
     }
 
     /// Update an existing task.
-    #[tool(description = "Update an existing task's title, description, state, labels, or assignees")]
+    #[tool(
+        description = "Update an existing task's title, description, state, labels, assignees, or parent tasks"
+    )]
     async fn update_task(
         &self,
         Parameters(params): Parameters<UpdateTaskParams>,
@@ -305,6 +335,35 @@ impl GitMileServer {
                     assignees: params.remove_assignees,
                 },
             );
+            store
+                .append_event(&event)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        }
+
+        // Link parents
+        for parent_str in params.link_parents {
+            let parent: TaskId = parent_str
+                .parse()
+                .map_err(|e| McpError::invalid_params(format!("Invalid parent task ID: {e}"), None))?;
+
+            // Verify parent task exists
+            let _ = store
+                .load_events(parent)
+                .map_err(|e| McpError::invalid_params(format!("Parent task not found: {e}"), None))?;
+
+            let event = Event::new(task, &actor, EventKind::ChildLinked { parent, child: task });
+            store
+                .append_event(&event)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        }
+
+        // Unlink parents
+        for parent_str in params.unlink_parents {
+            let parent: TaskId = parent_str
+                .parse()
+                .map_err(|e| McpError::invalid_params(format!("Invalid parent task ID: {e}"), None))?;
+
+            let event = Event::new(task, &actor, EventKind::ChildUnlinked { parent, child: task });
             store
                 .append_event(&event)
                 .map_err(|e| McpError::internal_error(e.to_string(), None))?;
