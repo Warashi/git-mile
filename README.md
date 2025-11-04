@@ -1,23 +1,221 @@
 # git-mile
 
-git-mile は、`refs/git-mile/tasks/*` 配下の Git コミットとしてタスクイベントを記録するタスクトラッカーです。ワーキングツリーのファイルには触れず、イベントは UUIDv7 で識別され、コミットメッセージ本文に JSON で保存されます。
+**git-mile** is a Git-backed task tracker that stores task events as commits under `refs/git-mile/tasks/*`. It provides a conflict-free, offline-first approach to task management using event sourcing and CRDTs (Conflict-free Replicated Data Types).
 
-## クレート構成
+## Key Features
 
-- `git-mile-core`: タスク ID・イベント・スナップショットのドメインロジック
-- `git-mile-store-git`: Git リポジトリへの読み書きを担うストア層
-- `git-mile`: CLI エントリポイント
+- **Git-native storage**: Tasks stored as immutable events in Git commits, never touching your working tree
+- **Offline-first**: Work independently and merge task changes automatically using CRDTs
+- **Event sourcing**: All changes represented as append-only events with UUIDv7 identifiers
+- **Terminal UI**: Interactive multi-panel interface for browsing and editing tasks
+- **MCP integration**: Model Context Protocol server for AI/Claude integration
+- **Rich task model**: Titles, states, labels, assignees, descriptions, comments, and hierarchical relationships
 
-## データモデル
+## Architecture
 
-- ラベル・担当者・リレーションは [`crdts`](https://docs.rs/crdts/) の ORSWOT (Observed-Remove Set Without Tombstones) で表現し、オフライン同時編集でも自然に結合できます。
-- タイトル・状態・説明といった単一値は同クレートの LWW レジスタで保持し、イベントのタイムスタンプと UUIDv7 によるトータルオーダーで収束します。
-- スナップショットは CRDT の結果を投影したビューであり、`TaskSnapshot::replay`・`TaskSnapshot::apply` のどちらでも一貫した状態が取得できます。
+The workspace consists of three crates:
 
-## ビルドとテスト
+- **`git-mile-core`**: Domain logic for task IDs, events, snapshots, and CRDT operations
+- **`git-mile-store-git`**: Git repository persistence layer
+- **`git-mile`**: CLI entry point with commands, TUI, and MCP server
+
+## Data Model
+
+**git-mile** uses CRDTs from the [`crdts`](https://docs.rs/crdts/) crate to ensure conflict-free merging:
+
+- **Sets** (labels, assignees, relations): Represented as ORSWOT (Observed-Remove Set Without Tombstones), allowing concurrent additions and removals to merge naturally
+- **Single values** (title, state, description): Stored as LWW (Last-Write-Wins) registers, converging based on event timestamps and UUIDv7 total ordering
+- **Snapshots**: Materialized views of CRDT state, computed via `TaskSnapshot::replay` or `TaskSnapshot::apply` for consistent reads
+
+## Installation
 
 ```bash
+cargo install --path crates/git-mile
+```
+
+Or build from source:
+
+```bash
+cargo build --release --package git-mile
+```
+
+## Quick Start
+
+```bash
+# Create a new task
+git-mile new "Implement feature X" --state todo --labels feature,priority:high
+
+# Launch the interactive TUI
+git-mile tui
+
+# List all tasks
+git-mile ls
+
+# Show task details as JSON
+git-mile show <task-id>
+
+# Add a comment
+git-mile comment <task-id> "Working on this now"
+
+# Start MCP server for AI integration
+git-mile mcp
+```
+
+## Commands Reference
+
+### `new` - Create a Task
+
+Create a new task with optional metadata:
+
+```bash
+git-mile new "Task title" \
+  --state todo \
+  --labels backend,api \
+  --assignees alice,bob \
+  --description "Detailed description" \
+  --parent <parent-task-id>
+```
+
+**Options**:
+- `--state`: Initial state (e.g., todo, in_progress, done)
+- `--labels`: Comma-separated labels
+- `--assignees`: Comma-separated assignee names
+- `--description`: Long-form task description
+- `--parent`: Link to parent task for hierarchical organization
+- `--actor-name`, `--actor-email`: Override default actor info
+
+### `comment` - Add a Comment
+
+Add a comment to an existing task:
+
+```bash
+git-mile comment <task-id> "Comment body in markdown"
+```
+
+### `show` - Display Task Snapshot
+
+Output the current state of a task as JSON:
+
+```bash
+git-mile show <task-id>
+```
+
+### `ls` - List Tasks
+
+Display all task IDs:
+
+```bash
+git-mile ls
+```
+
+### `tui` - Interactive Terminal UI
+
+Launch the full-featured terminal interface:
+
+```bash
+git-mile tui
+```
+
+**TUI Controls**:
+- `j`/`k` or `↓`/`↑`: Navigate task list
+- `Enter`: Open hierarchical tree view
+- `e`: Edit current task
+- `n`: Create new task
+- `s`: Create subtask of current task
+- `c`: Add comment to current task
+- `r`: Refresh view
+- `p`: Jump to parent task
+- `q`: Quit
+
+**TUI Layout**:
+- **Left panel**: Task list sorted by update time
+- **Top-right panel**: Task details with breadcrumb navigation to parents
+- **Middle-right panel**: Subtasks list
+- **Bottom-right panel**: Comments history
+
+### `mcp` - Model Context Protocol Server
+
+Start an MCP server exposing task operations to AI tools:
+
+```bash
+git-mile mcp
+```
+
+**Available MCP Tools**:
+- `list_tasks`: Retrieve all tasks
+- `create_task`: Create new task with metadata
+- `update_task`: Modify task properties
+- `add_comment`: Add comment to task
+- `update_comment`: Edit existing comment
+
+## Configuration
+
+**Actor information** (name and email for events) is resolved in this order:
+1. Command-line flags: `--actor-name`, `--actor-email`
+2. Environment variables: `GIT_MILE_ACTOR_NAME`, `GIT_MILE_ACTOR_EMAIL`
+3. Git author variables: `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`
+4. Git config: `user.name`, `user.email`
+5. Defaults: `"git-mile"`, `"git-mile@localhost"`
+
+**Editor** (for TUI edit operations) is resolved from:
+1. `GIT_MILE_EDITOR`
+2. `VISUAL`
+3. `EDITOR`
+4. Default: `vi`
+
+**Repository location**:
+- Use `--repo <path>` to specify a Git repository outside the current directory
+
+## Development
+
+### Build and Test
+
+```bash
+# Format code
 cargo fmt
+
+# Run linter
 cargo clippy --workspace --all-targets --all-features
+
+# Run tests
 cargo test --workspace --all-features
 ```
+
+### Commit Guidelines
+
+Follow conventional commit prefixes (`feat:`, `fix:`, `build:`, `ci:`, etc.) and ensure all changes are formatted, linted, and tested before committing:
+
+```bash
+cargo fmt && cargo clippy --workspace --all-targets --all-features && cargo test --workspace --all-features
+git add -p
+git commit
+```
+
+## How It Works
+
+1. **Event Storage**: Each task is identified by a UUIDv7. Events are stored as JSON in commit messages under `refs/git-mile/tasks/<task-id>`
+2. **Event Types**: TaskCreated, StateSet, TitleSet, LabelsAdded/Removed, AssigneesAdded/Removed, CommentAdded, ChildLinked/Unlinked, etc.
+3. **Snapshot Computation**: The current state of a task is computed by replaying all events through CRDT operations
+4. **Conflict Resolution**: Concurrent edits merge automatically—sets use ORSWOT logic, single values use LWW with UUIDv7 tie-breaking
+5. **Git Integration**: Standard Git operations (fetch, merge, push) propagate task changes across repositories
+
+## License
+
+MIT OR Apache-2.0
+
+## Contributing
+
+Contributions are welcome! Please ensure:
+- Code follows `rustfmt.toml` formatting rules
+- All clippy lints pass with `--all-features`
+- Tests pass with `cargo test --workspace --all-features`
+- Commits follow conventional commit style
+- Changes preserve CRDT convergence guarantees
+
+## Acknowledgments
+
+Built with:
+- [`crdts`](https://docs.rs/crdts/) for conflict-free data structures
+- [`ratatui`](https://ratatui.rs/) for terminal UI
+- [`git2`](https://docs.rs/git2/) for Git operations
+- [`rmcp`](https://docs.rs/rmcp/) for Model Context Protocol
