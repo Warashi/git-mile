@@ -120,6 +120,41 @@ impl<S: TaskStore> App<S> {
         Ok(app)
     }
 
+    /// Get parent tasks of the given task.
+    pub fn get_parents(&self, task_id: TaskId) -> Vec<&TaskView> {
+        self.tasks
+            .iter()
+            .find(|t| t.snapshot.id == task_id)
+            .map_or_else(Vec::new, |task| {
+                task.snapshot
+                    .parents
+                    .iter()
+                    .filter_map(|parent_id| self.tasks.iter().find(|t| t.snapshot.id == *parent_id))
+                    .collect()
+            })
+    }
+
+    /// Get child tasks of the given task.
+    pub fn get_children(&self, task_id: TaskId) -> Vec<&TaskView> {
+        self.tasks
+            .iter()
+            .find(|t| t.snapshot.id == task_id)
+            .map_or_else(Vec::new, |task| {
+                task.snapshot
+                    .children
+                    .iter()
+                    .filter_map(|child_id| self.tasks.iter().find(|t| t.snapshot.id == *child_id))
+                    .collect()
+            })
+    }
+
+    /// Jump to a specific task by ID.
+    pub fn jump_to_task(&mut self, task_id: TaskId) {
+        if let Some(index) = self.tasks.iter().position(|t| t.snapshot.id == task_id) {
+            self.selected = index;
+        }
+    }
+
     /// Reload tasks from the store and keep the selection in bounds.
     pub fn refresh_tasks(&mut self) -> Result<()> {
         self.refresh_tasks_with(None)
@@ -421,11 +456,28 @@ fn run_event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, store: GitS
     Ok(())
 }
 
+/// Focus state for detail view components.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DetailFocus {
+    /// No focus (browsing task list).
+    None,
+    /// Focus on breadcrumb list (parent navigation).
+    Breadcrumb,
+    /// Focus on subtasks list.
+    Subtasks,
+}
+
 struct Ui<S: TaskStore> {
     app: App<S>,
     actor: Actor,
     message: Option<Message>,
     should_quit: bool,
+    /// Current focus in detail view.
+    detail_focus: DetailFocus,
+    /// Selected index in breadcrumb list.
+    breadcrumb_selected: usize,
+    /// Selected index in subtasks list.
+    subtask_selected: usize,
 }
 
 impl<S: TaskStore> Ui<S> {
@@ -436,6 +488,9 @@ impl<S: TaskStore> Ui<S> {
             actor,
             message: None,
             should_quit: false,
+            detail_focus: DetailFocus::None,
+            breadcrumb_selected: 0,
+            subtask_selected: 0,
         }
     }
 
@@ -502,65 +557,249 @@ impl<S: TaskStore> Ui<S> {
     }
 
     fn draw_task_details(&self, f: &mut ratatui::Frame<'_>, area: Rect) {
+        if let Some(task) = self.app.selected_task() {
+            // Split into breadcrumb area, main details, and subtasks
+            let has_parents = !task.snapshot.parents.is_empty();
+            let children = self.app.get_children(task.snapshot.id);
+            let has_children = !children.is_empty();
+
+            let mut constraints = Vec::new();
+            if has_parents {
+                constraints.push(Constraint::Length(3)); // Breadcrumb
+            }
+            constraints.push(Constraint::Min(5)); // Main details
+            if has_children {
+                #[allow(clippy::cast_possible_truncation)]
+                let height = (children.len() as u16).min(10) + 2;
+                constraints.push(Constraint::Length(height)); // Subtasks
+            }
+
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints(constraints)
+                .split(area);
+
+            let mut chunk_idx = 0;
+
+            // Draw breadcrumb if parents exist
+            if has_parents {
+                self.draw_breadcrumb(f, chunks[chunk_idx], task.snapshot.id);
+                chunk_idx += 1;
+            }
+
+            // Draw main task details
+            self.draw_main_task_details(f, chunks[chunk_idx], task);
+            chunk_idx += 1;
+
+            // Draw subtasks if children exist
+            if has_children {
+                self.draw_subtasks(f, chunks[chunk_idx], task.snapshot.id, &children);
+            }
+        } else {
+            let block = Block::default().title("詳細").borders(Borders::ALL);
+            let inner = block.inner(area);
+            f.render_widget(block, area);
+            let paragraph = Paragraph::new("タスクが選択されていません").wrap(Wrap { trim: false });
+            f.render_widget(paragraph, inner);
+        }
+    }
+
+    fn draw_breadcrumb(&self, f: &mut ratatui::Frame<'_>, area: Rect, task_id: TaskId) {
+        let has_focus = self.detail_focus == DetailFocus::Breadcrumb;
+        let border_style = if has_focus {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default()
+        };
+
+        let parents = self.app.get_parents(task_id);
+        let mut breadcrumb_items: Vec<Span<'_>> = Vec::new();
+
+        // Add "Home" as the first breadcrumb item
+        let home_style = if has_focus && self.breadcrumb_selected == 0 {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        breadcrumb_items.push(Span::styled("Home", home_style));
+
+        // Add parent tasks
+        for (i, parent) in parents.iter().enumerate() {
+            breadcrumb_items.push(Span::raw(" > "));
+            let parent_style = if has_focus && self.breadcrumb_selected == i + 1 {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let parent_title = if parent.snapshot.title.len() > 20 {
+                format!("{}...", &parent.snapshot.title[..17])
+            } else {
+                parent.snapshot.title.clone()
+            };
+            breadcrumb_items.push(Span::styled(parent_title, parent_style));
+        }
+
+        breadcrumb_items.push(Span::raw(" > "));
+        breadcrumb_items.push(Span::styled("現在", Style::default().fg(Color::Cyan)));
+
+        let line = Line::from(breadcrumb_items);
+        let paragraph = Paragraph::new(line)
+            .block(Block::default().borders(Borders::ALL).border_style(border_style))
+            .wrap(Wrap { trim: false });
+        f.render_widget(paragraph, area);
+    }
+
+    fn draw_main_task_details(&self, f: &mut ratatui::Frame<'_>, area: Rect, task: &TaskView) {
         let block = Block::default().title("詳細").borders(Borders::ALL);
         let inner = block.inner(area);
         f.render_widget(block, area);
 
-        if let Some(task) = self.app.selected_task() {
-            let mut lines = Vec::new();
-            lines.push(Line::from(Span::styled(
-                &task.snapshot.title,
-                Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
-            )));
-            lines.push(Line::from(format!("ID: {}", task.snapshot.id)));
-            if let Some(state) = &task.snapshot.state {
-                lines.push(Line::from(format!("状態: {state}")));
-            }
-            if !task.snapshot.labels.is_empty() {
-                let labels = task
-                    .snapshot
-                    .labels
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                lines.push(Line::from(format!("ラベル: {labels}")));
-            }
-            if !task.snapshot.assignees.is_empty() {
-                let assignees = task
-                    .snapshot
-                    .assignees
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                lines.push(Line::from(format!("担当者: {assignees}")));
-            }
-            if let Some(updated) = task.last_updated {
-                lines.push(Line::from(format!("更新: {updated}")));
-            }
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "説明:",
-                Style::default().add_modifier(Modifier::BOLD),
-            )));
-            if task.snapshot.description.is_empty() {
-                lines.push(Line::from(Span::styled(
-                    "説明はまだありません。",
-                    Style::default().fg(Color::DarkGray),
-                )));
-            } else {
-                for line in task.snapshot.description.lines() {
-                    lines.push(Line::from(line.to_owned()));
-                }
-            }
-
-            let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
-            f.render_widget(paragraph, inner);
-        } else {
-            let paragraph = Paragraph::new("タスクが選択されていません").wrap(Wrap { trim: false });
-            f.render_widget(paragraph, inner);
+        let mut lines = Vec::new();
+        lines.push(Line::from(Span::styled(
+            &task.snapshot.title,
+            Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
+        )));
+        lines.push(Line::from(format!("ID: {}", task.snapshot.id)));
+        if let Some(state) = &task.snapshot.state {
+            lines.push(Line::from(format!("状態: {state}")));
         }
+        if !task.snapshot.labels.is_empty() {
+            let labels = task
+                .snapshot
+                .labels
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(Line::from(format!("ラベル: {labels}")));
+        }
+        if !task.snapshot.assignees.is_empty() {
+            let assignees = task
+                .snapshot
+                .assignees
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(Line::from(format!("担当者: {assignees}")));
+        }
+
+        // Show parent info
+        if !task.snapshot.parents.is_empty() {
+            let parents = self.app.get_parents(task.snapshot.id);
+            let parent_info = if parents.is_empty() {
+                format!("親: {} 件（未読込）", task.snapshot.parents.len())
+            } else {
+                let parent_titles: Vec<String> = parents
+                    .iter()
+                    .map(|p| {
+                        if p.snapshot.title.len() > 15 {
+                            format!("{}...", &p.snapshot.title[..12])
+                        } else {
+                            p.snapshot.title.clone()
+                        }
+                    })
+                    .collect();
+                format!("親: {}", parent_titles.join(", "))
+            };
+            lines.push(Line::from(parent_info));
+        }
+
+        // Show children count
+        if !task.snapshot.children.is_empty() {
+            lines.push(Line::from(format!(
+                "子タスク: {} 件",
+                task.snapshot.children.len()
+            )));
+        }
+
+        if let Some(updated) = task.last_updated {
+            lines.push(Line::from(format!("更新: {updated}")));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "説明:",
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        if task.snapshot.description.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "説明はまだありません。",
+                Style::default().fg(Color::DarkGray),
+            )));
+        } else {
+            for line in task.snapshot.description.lines() {
+                lines.push(Line::from(line.to_owned()));
+            }
+        }
+
+        let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+        f.render_widget(paragraph, inner);
+    }
+
+    fn draw_subtasks(
+        &self,
+        f: &mut ratatui::Frame<'_>,
+        area: Rect,
+        _task_id: TaskId,
+        children: &[&TaskView],
+    ) {
+        let has_focus = self.detail_focus == DetailFocus::Subtasks;
+        let border_style = if has_focus {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default()
+        };
+
+        let items: Vec<ListItem<'_>> = children
+            .iter()
+            .enumerate()
+            .map(|(i, child)| {
+                let state_marker = child
+                    .snapshot
+                    .state
+                    .as_ref()
+                    .map_or("", |s| {
+                        if s.contains("done") || s.contains("完了") {
+                            " ✓"
+                        } else if s.contains("progress") || s.contains("進行") {
+                            " →"
+                        } else {
+                            ""
+                        }
+                    });
+
+                let text = format!(
+                    "▸ {} [{}]{}",
+                    child.snapshot.title,
+                    child.snapshot.state.as_deref().unwrap_or("未設定"),
+                    state_marker
+                );
+
+                let style = if has_focus && i == self.subtask_selected {
+                    Style::default().fg(Color::Black).bg(Color::Yellow)
+                } else {
+                    Style::default()
+                };
+
+                ListItem::new(text).style(style)
+            })
+            .collect();
+
+        let title = format!("子タスク ({})", children.len());
+        let list = List::new(items).block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_style(border_style),
+        );
+
+        f.render_widget(list, area);
     }
 
     fn draw_comments(&self, f: &mut ratatui::Frame<'_>, area: Rect) {
@@ -626,16 +865,42 @@ impl<S: TaskStore> Ui<S> {
 
     fn handle_browse_key(&mut self, key: KeyEvent) -> Result<Option<UiAction>> {
         match key.code {
-            KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
+            KeyCode::Char('q' | 'Q') => {
                 self.should_quit = true;
                 Ok(None)
             }
+            KeyCode::Esc => {
+                if self.detail_focus == DetailFocus::None {
+                    self.should_quit = true;
+                } else {
+                    self.detail_focus = DetailFocus::None;
+                    self.breadcrumb_selected = 0;
+                    self.subtask_selected = 0;
+                }
+                Ok(None)
+            }
             KeyCode::Down | KeyCode::Char('j' | 'J') => {
-                self.app.select_next();
+                self.handle_down_key();
                 Ok(None)
             }
             KeyCode::Up | KeyCode::Char('k' | 'K') => {
-                self.app.select_prev();
+                self.handle_up_key();
+                Ok(None)
+            }
+            KeyCode::Char('h' | 'H') => {
+                self.handle_left_key();
+                Ok(None)
+            }
+            KeyCode::Char('l' | 'L') => {
+                self.handle_right_key();
+                Ok(None)
+            }
+            KeyCode::Enter => {
+                self.handle_enter_key();
+                Ok(None)
+            }
+            KeyCode::Char('p' | 'P') => {
+                self.handle_parent_jump();
                 Ok(None)
             }
             KeyCode::Char('r' | 'R') => {
@@ -666,6 +931,163 @@ impl<S: TaskStore> Ui<S> {
                 |parent| Ok(Some(UiAction::CreateSubtask { parent })),
             ),
             _ => Ok(None),
+        }
+    }
+
+    fn handle_down_key(&mut self) {
+        match self.detail_focus {
+            DetailFocus::None => {
+                self.app.select_next();
+            }
+            DetailFocus::Breadcrumb => {
+                if let Some(task) = self.app.selected_task() {
+                    let parents = self.app.get_parents(task.snapshot.id);
+                    if self.breadcrumb_selected < parents.len() {
+                        self.breadcrumb_selected += 1;
+                    }
+                }
+            }
+            DetailFocus::Subtasks => {
+                if let Some(task) = self.app.selected_task() {
+                    let children = self.app.get_children(task.snapshot.id);
+                    if self.subtask_selected + 1 < children.len() {
+                        self.subtask_selected += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle_up_key(&mut self) {
+        match self.detail_focus {
+            DetailFocus::None => {
+                self.app.select_prev();
+            }
+            DetailFocus::Breadcrumb => {
+                if self.breadcrumb_selected > 0 {
+                    self.breadcrumb_selected -= 1;
+                }
+            }
+            DetailFocus::Subtasks => {
+                if self.subtask_selected > 0 {
+                    self.subtask_selected -= 1;
+                }
+            }
+        }
+    }
+
+    fn handle_left_key(&mut self) {
+        match self.detail_focus {
+            DetailFocus::None => {
+                // No action
+            }
+            DetailFocus::Breadcrumb => {
+                self.detail_focus = DetailFocus::None;
+                self.breadcrumb_selected = 0;
+            }
+            DetailFocus::Subtasks => {
+                // Move to breadcrumb if parents exist, otherwise to None
+                if let Some(task) = self.app.selected_task() {
+                    if task.snapshot.parents.is_empty() {
+                        self.detail_focus = DetailFocus::None;
+                    } else {
+                        self.detail_focus = DetailFocus::Breadcrumb;
+                    }
+                    self.subtask_selected = 0;
+                }
+            }
+        }
+    }
+
+    fn handle_right_key(&mut self) {
+        match self.detail_focus {
+            DetailFocus::None => {
+                if let Some(task) = self.app.selected_task() {
+                    // If task has parents, move to breadcrumb
+                    if !task.snapshot.parents.is_empty() {
+                        self.detail_focus = DetailFocus::Breadcrumb;
+                        self.breadcrumb_selected = 0;
+                    }
+                    // Otherwise, if task has children, move to subtasks
+                    else if !task.snapshot.children.is_empty() {
+                        self.detail_focus = DetailFocus::Subtasks;
+                        self.subtask_selected = 0;
+                    }
+                }
+            }
+            DetailFocus::Breadcrumb => {
+                // Move to subtasks if children exist
+                if let Some(task) = self.app.selected_task() {
+                    if !task.snapshot.children.is_empty() {
+                        self.detail_focus = DetailFocus::Subtasks;
+                        self.breadcrumb_selected = 0;
+                        self.subtask_selected = 0;
+                    }
+                }
+            }
+            DetailFocus::Subtasks => {
+                // No action (already at rightmost focus)
+            }
+        }
+    }
+
+    fn handle_enter_key(&mut self) {
+        match self.detail_focus {
+            DetailFocus::None => {
+                // No action in normal browse mode
+            }
+            DetailFocus::Breadcrumb => {
+                if let Some(task) = self.app.selected_task() {
+                    let parents = self.app.get_parents(task.snapshot.id);
+                    if self.breadcrumb_selected == 0 {
+                        // "Home" selected - jump to task list top
+                        self.app.selected = 0;
+                        self.detail_focus = DetailFocus::None;
+                        self.breadcrumb_selected = 0;
+                    } else if self.breadcrumb_selected <= parents.len() {
+                        // Jump to selected parent task
+                        let parent_idx = self.breadcrumb_selected - 1;
+                        if let Some(parent) = parents.get(parent_idx) {
+                            let parent_id = parent.snapshot.id;
+                            let parent_title = parent.snapshot.title.clone();
+                            self.app.jump_to_task(parent_id);
+                            self.detail_focus = DetailFocus::None;
+                            self.breadcrumb_selected = 0;
+                            self.info(format!("親タスクへジャンプ: {parent_title}"));
+                        }
+                    }
+                }
+            }
+            DetailFocus::Subtasks => {
+                if let Some(task) = self.app.selected_task() {
+                    let children = self.app.get_children(task.snapshot.id);
+                    if let Some(child) = children.get(self.subtask_selected) {
+                        let child_id = child.snapshot.id;
+                        let child_title = child.snapshot.title.clone();
+                        self.app.jump_to_task(child_id);
+                        self.detail_focus = DetailFocus::None;
+                        self.subtask_selected = 0;
+                        self.info(format!("子タスクへジャンプ: {child_title}"));
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle_parent_jump(&mut self) {
+        if let Some(task) = self.app.selected_task() {
+            let parents = self.app.get_parents(task.snapshot.id);
+            if let Some(parent) = parents.first() {
+                let parent_id = parent.snapshot.id;
+                let parent_title = parent.snapshot.title.clone();
+                self.app.jump_to_task(parent_id);
+                self.detail_focus = DetailFocus::None;
+                self.breadcrumb_selected = 0;
+                self.subtask_selected = 0;
+                self.info(format!("親タスクへジャンプ: {parent_title}"));
+            } else {
+                self.error("親タスクがありません");
+            }
         }
     }
 
@@ -741,10 +1163,31 @@ impl<S: TaskStore> Ui<S> {
     }
 
     fn instructions(&self) -> String {
-        format!(
-            "j/k・↑↓:移動  n:新規  s:子タスク  e:編集  c:コメント  r:再読込  q/Esc:終了  [{} <{}>]",
-            self.actor.name, self.actor.email
-        )
+        match self.detail_focus {
+            DetailFocus::None => {
+                let mut base = "j/k:移動 n:新規 s:子タスク e:編集 c:コメント r:再読込 q:終了".to_string();
+                if let Some(task) = self.app.selected_task() {
+                    if !task.snapshot.parents.is_empty() {
+                        base.push_str(" l:詳細へ p:親へ");
+                    } else if !task.snapshot.children.is_empty() {
+                        base.push_str(" l:子タスクへ");
+                    }
+                }
+                format!("{} [{} <{}>]", base, self.actor.name, self.actor.email)
+            }
+            DetailFocus::Breadcrumb => "j/k:移動 ↵:ジャンプ h:戻る l:子タスクへ Esc:キャンセル".to_string(),
+            DetailFocus::Subtasks => {
+                let mut msg = "j/k:移動 ↵:ジャンプ Esc:キャンセル".to_string();
+                if let Some(task) = self.app.selected_task() {
+                    if task.snapshot.parents.is_empty() {
+                        msg.push_str(" h:戻る");
+                    } else {
+                        msg.push_str(" h:親リストへ");
+                    }
+                }
+                msg
+            }
+        }
     }
 
     fn status_text(&self) -> String {
