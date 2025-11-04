@@ -479,8 +479,10 @@ struct TreeNode {
     /// Task ID.
     task_id: TaskId,
     /// Task title.
+    #[allow(dead_code)]
     title: String,
     /// Task state.
+    #[allow(dead_code)]
     state: Option<String>,
     /// Child nodes.
     children: Vec<TreeNode>,
@@ -495,12 +497,12 @@ struct TreeViewState {
     roots: Vec<TreeNode>,
     /// Flattened list of visible nodes (for navigation).
     visible_nodes: Vec<(usize, TaskId)>, // (depth, task_id)
-    /// Currently selected index in visible_nodes.
+    /// Currently selected index in `visible_nodes`.
     selected: usize,
 }
 
 impl TreeViewState {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             roots: Vec::new(),
             visible_nodes: Vec::new(),
@@ -527,11 +529,13 @@ impl TreeViewState {
     }
 
     /// Get currently selected task ID.
+    #[allow(dead_code)]
     fn selected_task_id(&self) -> Option<TaskId> {
         self.visible_nodes.get(self.selected).map(|(_, id)| *id)
     }
 
     /// Find node by task ID (mutable).
+    #[allow(dead_code)]
     fn find_node_mut(&mut self, task_id: TaskId) -> Option<&mut TreeNode> {
         for root in &mut self.roots {
             if let Some(node) = Self::find_node_in_tree_mut(root, task_id) {
@@ -541,6 +545,7 @@ impl TreeViewState {
         None
     }
 
+    #[allow(dead_code)]
     fn find_node_in_tree_mut(node: &mut TreeNode, task_id: TaskId) -> Option<&mut TreeNode> {
         if node.task_id == task_id {
             return Some(node);
@@ -812,6 +817,7 @@ impl<S: TaskStore> Ui<S> {
         f.render_widget(paragraph, inner);
     }
 
+    #[allow(clippy::unused_self)]
     fn draw_subtasks(
         &self,
         f: &mut ratatui::Frame<'_>,
@@ -1006,27 +1012,94 @@ impl<S: TaskStore> Ui<S> {
         }
     }
 
-    fn open_tree_view(&mut self) {
-        // TODO: Build tree and open tree view
-        self.info("ツリービューを開きます（未実装）");
+    /// Build tree starting from a root task.
+    fn build_tree_from_root(&self, root_id: TaskId) -> Option<TreeNode> {
+        let root_view = self.app.tasks.iter().find(|t| t.snapshot.id == root_id)?;
+
+        Some(TreeNode {
+            task_id: root_view.snapshot.id,
+            title: root_view.snapshot.title.clone(),
+            state: root_view.snapshot.state.clone(),
+            children: self.build_children_nodes(root_id),
+            expanded: true, // デフォルトで展開
+        })
     }
 
+    /// Recursively build child nodes.
+    fn build_children_nodes(&self, parent_id: TaskId) -> Vec<TreeNode> {
+        let children = self.app.get_children(parent_id);
+        children
+            .iter()
+            .map(|child| TreeNode {
+                task_id: child.snapshot.id,
+                title: child.snapshot.title.clone(),
+                state: child.snapshot.state.clone(),
+                children: self.build_children_nodes(child.snapshot.id),
+                expanded: false, // デフォルトで折りたたみ
+            })
+            .collect()
+    }
+
+    fn open_tree_view(&mut self) {
+        let Some(current_task) = self.app.selected_task() else {
+            self.error("タスクが選択されていません");
+            return;
+        };
+
+        let current_id = current_task.snapshot.id;
+
+        // Find root task
+        let Some(root_task) = self.app.get_root(current_id) else {
+            self.error("ルートタスクが見つかりません");
+            return;
+        };
+
+        let root_id = root_task.snapshot.id;
+
+        // Build tree
+        let Some(tree) = self.build_tree_from_root(root_id) else {
+            self.error("ツリーの構築に失敗しました");
+            return;
+        };
+
+        // Initialize tree state
+        self.tree_state.roots = vec![tree];
+        self.tree_state.rebuild_visible_nodes();
+
+        // Find and select current task in tree
+        if let Some(index) = self
+            .tree_state
+            .visible_nodes
+            .iter()
+            .position(|(_, id)| *id == current_id)
+        {
+            self.tree_state.selected = index;
+        }
+
+        self.detail_focus = DetailFocus::TreeView;
+    }
+
+    #[allow(clippy::unused_self, clippy::missing_const_for_fn, clippy::needless_pass_by_ref_mut)]
     fn tree_view_down(&mut self) {
         // TODO: Move selection down in tree view
     }
 
+    #[allow(clippy::unused_self, clippy::missing_const_for_fn, clippy::needless_pass_by_ref_mut)]
     fn tree_view_up(&mut self) {
         // TODO: Move selection up in tree view
     }
 
+    #[allow(clippy::unused_self, clippy::missing_const_for_fn, clippy::needless_pass_by_ref_mut)]
     fn tree_view_collapse(&mut self) {
         // TODO: Collapse selected node or move to parent
     }
 
+    #[allow(clippy::unused_self, clippy::missing_const_for_fn, clippy::needless_pass_by_ref_mut)]
     fn tree_view_expand(&mut self) {
         // TODO: Expand selected node or move to first child
     }
 
+    #[allow(clippy::unused_self, clippy::missing_const_for_fn, clippy::needless_pass_by_ref_mut)]
     fn tree_view_jump(&mut self) {
         // TODO: Jump to selected task and close tree view
     }
