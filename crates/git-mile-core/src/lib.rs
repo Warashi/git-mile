@@ -209,11 +209,8 @@ impl TaskFilter {
             && self.assignees.is_empty()
             && self.parents.is_empty()
             && self.children.is_empty()
-            && self
-                .text
-                .as_deref()
-                .map_or(true, |needle| needle.trim().is_empty())
-            && self.updated.as_ref().map_or(true, UpdatedFilter::is_empty)
+            && self.text.as_deref().is_none_or(|needle| needle.trim().is_empty())
+            && self.updated.as_ref().is_none_or(UpdatedFilter::is_empty)
     }
 
     fn matches_state(&self, task: &TaskSnapshot) -> bool {
@@ -282,14 +279,13 @@ impl TaskFilter {
     }
 
     fn matches_updated(&self, task: &TaskSnapshot) -> bool {
-        match &self.updated {
-            None => true,
-            Some(filter) => filter.matches(task.updated_at()),
-        }
+        self.updated
+            .as_ref()
+            .is_none_or(|filter| filter.matches(task.updated_at()))
     }
 }
 
-/// Timestamp filter for updated_at.
+/// Timestamp filter for `updated_at`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdatedFilter {
     /// Match tasks updated at or after this timestamp.
@@ -320,7 +316,7 @@ impl UpdatedFilter {
 
     /// Returns true when neither bound is specified.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.since.is_none() && self.until.is_none()
     }
 }
@@ -869,8 +865,10 @@ mod tests {
             .extend(["kind/bug".into(), "priority/high".into()]);
         snapshot.assignees.extend(["alice".into(), "bob".into()]);
 
-        let mut filter = TaskFilter::default();
-        filter.text = Some("BUG".into());
+        let mut filter = TaskFilter {
+            text: Some("BUG".into()),
+            ..TaskFilter::default()
+        };
         assert!(filter.matches(&snapshot));
 
         filter.text = Some("oauth".into());
@@ -911,11 +909,13 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         snapshot.updated_rfc3339 = Some(timestamp_string(now));
 
-        let mut filter = TaskFilter::default();
-        filter.updated = Some(UpdatedFilter {
-            since: Some(now - Duration::hours(1)),
-            until: Some(now + Duration::hours(1)),
-        });
+        let mut filter = TaskFilter {
+            updated: Some(UpdatedFilter {
+                since: Some(now - Duration::hours(1)),
+                until: Some(now + Duration::hours(1)),
+            }),
+            ..TaskFilter::default()
+        };
         assert!(filter.matches(&snapshot));
 
         filter.updated = Some(UpdatedFilter {

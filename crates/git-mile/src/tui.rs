@@ -378,10 +378,10 @@ impl<S: TaskStore> App<S> {
             return Ok(false);
         }
 
-        let event = match state {
-            Some(state_value) => Event::new(task, actor, EventKind::TaskStateSet { state: state_value }),
-            None => Event::new(task, actor, EventKind::TaskStateCleared),
-        };
+        let event = state.map_or_else(
+            || Event::new(task, actor, EventKind::TaskStateCleared),
+            |state_value| Event::new(task, actor, EventKind::TaskStateSet { state: state_value }),
+        );
         self.store
             .append_event(&event)
             .context("タスクのステータス更新イベントの書き込みに失敗しました")?;
@@ -707,7 +707,7 @@ struct StatePickerOption {
 }
 
 impl StatePickerOption {
-    fn new(value: Option<String>) -> Self {
+    const fn new(value: Option<String>) -> Self {
         Self { value }
     }
 
@@ -1249,11 +1249,10 @@ impl<S: TaskStore> Ui<S> {
             .tasks
             .iter()
             .find(|view| view.snapshot.id == picker.task_id)
-            .map(|view| view.snapshot.title.as_str())
-            .unwrap_or("不明");
+            .map_or("不明", |view| view.snapshot.title.as_str());
 
         let block = Block::default()
-            .title(format!("ステータス選択: {}", task_title))
+            .title(format!("ステータス選択: {task_title}"))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan));
         f.render_widget(Clear, popup_area);
@@ -1268,11 +1267,10 @@ impl<S: TaskStore> Ui<S> {
                 let value = option.value.as_deref();
                 let label = workflow.display_label(value);
                 let marker = workflow.state_marker(value);
-                let text = if let Some(value) = value {
-                    format!("{label}{marker} ({value})")
-                } else {
-                    "未設定 (stateなし)".to_string()
-                };
+                let text = value.map_or_else(
+                    || "未設定 (stateなし)".to_string(),
+                    |value| format!("{label}{marker} ({value})"),
+                );
                 ListItem::new(Line::from(text))
             })
             .collect();
@@ -1330,6 +1328,7 @@ impl<S: TaskStore> Ui<S> {
         self.handle_browse_key(key)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn handle_browse_key(&mut self, key: KeyEvent) -> Result<Option<UiAction>> {
         match self.detail_focus {
             DetailFocus::None => match key.code {
@@ -1431,7 +1430,7 @@ impl<S: TaskStore> Ui<S> {
                     Ok(None)
                 }
                 KeyCode::Enter => {
-                    self.apply_state_picker_selection()?;
+                    self.apply_state_picker_selection();
                     Ok(None)
                 }
                 _ => Ok(None),
@@ -1539,6 +1538,7 @@ impl<S: TaskStore> Ui<S> {
         }
     }
 
+    #[allow(clippy::missing_const_for_fn)]
     fn state_picker_up(&mut self) {
         if let Some(picker) = &mut self.state_picker {
             if picker.options.is_empty() {
@@ -1553,14 +1553,14 @@ impl<S: TaskStore> Ui<S> {
         self.detail_focus = DetailFocus::None;
     }
 
-    fn apply_state_picker_selection(&mut self) -> Result<()> {
+    fn apply_state_picker_selection(&mut self) {
         let Some(picker) = self.state_picker.take() else {
-            return Ok(());
+            return;
         };
         self.detail_focus = DetailFocus::None;
         let Some(option) = picker.options.get(picker.selected) else {
             self.error("ステータス候補が見つかりません");
-            return Ok(());
+            return;
         };
         let desired_state = option.value.clone();
         match self
@@ -1571,7 +1571,6 @@ impl<S: TaskStore> Ui<S> {
             Ok(false) => self.info("ステータスは変更されませんでした"),
             Err(err) => self.error(format!("ステータス更新に失敗しました: {err}")),
         }
-        Ok(())
     }
 
     /// Build tree starting from a root task.
@@ -3040,7 +3039,7 @@ assignees:
         ]);
         let store = MockStore::new().with_task(task, vec![created]);
         let app = App::new(store, workflow)?;
-        let mut ui = ui_with_clipboard(app, Box::new(NoopClipboard::default()));
+        let mut ui = ui_with_clipboard(app, Box::new(NoopClipboard));
         ui.open_state_picker();
 
         assert_eq!(ui.detail_focus, DetailFocus::StatePicker);
@@ -3072,11 +3071,11 @@ assignees:
         ]);
         let store = MockStore::new().with_task(task, vec![created]);
         let app = App::new(store, workflow)?;
-        let mut ui = ui_with_clipboard(app, Box::new(NoopClipboard::default()));
+        let mut ui = ui_with_clipboard(app, Box::new(NoopClipboard));
 
         ui.open_state_picker();
         ui.state_picker_down();
-        ui.apply_state_picker_selection()?;
+        ui.apply_state_picker_selection();
 
         let view = ui
             .app
