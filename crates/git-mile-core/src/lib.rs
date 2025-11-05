@@ -11,10 +11,45 @@ use crdts::lwwreg::LWWReg;
 use crdts::orswot::Orswot;
 use crdts::CmRDT;
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::Hash;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+
+/// Sorted view over a slice of events.
+#[derive(Debug)]
+pub struct OrderedEvents<'a> {
+    ordered: Vec<&'a Event>,
+}
+
+impl<'a> OrderedEvents<'a> {
+    /// Create a sorted projection from the provided events.
+    pub fn new(events: &'a [Event]) -> Self {
+        let mut ordered: Vec<&Event> = events.iter().collect();
+        ordered.sort_by(|a, b| match a.ts.cmp(&b.ts) {
+            Ordering::Equal => a.id.cmp(&b.id),
+            other => other,
+        });
+        Self { ordered }
+    }
+
+    /// Iterate over events in chronological order.
+    pub fn iter(&self) -> impl Iterator<Item = &'a Event> + '_ {
+        self.ordered.iter().copied()
+    }
+
+    /// Latest event in the sequence, if present.
+    pub fn latest(&self) -> Option<&'a Event> {
+        self.ordered.last().copied()
+    }
+}
+
+impl<'a> From<&'a [Event]> for OrderedEvents<'a> {
+    fn from(events: &'a [Event]) -> Self {
+        Self::new(events)
+    }
+}
 
 /// Materialized view of a task by replaying events.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,16 +107,28 @@ impl TaskSnapshot {
         self.sync_from_crdt();
     }
 
+    /// Apply a sequence of events that are already ordered.
+    pub fn apply_iter<'a, I>(&mut self, events: I)
+    where
+        I: IntoIterator<Item = &'a Event>,
+    {
+        for event in events {
+            self.apply(event);
+        }
+    }
+
+    /// Replay pre-ordered events without re-sorting.
+    pub fn replay_ordered(ordered: &OrderedEvents<'_>) -> Self {
+        let mut snap = Self::default();
+        snap.apply_iter(ordered.iter());
+        snap
+    }
+
     /// Replay many events in time order.
     #[must_use]
     pub fn replay(events: &[Event]) -> Self {
-        let mut sorted_refs: Vec<&Event> = events.iter().collect();
-        sorted_refs.sort_by_key(|e| (e.ts, e.id));
-        let mut snap = Self::default();
-        for e in sorted_refs {
-            snap.apply(e);
-        }
-        snap
+        let ordered = OrderedEvents::from(events);
+        Self::replay_ordered(&ordered)
     }
 
     fn sync_from_crdt(&mut self) {
@@ -285,6 +332,121 @@ mod tests {
     use super::*;
     use crate::event::{Actor, Event, EventKind};
     use time::{Duration, OffsetDateTime};
+    use uuid::Uuid;
+
+    fn fixed_event_id(seed: u128) -> EventId {
+        EventId(Uuid::from_u128(seed))
+    }
+
+    #[test]
+    fn ordered_events_sorts_by_timestamp_then_id() {
+        let task = TaskId::new();
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+
+        let mut first = Event::new(
+            task,
+            &actor,
+            EventKind::TaskTitleSet {
+                title: "first".into(),
+            },
+        );
+        let mut second = Event::new(
+            task,
+            &actor,
+            EventKind::TaskTitleSet {
+                title: "second".into(),
+            },
+        );
+        let mut third = Event::new(
+            task,
+            &actor,
+            EventKind::TaskTitleSet {
+                title: "third".into(),
+            },
+        );
+
+        let base = OffsetDateTime::now_utc();
+        first.ts = base + Duration::seconds(5);
+        second.ts = base + Duration::seconds(5);
+        third.ts = base + Duration::seconds(10);
+        first.id = fixed_event_id(1);
+        second.id = fixed_event_id(2);
+        third.id = fixed_event_id(3);
+
+        let events = vec![third.clone(), second.clone(), first.clone()];
+
+        let ordered = OrderedEvents::from(events.as_slice());
+        let titles: Vec<_> = ordered
+            .iter()
+            .map(|ev| match &ev.kind {
+                EventKind::TaskTitleSet { title } => title.as_str(),
+                _ => "",
+            })
+            .collect();
+
+        assert_eq!(titles, vec!["first", "second", "third"]);
+        assert_eq!(ordered.latest().map(|ev| ev.id), Some(third.id));
+    }
+
+    #[test]
+    fn apply_iter_matches_replay() {
+        let task = TaskId::new();
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+
+        let mut created = Event::new(
+            task,
+            &actor,
+            EventKind::TaskCreated {
+                title: "Initial".into(),
+                labels: vec!["type/bug".into()],
+                assignees: vec!["alice".into()],
+                description: Some("desc".into()),
+                state: Some("state/todo".into()),
+            },
+        );
+
+        let mut comment = Event::new(
+            task,
+            &actor,
+            EventKind::CommentAdded {
+                comment_id: EventId::new(),
+                body_md: "first".into(),
+            },
+        );
+
+        let mut title = Event::new(
+            task,
+            &actor,
+            EventKind::TaskTitleSet {
+                title: "Updated".into(),
+            },
+        );
+
+        let base = OffsetDateTime::now_utc();
+        created.ts = base + Duration::seconds(10);
+        comment.ts = base;
+        title.ts = base + Duration::seconds(20);
+
+        let events = vec![created, comment, title];
+        let ordered = OrderedEvents::from(events.as_slice());
+
+        let mut via_iter = TaskSnapshot::default();
+        via_iter.apply_iter(ordered.iter());
+
+        let via_replay = TaskSnapshot::replay(&events);
+
+        assert_eq!(via_iter.title, via_replay.title);
+        assert_eq!(via_iter.description, via_replay.description);
+        assert_eq!(via_iter.labels, via_replay.labels);
+        assert_eq!(via_iter.assignees, via_replay.assignees);
+        assert_eq!(via_iter.updated_rfc3339, via_replay.updated_rfc3339);
+    }
 
     #[test]
     fn apply_and_replay_updates_snapshot() {

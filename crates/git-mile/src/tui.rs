@@ -18,7 +18,7 @@ use crossterm::{
 };
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::{EventId, TaskId};
-use git_mile_core::TaskSnapshot;
+use git_mile_core::{OrderedEvents, TaskSnapshot};
 use git_mile_store_git::GitStore;
 use ratatui::{
     backend::CrosstermBackend,
@@ -66,15 +66,10 @@ pub struct TaskView {
 
 impl TaskView {
     fn from_events(events: &[Event]) -> Self {
-        let snapshot = TaskSnapshot::replay(events);
+        let ordered = OrderedEvents::from(events);
+        let snapshot = TaskSnapshot::replay_ordered(&ordered);
 
-        let mut sorted_refs: Vec<&Event> = events.iter().collect();
-        sorted_refs.sort_by(|a, b| match a.ts.cmp(&b.ts) {
-            Ordering::Equal => a.id.cmp(&b.id),
-            other => other,
-        });
-
-        let comments = sorted_refs
+        let comments = ordered
             .iter()
             .filter_map(|ev| {
                 if let EventKind::CommentAdded { body_md, .. } = &ev.kind {
@@ -89,7 +84,7 @@ impl TaskView {
             })
             .collect();
 
-        let last_updated = sorted_refs.last().map(|ev| ev.ts);
+        let last_updated = ordered.latest().map(|ev| ev.ts);
 
         Self {
             snapshot,
