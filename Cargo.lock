@@ -571,6 +571,7 @@ dependencies = [
  "anyhow",
  "git-mile-core",
  "git2",
+ "lru",
  "serde_json",
  "thiserror 1.0.69",
  "time",

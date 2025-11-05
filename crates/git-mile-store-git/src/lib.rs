@@ -1,15 +1,21 @@
 //! Git-backed storage implementation for git-mile.
 
 use anyhow::{anyhow, Context, Result};
-use git2::{Commit, ObjectType, Oid, Repository, Signature, Sort};
+use git2::{Commit, Oid, Repository, Signature, Sort};
 use git_mile_core::event::Event;
 use git_mile_core::id::TaskId;
+use lru::LruCache;
+use std::num::NonZeroUsize;
 use std::path::Path;
+use std::sync::Mutex;
 use tracing::{debug, info};
+
+const EVENT_CACHE_CAPACITY: usize = 256;
 
 /// Storage based on git refs under `refs/git-mile/tasks/*`.
 pub struct GitStore {
     repo: Repository,
+    event_cache: Mutex<LruCache<Oid, Event>>,
 }
 
 impl GitStore {
@@ -19,12 +25,61 @@ impl GitStore {
     /// Returns an error if a Git repository cannot be discovered from the given path.
     pub fn open(cwd_or_repo: impl AsRef<Path>) -> Result<Self> {
         let repo = Repository::discover(cwd_or_repo).context("Failed to discover .git")?;
-        Ok(Self { repo })
+        let cache = LruCache::new(NonZeroUsize::new(EVENT_CACHE_CAPACITY).expect("cache capacity > 0"));
+        Ok(Self {
+            repo,
+            event_cache: Mutex::new(cache),
+        })
     }
 
     /// Name of the ref for a task.
     fn refname(task: &TaskId) -> String {
         format!("refs/git-mile/tasks/{task}")
+    }
+
+    fn cached_event(&self, oid: Oid) -> Option<Event> {
+        let mut cache = self.event_cache.lock().expect("cache poisoned");
+        cache.get(&oid).cloned()
+    }
+
+    fn cache_event(&self, oid: Oid, event: Event) {
+        let mut cache = self.event_cache.lock().expect("cache poisoned");
+        cache.put(oid, event);
+    }
+
+    fn cached_or_decode_event(&self, oid: Oid) -> Result<Option<Event>> {
+        if let Some(ev) = self.cached_event(oid) {
+            return Ok(Some(ev));
+        }
+        let Some(ev) = self.decode_event_from_commit(oid)? else {
+            return Ok(None);
+        };
+        self.cache_event(oid, ev.clone());
+        Ok(Some(ev))
+    }
+
+    fn decode_event_from_commit(&self, oid: Oid) -> Result<Option<Event>> {
+        let commit = self
+            .repo
+            .find_commit(oid)
+            .with_context(|| format!("Object is not a commit: {oid}"))?;
+        Self::event_from_commit(&commit, oid)
+    }
+
+    fn event_from_commit(commit: &Commit<'_>, oid: Oid) -> Result<Option<Event>> {
+        let Some(message) = commit.message() else {
+            return Ok(None);
+        };
+        let Some((head, body)) = message.split_once("\n\n") else {
+            return Ok(None);
+        };
+        if !head.starts_with("git-mile-event: ") {
+            return Ok(None);
+        }
+
+        let ev: Event = serde_json::from_str(body)
+            .with_context(|| format!("Failed to parse event JSON in commit {oid}"))?;
+        Ok(Some(ev))
     }
 
     /// Append an event as a single commit with empty tree.
@@ -82,28 +137,17 @@ impl GitStore {
         let tip = reference.target().ok_or_else(|| anyhow!("Ref has no target"))?;
 
         let mut rev = self.repo.revwalk()?;
-        rev.set_sorting(Sort::TOPOLOGICAL)?;
+        rev.set_sorting(Sort::TIME | Sort::REVERSE)?;
         rev.push(tip)?;
 
         let mut out = Vec::new();
         for oid in rev {
             let oid = oid?;
-            let obj = self.repo.find_object(oid, Some(ObjectType::Commit))?;
-            let commit = obj
-                .into_commit()
-                .map_err(|_| anyhow!("Object is not a commit: {oid}"))?;
-
-            if let Some(msg) = commit.message() {
-                if let Some((head, body)) = msg.split_once("\n\n") {
-                    if head.starts_with("git-mile-event: ") {
-                        let ev: Event = serde_json::from_str(body)
-                            .with_context(|| format!("Failed to parse event JSON in commit {oid}"))?;
-                        if ev.task == task {
-                            out.push(ev);
-                        } else {
-                            debug!("Ignoring event for different task in {oid}");
-                        }
-                    }
+            if let Some(ev) = self.cached_or_decode_event(oid)? {
+                if ev.task == task {
+                    out.push(ev);
+                } else {
+                    debug!(event_task = %ev.task, requested = %task, %oid, "Ignoring event for different task");
                 }
             }
         }
@@ -134,8 +178,7 @@ impl GitStore {
 mod tests {
     use super::*;
     use git_mile_core::event::{Actor, Event, EventKind};
-    use std::fs;
-    use std::path::PathBuf;
+    use std::{fs, path::PathBuf, thread, time::Duration as StdDuration};
 
     #[test]
     fn append_and_load_roundtrip() -> Result<()> {
@@ -149,7 +192,7 @@ mod tests {
             email: "tester@example.invalid".into(),
         };
 
-        let event = Event::new(
+        let created = Event::new(
             task,
             &actor,
             EventKind::TaskCreated {
@@ -161,20 +204,48 @@ mod tests {
             },
         );
 
-        let oid = store.append_event(&event)?;
+        let second = Event::new(
+            task,
+            &actor,
+            EventKind::TaskTitleSet {
+                title: "Polish docs".into(),
+            },
+        );
+
+        let oid = store.append_event(&created)?;
         assert_ne!(oid, Oid::zero());
+        thread::sleep(StdDuration::from_millis(10));
+        store.append_event(&second)?;
 
         let tasks = store.list_tasks()?;
         assert_eq!(tasks, vec![task]);
 
         let events = store.load_events(task)?;
-        assert_eq!(events.len(), 1);
+        assert_eq!(events.len(), 2);
         assert_eq!(events[0].task, task);
-        if let EventKind::TaskCreated { title, .. } = &events[0].kind {
-            assert_eq!(title, "Add docs");
-        } else {
-            panic!("unexpected event kind");
-        }
+        assert!(matches!(events[0].kind, EventKind::TaskCreated { .. }));
+        assert!(matches!(events[1].kind, EventKind::TaskTitleSet { .. }));
+
+        let titles: Vec<_> = events
+            .iter()
+            .map(|ev| match &ev.kind {
+                EventKind::TaskCreated { title, .. } => title.as_str(),
+                EventKind::TaskTitleSet { title } => title.as_str(),
+                _ => "",
+            })
+            .collect();
+        assert_eq!(titles, vec!["Add docs", "Polish docs"]);
+
+        let cached_events = store.load_events(task)?;
+        let cached_titles: Vec<_> = cached_events
+            .iter()
+            .map(|ev| match &ev.kind {
+                EventKind::TaskCreated { title, .. } => title.as_str(),
+                EventKind::TaskTitleSet { title } => title.as_str(),
+                _ => "",
+            })
+            .collect();
+        assert_eq!(titles, cached_titles);
 
         fs::remove_dir_all(&base)?;
         Ok(())
