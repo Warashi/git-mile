@@ -113,7 +113,7 @@ impl WorkflowConfig {
                 StateKind::InProgress => " →",
                 StateKind::Blocked => " ⊗",
                 StateKind::Todo => " □",
-                StateKind::Backlog => "",
+                StateKind::Backlog => " ◇",
             })
     }
 
