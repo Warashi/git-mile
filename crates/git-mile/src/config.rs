@@ -88,6 +88,34 @@ impl WorkflowConfig {
         &self.states
     }
 
+    /// Find a workflow state by its value.
+    pub fn find_state(&self, value: &str) -> Option<&WorkflowState> {
+        self.states.iter().find(|state| state.value() == value)
+    }
+
+    /// Get display label for a state value, using label if available, otherwise the value itself.
+    pub fn display_label<'a>(&'a self, value: Option<&'a str>) -> &'a str {
+        value.and_then(|v| {
+            self.find_state(v)
+                .and_then(|state| state.label())
+                .or(Some(v))
+        })
+        .unwrap_or("未設定")
+    }
+
+    /// Get state marker based on state kind.
+    pub fn state_marker(&self, value: Option<&str>) -> &'static str {
+        value
+            .and_then(|v| self.find_state(v))
+            .and_then(WorkflowState::kind)
+            .map_or("", |kind| match kind {
+                StateKind::Done => " ✓",
+                StateKind::InProgress => " →",
+                StateKind::Blocked => " ⊗",
+                StateKind::Pending => "",
+            })
+    }
+
     /// Validate that the provided state (if any) is part of the configured set.
     pub fn validate_state(&self, candidate: Option<&str>) -> Result<()> {
         let Some(value) = candidate else {
@@ -96,7 +124,7 @@ impl WorkflowConfig {
         if !self.is_restricted() {
             return Ok(());
         }
-        if self.states.iter().any(|state| state.value == value) {
+        if self.states.iter().any(|state| state.value() == value) {
             return Ok(());
         }
         let hint = self
@@ -124,12 +152,26 @@ impl WorkflowConfig {
     fn ensure_unique_states(&self) -> Result<()> {
         let mut seen = HashSet::new();
         for state in &self.states {
-            if !seen.insert(state.value.clone()) {
-                bail!("duplicate workflow state detected: {}", state.value);
+            if !seen.insert(state.value()) {
+                bail!("duplicate workflow state detected: {}", state.value());
             }
         }
         Ok(())
     }
+}
+
+/// Classification of workflow state behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StateKind {
+    /// Task is completed.
+    Done,
+    /// Task is actively being worked on.
+    InProgress,
+    /// Task is blocked or waiting.
+    Blocked,
+    /// Task is pending or not yet started.
+    Pending,
 }
 
 /// Individual workflow state definition.
@@ -138,6 +180,8 @@ pub struct WorkflowState {
     value: String,
     #[serde(default)]
     label: Option<String>,
+    #[serde(default)]
+    kind: Option<StateKind>,
 }
 
 impl WorkflowState {
@@ -147,12 +191,23 @@ impl WorkflowState {
         Self {
             value: value.into(),
             label: None,
+            kind: None,
         }
+    }
+
+    /// Get the state value.
+    pub fn value(&self) -> &str {
+        &self.value
     }
 
     /// Optional human-friendly label.
     pub fn label(&self) -> Option<&str> {
         self.label.as_deref()
+    }
+
+    /// Optional state classification.
+    pub const fn kind(&self) -> Option<StateKind> {
+        self.kind
     }
 
     fn describe(&self) -> String {

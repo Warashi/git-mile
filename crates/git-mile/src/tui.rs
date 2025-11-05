@@ -737,6 +737,7 @@ impl<S: TaskStore> Ui<S> {
         let items = if self.app.tasks.is_empty() {
             vec![ListItem::new(Line::from("タスクがありません"))]
         } else {
+            let workflow = self.app.workflow();
             self.app
                 .tasks
                 .iter()
@@ -745,10 +746,12 @@ impl<S: TaskStore> Ui<S> {
                         &view.snapshot.title,
                         Style::default().add_modifier(Modifier::BOLD),
                     );
+                    let state_value = view.snapshot.state.as_deref();
+                    let state_label = workflow.display_label(state_value);
                     let meta = format!(
                         "{} | {}",
                         view.snapshot.id,
-                        view.snapshot.state.as_deref().unwrap_or("state/unknown")
+                        state_label
                     );
                     let meta_span = Span::styled(meta, Style::default().fg(Color::DarkGray));
                     ListItem::new(vec![Line::from(vec![title]), Line::from(vec![meta_span])])
@@ -848,15 +851,16 @@ impl<S: TaskStore> Ui<S> {
         let inner = block.inner(area);
         f.render_widget(block, area);
 
+        let workflow = self.app.workflow();
         let mut lines = Vec::new();
         lines.push(Line::from(Span::styled(
             &task.snapshot.title,
             Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
         )));
         lines.push(Line::from(format!("ID: {}", task.snapshot.id)));
-        if let Some(state) = &task.snapshot.state {
-            lines.push(Line::from(format!("状態: {state}")));
-        }
+        let state_value = task.snapshot.state.as_deref();
+        let state_label = workflow.display_label(state_value);
+        lines.push(Line::from(format!("状態: {state_label}")));
         if !task.snapshot.labels.is_empty() {
             let labels = task
                 .snapshot
@@ -933,7 +937,6 @@ impl<S: TaskStore> Ui<S> {
         f.render_widget(paragraph, inner);
     }
 
-    #[allow(clippy::unused_self)]
     fn draw_subtasks(
         &self,
         f: &mut ratatui::Frame<'_>,
@@ -941,23 +944,18 @@ impl<S: TaskStore> Ui<S> {
         _task_id: TaskId,
         children: &[&TaskView],
     ) {
+        let workflow = self.app.workflow();
         let items: Vec<ListItem<'_>> = children
             .iter()
             .map(|child| {
-                let state_marker = child.snapshot.state.as_ref().map_or("", |s| {
-                    if s.contains("done") || s.contains("完了") {
-                        " ✓"
-                    } else if s.contains("progress") || s.contains("進行") {
-                        " →"
-                    } else {
-                        ""
-                    }
-                });
+                let state_value = child.snapshot.state.as_deref();
+                let state_marker = workflow.state_marker(state_value);
+                let state_label = workflow.display_label(state_value);
 
                 let text = format!(
                     "▸ {} [{}]{}",
                     child.snapshot.title,
-                    child.snapshot.state.as_deref().unwrap_or("未設定"),
+                    state_label,
                     state_marker
                 );
 
@@ -1057,6 +1055,7 @@ impl<S: TaskStore> Ui<S> {
 
     fn draw_tree_content(&self, f: &mut ratatui::Frame<'_>, area: Rect) {
         let mut lines = Vec::new();
+        let workflow = self.app.workflow();
 
         for (i, (depth, task_id)) in self.tree_state.visible_nodes.iter().enumerate() {
             let is_selected = i == self.tree_state.selected;
@@ -1080,23 +1079,17 @@ impl<S: TaskStore> Ui<S> {
                 "■"
             };
 
-            // State marker
-            let state_marker = task.snapshot.state.as_ref().map_or("", |s| {
-                if s.contains("done") || s.contains("完了") {
-                    " ✓"
-                } else if s.contains("progress") || s.contains("進行") {
-                    " →"
-                } else {
-                    ""
-                }
-            });
+            // State marker and label
+            let state_value = task.snapshot.state.as_deref();
+            let state_marker = workflow.state_marker(state_value);
+            let state_label = workflow.display_label(state_value);
 
             let line_text = format!(
                 "{}{} {} [{}]{}",
                 indent,
                 tree_char,
                 task.snapshot.title,
-                task.snapshot.state.as_deref().unwrap_or("未設定"),
+                state_label,
                 state_marker
             );
 
