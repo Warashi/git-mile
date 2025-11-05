@@ -1,0 +1,6 @@
+[workflow]
+states = [
+  { value = "state/todo", label = "Todo" },
+  { value = "state/in-progress", label = "In Progress" },
+  { value = "state/done", label = "Done" }
+]

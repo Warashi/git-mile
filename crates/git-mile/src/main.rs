@@ -5,10 +5,12 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
 
 use commands::TaskService;
+use config::ProjectConfig;
 use git_mile_store_git::GitStore;
 use rmcp::ServiceExt;
 
 mod commands;
+mod config;
 mod mcp;
 mod tui;
 
@@ -87,15 +89,16 @@ fn main() -> Result<()> {
 }
 
 fn execute_command(repo_path: &str, command: Command) -> Result<()> {
+    let workflow = ProjectConfig::load(repo_path)?.workflow;
     match command {
         Command::Tui => {
             let store = GitStore::open(repo_path)?;
-            tui::run(store)
+            tui::run(store, workflow.clone())
         }
 
         Command::Mcp => {
             let store = GitStore::open(repo_path)?;
-            let server = mcp::GitMileServer::new(store);
+            let server = mcp::GitMileServer::new(store, workflow.clone());
             tokio::runtime::Runtime::new()?
                 .block_on(async move {
                     let transport = (tokio::io::stdin(), tokio::io::stdout());
@@ -110,7 +113,7 @@ fn execute_command(repo_path: &str, command: Command) -> Result<()> {
 
         other => {
             let store = GitStore::open(repo_path)?;
-            let service = TaskService::new(store);
+            let service = TaskService::new(store, workflow);
             commands::run(other, &service)
         }
     }

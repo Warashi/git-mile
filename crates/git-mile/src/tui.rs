@@ -11,6 +11,9 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::config::WorkflowConfig;
+#[cfg(test)]
+use crate::config::WorkflowState;
 use anyhow::{anyhow, Context, Result};
 use crossterm::{
     event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind},
@@ -98,6 +101,7 @@ impl TaskView {
 /// Application state shared between the TUI event loop and rendering.
 pub struct App<S: TaskStore> {
     store: S,
+    workflow: WorkflowConfig,
     /// Cached task list sorted by most recent updates.
     pub tasks: Vec<TaskView>,
     /// Currently selected task index.
@@ -109,9 +113,10 @@ pub struct App<S: TaskStore> {
 
 impl<S: TaskStore> App<S> {
     /// Create an application instance and eagerly load tasks.
-    pub fn new(store: S) -> Result<Self> {
+    pub fn new(store: S, workflow: WorkflowConfig) -> Result<Self> {
         let mut app = Self {
             store,
+            workflow,
             tasks: Vec::new(),
             selected: 0,
             task_index: HashMap::new(),
@@ -120,6 +125,10 @@ impl<S: TaskStore> App<S> {
         };
         app.refresh_tasks()?;
         Ok(app)
+    }
+
+    pub fn workflow(&self) -> &WorkflowConfig {
+        &self.workflow
     }
 
     /// Get parent tasks of the given task.
@@ -288,6 +297,8 @@ impl<S: TaskStore> App<S> {
 
     /// Create a fresh task and refresh the view, returning the new identifier.
     pub fn create_task(&mut self, data: NewTaskData, actor: &Actor) -> Result<TaskId> {
+        self.workflow.validate_state(data.state.as_deref())?;
+
         let task = TaskId::new();
         let event = Event::new(
             task,
@@ -330,6 +341,9 @@ impl<S: TaskStore> App<S> {
         let patch = TaskPatch::from_snapshot(snapshot, data);
         if patch.is_empty() {
             return Ok(false);
+        }
+        if let Some(StatePatch::Set { state }) = &patch.state {
+            self.workflow.validate_state(Some(state))?;
         }
 
         for event in patch.into_events(task, actor) {
@@ -512,7 +526,7 @@ fn diff_sets<T: Ord + Clone>(current: &BTreeSet<T>, desired: &BTreeSet<T>) -> Se
 }
 
 /// Launch the interactive TUI.
-pub fn run(store: GitStore) -> Result<()> {
+pub fn run(store: GitStore, workflow: WorkflowConfig) -> Result<()> {
     enable_raw_mode().context("failed to enable raw mode")?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen).context("failed to enter alternate screen")?;
@@ -520,8 +534,9 @@ pub fn run(store: GitStore) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
     terminal.hide_cursor()?;
 
-    let result =
-        tracing::subscriber::with_default(NoSubscriber::default(), || run_event_loop(&mut terminal, store));
+    let result = tracing::subscriber::with_default(NoSubscriber::default(), || {
+        run_event_loop(&mut terminal, store, workflow)
+    });
 
     disable_raw_mode().ok();
     execute!(terminal.backend_mut(), LeaveAlternateScreen).ok();
@@ -530,9 +545,13 @@ pub fn run(store: GitStore) -> Result<()> {
     result
 }
 
-fn run_event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, store: GitStore) -> Result<()> {
+fn run_event_loop(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    store: GitStore,
+    workflow: WorkflowConfig,
+) -> Result<()> {
     let actor = resolve_actor();
-    let app = App::new(store)?;
+    let app = App::new(store, workflow)?;
     let mut ui = Ui::new(app, actor);
 
     let mut last_tick = Instant::now();
@@ -1510,12 +1529,13 @@ fn handle_ui_action<S: TaskStore>(
             ui.apply_comment_input(task, &raw)?;
         }
         UiAction::EditTask { task } => {
+            let state_hint = ui.app.workflow().state_hint();
             let Some(template) = ui
                 .app
                 .tasks
                 .iter()
                 .find(|view| view.snapshot.id == task)
-                .map(edit_task_editor_template)
+                .map(|view| edit_task_editor_template(view, state_hint.as_deref()))
             else {
                 ui.error("編集対象のタスクが見つかりません");
                 return Ok(());
@@ -1524,13 +1544,15 @@ fn handle_ui_action<S: TaskStore>(
             ui.apply_edit_task_input(task, &raw)?;
         }
         UiAction::CreateTask => {
-            let template = new_task_editor_template(None);
+            let hint = ui.app.workflow().state_hint();
+            let template = new_task_editor_template(None, hint.as_deref());
             let raw = with_terminal_suspended(terminal, || launch_editor(&template))?;
             ui.apply_new_task_input(&raw)?;
         }
         UiAction::CreateSubtask { parent } => {
             let parent_view = ui.app.tasks.iter().find(|view| view.snapshot.id == parent);
-            let template = new_task_editor_template(parent_view);
+            let hint = ui.app.workflow().state_hint();
+            let template = new_task_editor_template(parent_view, hint.as_deref());
             let raw = with_terminal_suspended(terminal, || launch_editor(&template))?;
             ui.apply_new_subtask_input(parent, &raw)?;
         }
@@ -1599,7 +1621,7 @@ fn parse_comment_editor_output(raw: &str) -> Option<String> {
     }
 }
 
-fn edit_task_editor_template(task: &TaskView) -> String {
+fn edit_task_editor_template(task: &TaskView, state_hint: Option<&str>) -> String {
     let snapshot = &task.snapshot;
     let state = snapshot.state.as_deref().unwrap_or_default();
     let labels = if snapshot.labels.is_empty() {
@@ -1627,12 +1649,17 @@ fn edit_task_editor_template(task: &TaskView) -> String {
         "# 選択中のタスクを編集します。タイトルは必須です。".to_string(),
         "# 空のフィールドは対応する値をクリアします。".to_string(),
         format!("title: {}", snapshot.title),
+    ];
+    if let Some(hint) = state_hint {
+        lines.push(format!("# state 候補: {hint}"));
+    }
+    lines.extend([
         format!("state: {}", state),
         format!("labels: {}", labels),
         format!("assignees: {}", assignees),
         "---".to_string(),
         "# この下で説明を編集してください。空欄で説明を削除します。".to_string(),
-    ];
+    ]);
     if snapshot.description.is_empty() {
         lines.push(String::new());
     } else {
@@ -1642,7 +1669,7 @@ fn edit_task_editor_template(task: &TaskView) -> String {
     lines.join("\n")
 }
 
-fn new_task_editor_template(parent: Option<&TaskView>) -> String {
+fn new_task_editor_template(parent: Option<&TaskView>, state_hint: Option<&str>) -> String {
     let header = parent.map_or_else(
         || "# 新規タスクを作成します。".to_owned(),
         |p| {
@@ -1654,19 +1681,24 @@ fn new_task_editor_template(parent: Option<&TaskView>) -> String {
         },
     );
 
-    [
-        header.as_str(),
-        "# タイトルは必須です。",
-        "# 空のまま保存すると作成をキャンセルしたものとして扱います。",
-        "title: ",
-        "state: ",
-        "labels: ",
-        "assignees: ",
-        "---",
-        "# この下に説明をMarkdown形式で記入してください。不要なら空のままにしてください。",
-        "",
-    ]
-    .join("\n")
+    let mut lines = vec![
+        header,
+        "# タイトルは必須です。".to_string(),
+        "# 空のまま保存すると作成をキャンセルしたものとして扱います。".to_string(),
+        "title: ".to_string(),
+    ];
+    if let Some(hint) = state_hint {
+        lines.push(format!("# state 候補: {hint}"));
+    }
+    lines.extend([
+        "state: ".to_string(),
+        "labels: ".to_string(),
+        "assignees: ".to_string(),
+        "---".to_string(),
+        "# この下に説明をMarkdown形式で記入してください。不要なら空のままにしてください。".to_string(),
+        String::new(),
+    ]);
+    lines.join("\n")
 }
 
 fn parse_new_task_editor_output(raw: &str) -> Result<Option<NewTaskData>, String> {
@@ -2061,7 +2093,7 @@ mod tests {
             .with_task(task_a, events_a)
             .with_task(task_b, events_b);
 
-        let app = App::new(store)?;
+        let app = App::new(store, WorkflowConfig::default())?;
         assert_eq!(app.tasks.len(), 2);
         let titles: Vec<_> = app
             .tasks
@@ -2083,7 +2115,7 @@ mod tests {
         let store = MockStore::new()
             .with_task(parent, parent_events)
             .with_task(child, child_events);
-        let app = App::new(store)?;
+        let app = App::new(store, WorkflowConfig::default())?;
 
         let children = app.get_children(parent);
         assert_eq!(children.len(), 1);
@@ -2113,7 +2145,7 @@ mod tests {
                     child_link(21, parent, recent_child),
                 ],
             );
-        let app = App::new(store)?;
+        let app = App::new(store, WorkflowConfig::default())?;
 
         let children = app.get_children(parent);
         let ids: Vec<TaskId> = children.iter().map(|view| view.snapshot.id).collect();
@@ -2151,7 +2183,7 @@ mod tests {
                 ],
             ),
         ]);
-        let app = App::new(store)?;
+        let app = App::new(store, WorkflowConfig::default())?;
 
         let root_view = app.get_root(leaf).expect("must locate a root despite cycle");
         assert_eq!(root_view.snapshot.id, root);
@@ -2192,7 +2224,7 @@ mod tests {
         let store = MockStore::new()
             .with_task(parent, parent_events)
             .with_task(child, child_events);
-        let app = App::new(store)?;
+        let app = App::new(store, WorkflowConfig::default())?;
         let mut ui = Ui::new(app, actor());
         ui.open_tree_view();
 
@@ -2242,7 +2274,7 @@ mod tests {
                 )],
             );
 
-        let mut app = App::new(store)?;
+        let mut app = App::new(store, WorkflowConfig::default())?;
         app.selected = 1;
         let target = app.selected_task_id().expect("selected task id");
         app.add_comment(target, "hello".into(), &actor())?;
@@ -2264,7 +2296,7 @@ mod tests {
     #[test]
     fn create_task_registers_and_selects_new_entry() -> Result<()> {
         let store = MockStore::new();
-        let mut app = App::new(store)?;
+        let mut app = App::new(store, WorkflowConfig::default())?;
 
         let data = NewTaskData {
             title: "Title".into(),
@@ -2285,6 +2317,26 @@ mod tests {
         assert_eq!(snap.description, "Write documentation");
         let labels: Vec<&str> = snap.labels.iter().map(String::as_str).collect();
         assert_eq!(labels, vec!["type/docs"]);
+        Ok(())
+    }
+
+    #[test]
+    fn create_task_rejects_unknown_state() -> Result<()> {
+        let store = MockStore::new();
+        let workflow = WorkflowConfig::from_states(vec![WorkflowState::new("state/todo")]);
+        let mut app = App::new(store, workflow)?;
+
+        let data = NewTaskData {
+            title: "Title".into(),
+            state: Some("state/done".into()),
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            description: None,
+            parent: None,
+        };
+
+        let err = app.create_task(data, &actor()).unwrap_err();
+        assert!(err.to_string().contains("state 'state/done'"));
         Ok(())
     }
 
@@ -2373,7 +2425,7 @@ assignees:
         );
 
         let store = MockStore::new().with_task(task, vec![created]);
-        let mut app = App::new(store)?;
+        let mut app = App::new(store, WorkflowConfig::default())?;
 
         let updated = app.update_task(
             task,
@@ -2445,7 +2497,7 @@ assignees:
         );
 
         let store = MockStore::new().with_task(task, vec![created]);
-        let mut app = App::new(store)?;
+        let mut app = App::new(store, WorkflowConfig::default())?;
         let snapshot = {
             let events = app.store.events.borrow();
             let stored = events.get(&task).expect("events for task");

@@ -7,6 +7,9 @@ use git_mile_core::id::{EventId, TaskId};
 use git_mile_core::TaskSnapshot;
 use git_mile_store_git::GitStore;
 
+use crate::config::WorkflowConfig;
+#[cfg(test)]
+use crate::config::WorkflowState;
 use crate::Command;
 
 /// Minimal abstraction over the backing event store so command handlers can be unit-tested.
@@ -33,11 +36,12 @@ impl TaskRepository for GitStore {
 /// Service façade that encapsulates all task-related side effects.
 pub struct TaskService<S> {
     store: S,
+    workflow: WorkflowConfig,
 }
 
 impl<S> TaskService<S> {
-    pub const fn new(store: S) -> Self {
-        Self { store }
+    pub fn new(store: S, workflow: WorkflowConfig) -> Self {
+        Self { store, workflow }
     }
 }
 
@@ -52,6 +56,8 @@ impl<S: TaskRepository> TaskService<S> {
             parents,
             actor,
         } = input;
+
+        self.workflow.validate_state(state.as_deref())?;
 
         let task = TaskId::new();
         let created_event = Event::new(
@@ -289,7 +295,7 @@ mod tests {
 
     fn service_with_store() -> (TaskService<MockStore>, MockStore) {
         let store = MockStore::default();
-        let service = TaskService::new(store.clone());
+        let service = TaskService::new(store.clone(), WorkflowConfig::default());
         (service, store)
     }
 
@@ -325,6 +331,28 @@ mod tests {
             other => panic!("unexpected event kind: {other:?}"),
         }
         Ok(())
+    }
+
+    #[test]
+    fn create_task_rejects_unknown_state_when_restricted() {
+        let store = MockStore::default();
+        let workflow = WorkflowConfig::from_states(vec![WorkflowState::new("state/ready")]);
+        let service = TaskService::new(store, workflow);
+
+        let err = match service.create_with_parents(CreateTaskInput {
+            title: "task".into(),
+            state: Some("state/done".into()),
+            labels: vec![],
+            assignees: vec![],
+            description: None,
+            parents: vec![],
+            actor: sample_actor(),
+        }) {
+            Ok(_) => panic!("expected state validation error"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("state 'state/done'"));
     }
 
     #[test]

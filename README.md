@@ -166,6 +166,19 @@ git-mile mcp
 **Repository location**:
 - Use `--repo <path>` to specify a Git repository outside the current directory
 
+**Workflow states** (optional):
+- Define `.git-mile/config.toml` in the repository root to restrict valid states per project
+- TUI/CLI/MCP will validate `state` values and show hints when this file lists allowed entries
+
+```toml
+[workflow]
+states = [
+  { value = "state/todo", label = "Todo" },
+  { value = "state/in-progress", label = "In Progress" },
+  { value = "state/done", label = "Done" }
+]
+```
+
 ## Development
 
 ### Build and Test

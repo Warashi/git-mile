@@ -1,5 +1,6 @@
 //! MCP server implementation for git-mile.
 
+use crate::config::WorkflowConfig;
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::TaskId;
 use git_mile_core::TaskSnapshot;
@@ -148,15 +149,17 @@ pub struct AddCommentParams {
 pub struct GitMileServer {
     tool_router: ToolRouter<Self>,
     store: Arc<Mutex<GitStore>>,
+    workflow: Arc<WorkflowConfig>,
 }
 
 #[tool_router]
 impl GitMileServer {
     /// Create a new MCP server instance.
-    pub fn new(store: GitStore) -> Self {
+    pub fn new(store: GitStore, workflow: WorkflowConfig) -> Self {
         Self {
             tool_router: Self::tool_router(),
             store: Arc::new(Mutex::new(store)),
+            workflow: Arc::new(workflow),
         }
     }
 
@@ -193,6 +196,10 @@ impl GitMileServer {
         &self,
         Parameters(params): Parameters<CreateTaskParams>,
     ) -> Result<CallToolResult, McpError> {
+        self.workflow
+            .validate_state(params.state.as_deref())
+            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+
         let store = self.store.lock().await;
         let task = TaskId::new();
         let actor = Actor {
@@ -307,6 +314,9 @@ impl GitMileServer {
 
         // Set state
         if let Some(state) = params.state {
+            self.workflow
+                .validate_state(Some(&state))
+                .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
             let event = Event::new(task, &actor, EventKind::TaskStateSet { state });
             store
                 .append_event(&event)
