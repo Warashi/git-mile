@@ -90,15 +90,15 @@ fn main() -> Result<()> {
 
 fn execute_command(repo_path: &str, command: Command) -> Result<()> {
     let workflow = ProjectConfig::load(repo_path)?.workflow;
-    match command {
-        Command::Tui => {
+    match (command, workflow) {
+        (Command::Tui, workflow) => {
             let store = GitStore::open(repo_path)?;
-            tui::run(store, workflow.clone())
+            tui::run(store, workflow)
         }
 
-        Command::Mcp => {
+        (Command::Mcp, workflow) => {
             let store = GitStore::open(repo_path)?;
-            let server = mcp::GitMileServer::new(store, workflow.clone());
+            let server = mcp::GitMileServer::new(store, workflow);
             tokio::runtime::Runtime::new()?
                 .block_on(async move {
                     let transport = (tokio::io::stdin(), tokio::io::stdout());
@@ -111,7 +111,7 @@ fn execute_command(repo_path: &str, command: Command) -> Result<()> {
                 .map(|_| ())
         }
 
-        other => {
+        (other, workflow) => {
             let store = GitStore::open(repo_path)?;
             let service = TaskService::new(store, workflow);
             commands::run(other, &service)

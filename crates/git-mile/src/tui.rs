@@ -127,7 +127,7 @@ impl<S: TaskStore> App<S> {
         Ok(app)
     }
 
-    pub fn workflow(&self) -> &WorkflowConfig {
+    pub const fn workflow(&self) -> &WorkflowConfig {
         &self.workflow
     }
 
@@ -1654,9 +1654,9 @@ fn edit_task_editor_template(task: &TaskView, state_hint: Option<&str>) -> Strin
         lines.push(format!("# state 候補: {hint}"));
     }
     lines.extend([
-        format!("state: {}", state),
-        format!("labels: {}", labels),
-        format!("assignees: {}", assignees),
+        format!("state: {state}"),
+        format!("labels: {labels}"),
+        format!("assignees: {assignees}"),
         "---".to_string(),
         "# この下で説明を編集してください。空欄で説明を削除します。".to_string(),
     ]);

@@ -40,7 +40,7 @@ pub struct TaskService<S> {
 }
 
 impl<S> TaskService<S> {
-    pub fn new(store: S, workflow: WorkflowConfig) -> Self {
+    pub const fn new(store: S, workflow: WorkflowConfig) -> Self {
         Self { store, workflow }
     }
 }
@@ -339,7 +339,7 @@ mod tests {
         let workflow = WorkflowConfig::from_states(vec![WorkflowState::new("state/ready")]);
         let service = TaskService::new(store, workflow);
 
-        let err = match service.create_with_parents(CreateTaskInput {
+        let Err(err) = service.create_with_parents(CreateTaskInput {
             title: "task".into(),
             state: Some("state/done".into()),
             labels: vec![],
@@ -347,9 +347,8 @@ mod tests {
             description: None,
             parents: vec![],
             actor: sample_actor(),
-        }) {
-            Ok(_) => panic!("expected state validation error"),
-            Err(err) => err,
+        }) else {
+            panic!("expected state validation error");
         };
 
         assert!(err.to_string().contains("state 'state/done'"));

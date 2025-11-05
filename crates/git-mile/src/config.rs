@@ -40,13 +40,13 @@ impl ProjectConfig {
 
         let contents = fs::read_to_string(&config_path)
             .with_context(|| format!("failed to read {}", config_path.display()))?;
-        let mut config: ProjectConfig = toml::from_str(&contents)
+        let config: Self = toml::from_str(&contents)
             .with_context(|| format!("failed to parse {}", config_path.display()))?;
         config.validate()?;
         Ok(config)
     }
 
-    fn validate(&mut self) -> Result<()> {
+    fn validate(&self) -> Result<()> {
         self.workflow.ensure_unique_states()
     }
 }
@@ -73,17 +73,18 @@ pub struct WorkflowConfig {
 impl WorkflowConfig {
     /// Construct a workflow configuration from explicit states.
     #[cfg(test)]
-    pub fn from_states(states: Vec<WorkflowState>) -> Self {
+    pub const fn from_states(states: Vec<WorkflowState>) -> Self {
         Self { states }
     }
 
     /// Returns true when states are restricted to a configured set.
-    pub fn is_restricted(&self) -> bool {
+    pub const fn is_restricted(&self) -> bool {
         !self.states.is_empty()
     }
 
     /// Iterate over allowed workflow states (if any).
-    pub fn states(&self) -> &[WorkflowState] {
+    #[cfg(test)]
+    pub(crate) fn states(&self) -> &[WorkflowState] {
         &self.states
     }
 
@@ -141,6 +142,7 @@ pub struct WorkflowState {
 
 impl WorkflowState {
     /// Create a workflow state with the given wire value.
+    #[cfg(test)]
     pub fn new(value: impl Into<String>) -> Self {
         Self {
             value: value.into(),
@@ -205,7 +207,9 @@ mod tests {
             "[workflow]\nstates = [\n  {{ value = \"state/todo\" }},\n  {{ value = \"state/todo\" }}\n]"
         )?;
 
-        let err = ProjectConfig::from_workdir(dir.path()).unwrap_err();
+        let Err(err) = ProjectConfig::from_workdir(dir.path()) else {
+            panic!("duplicate workflow state should error");
+        };
         assert!(err.to_string().contains("duplicate workflow state"));
         Ok(())
     }
