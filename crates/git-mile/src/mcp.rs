@@ -144,6 +144,13 @@ pub struct AddCommentParams {
     pub actor_email: String,
 }
 
+/// Parameters for retrieving a single task snapshot.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct GetTaskParams {
+    /// Task ID to fetch.
+    pub task_id: String,
+}
+
 /// MCP server for git-mile.
 #[derive(Clone)]
 pub struct GitMileServer {
@@ -183,6 +190,36 @@ impl GitMileServer {
         drop(store);
 
         let json_str = serde_json::to_string_pretty(&tasks)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json_str)]))
+    }
+
+    /// Fetch a single task snapshot by ID.
+    #[tool(description = "Fetch a single task snapshot by ID")]
+    async fn get_task(
+        &self,
+        Parameters(params): Parameters<GetTaskParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let task_id_raw = params.task_id.clone();
+        let task: TaskId = task_id_raw
+            .parse()
+            .map_err(|e| McpError::invalid_params(format!("Invalid task ID: {e}"), None))?;
+
+        let store = self.store.lock().await;
+        let events = store.load_events(task).map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("Task not found") {
+                McpError::invalid_params(format!("Task not found: {task_id_raw}"), None)
+            } else {
+                McpError::internal_error(msg, None)
+            }
+        })?;
+
+        drop(store);
+
+        let snapshot = TaskSnapshot::replay(&events);
+        let json_str = serde_json::to_string_pretty(&snapshot)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         Ok(CallToolResult::success(vec![Content::text(json_str)]))
@@ -594,5 +631,96 @@ impl ServerHandler for GitMileServer {
     ) -> Result<CallToolResult, McpError> {
         let tool_context = ToolCallContext::new(self, request, context);
         self.tool_router.call(tool_context).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+    use git2::Repository;
+    use git_mile_core::{
+        event::{Actor, Event, EventKind},
+        id::TaskId,
+        TaskSnapshot,
+    };
+    use rmcp::model::{ErrorCode, RawContent};
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn get_task_returns_snapshot() -> Result<()> {
+        let repo = tempdir()?;
+        Repository::init(repo.path())?;
+
+        let task_id = seed_task(repo.path())?;
+        let server = GitMileServer::new(GitStore::open(repo.path())?, WorkflowConfig::default());
+
+        let result = server
+            .get_task(Parameters(GetTaskParams {
+                task_id: task_id.to_string(),
+            }))
+            .await?;
+
+        let content = result
+            .content
+            .first()
+            .expect("tool response should include content");
+        let text = match &content.raw {
+            RawContent::Text(block) => block.text.clone(),
+            _ => panic!("expected text content"),
+        };
+        let snapshot: TaskSnapshot = serde_json::from_str(&text)?;
+
+        assert_eq!(snapshot.id, task_id);
+        assert_eq!(snapshot.title, "MCP test");
+        assert_eq!(snapshot.state.as_deref(), Some("state/todo"));
+        assert!(snapshot.labels.contains("label/docs"));
+        assert_eq!(snapshot.description, "hello");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_task_with_missing_id_returns_invalid_params() -> Result<()> {
+        let repo = tempdir()?;
+        Repository::init(repo.path())?;
+
+        let server = GitMileServer::new(GitStore::open(repo.path())?, WorkflowConfig::default());
+
+        let err = server
+            .get_task(Parameters(GetTaskParams {
+                task_id: TaskId::new().to_string(),
+            }))
+            .await
+            .expect_err("missing task should return error");
+
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("Task not found"));
+
+        Ok(())
+    }
+
+    fn seed_task(repo_path: &std::path::Path) -> Result<TaskId> {
+        let store = GitStore::open(repo_path)?;
+        let task = TaskId::new();
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+
+        let event = Event::new(
+            task,
+            &actor,
+            EventKind::TaskCreated {
+                title: "MCP test".into(),
+                labels: vec!["label/docs".into()],
+                assignees: vec![],
+                description: Some("hello".into()),
+                state: Some("state/todo".into()),
+            },
+        );
+
+        store.append_event(&event)?;
+        Ok(task)
     }
 }

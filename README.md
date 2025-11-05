@@ -143,10 +143,13 @@ git-mile mcp
 
 **Available MCP Tools**:
 - `list_tasks`: Retrieve all tasks
+- `get_task`: Fetch a single task snapshot by ID
 - `create_task`: Create new task with metadata
 - `update_task`: Modify task properties
 - `add_comment`: Add comment to task
 - `update_comment`: Edit existing comment
+
+`get_task` accepts a JSON payload like `{"task_id": "<UUIDv7>"}` and returns the serialized `TaskSnapshot` for that task, matching the data shown in the CLI/TUI views.
 
 ## Configuration
 
