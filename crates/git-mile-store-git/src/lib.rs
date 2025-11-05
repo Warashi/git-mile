@@ -25,7 +25,9 @@ impl GitStore {
     /// Returns an error if a Git repository cannot be discovered from the given path.
     pub fn open(cwd_or_repo: impl AsRef<Path>) -> Result<Self> {
         let repo = Repository::discover(cwd_or_repo).context("Failed to discover .git")?;
-        let cache = LruCache::new(NonZeroUsize::new(EVENT_CACHE_CAPACITY).expect("cache capacity > 0"));
+        let capacity = NonZeroUsize::new(EVENT_CACHE_CAPACITY)
+            .ok_or_else(|| anyhow!("cache capacity must be non-zero"))?;
+        let cache = LruCache::new(capacity);
         Ok(Self {
             repo,
             event_cache: Mutex::new(cache),
@@ -38,13 +40,16 @@ impl GitStore {
     }
 
     fn cached_event(&self, oid: Oid) -> Option<Event> {
-        let mut cache = self.event_cache.lock().expect("cache poisoned");
-        cache.get(&oid).cloned()
+        self.event_cache
+            .lock()
+            .ok()
+            .and_then(|mut cache| cache.get(&oid).cloned())
     }
 
     fn cache_event(&self, oid: Oid, event: Event) {
-        let mut cache = self.event_cache.lock().expect("cache poisoned");
-        cache.put(oid, event);
+        if let Ok(mut cache) = self.event_cache.lock() {
+            cache.put(oid, event);
+        }
     }
 
     fn cached_or_decode_event(&self, oid: Oid) -> Result<Option<Event>> {
@@ -229,8 +234,7 @@ mod tests {
         let titles: Vec<_> = events
             .iter()
             .map(|ev| match &ev.kind {
-                EventKind::TaskCreated { title, .. } => title.as_str(),
-                EventKind::TaskTitleSet { title } => title.as_str(),
+                EventKind::TaskCreated { title, .. } | EventKind::TaskTitleSet { title } => title.as_str(),
                 _ => "",
             })
             .collect();
@@ -240,8 +244,7 @@ mod tests {
         let cached_titles: Vec<_> = cached_events
             .iter()
             .map(|ev| match &ev.kind {
-                EventKind::TaskCreated { title, .. } => title.as_str(),
-                EventKind::TaskTitleSet { title } => title.as_str(),
+                EventKind::TaskCreated { title, .. } | EventKind::TaskTitleSet { title } => title.as_str(),
                 _ => "",
             })
             .collect();

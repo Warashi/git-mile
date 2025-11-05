@@ -25,6 +25,7 @@ pub struct OrderedEvents<'a> {
 
 impl<'a> OrderedEvents<'a> {
     /// Create a sorted projection from the provided events.
+    #[must_use]
     pub fn new(events: &'a [Event]) -> Self {
         let mut ordered: Vec<&Event> = events.iter().collect();
         ordered.sort_by(|a, b| match a.ts.cmp(&b.ts) {
@@ -40,6 +41,7 @@ impl<'a> OrderedEvents<'a> {
     }
 
     /// Latest event in the sequence, if present.
+    #[must_use]
     pub fn latest(&self) -> Option<&'a Event> {
         self.ordered.last().copied()
     }
@@ -118,6 +120,7 @@ impl TaskSnapshot {
     }
 
     /// Replay pre-ordered events without re-sorting.
+    #[must_use]
     pub fn replay_ordered(ordered: &OrderedEvents<'_>) -> Self {
         let mut snap = Self::default();
         snap.apply_iter(ordered.iter());
@@ -376,7 +379,7 @@ mod tests {
         second.id = fixed_event_id(2);
         third.id = fixed_event_id(3);
 
-        let events = vec![third.clone(), second.clone(), first.clone()];
+        let events = vec![third.clone(), second, first];
 
         let ordered = OrderedEvents::from(events.as_slice());
         let titles: Vec<_> = ordered
