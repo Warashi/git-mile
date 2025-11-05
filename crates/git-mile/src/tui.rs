@@ -1,5 +1,6 @@
 //! Terminal UI for browsing and updating tasks.
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::env;
@@ -572,12 +573,6 @@ fn run_event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, store: GitS
 struct TreeNode {
     /// Task ID.
     task_id: TaskId,
-    /// Task title.
-    #[allow(dead_code)]
-    title: String,
-    /// Task state.
-    #[allow(dead_code)]
-    state: Option<String>,
     /// Child nodes.
     children: Vec<TreeNode>,
     /// Whether this node is expanded.
@@ -811,10 +806,10 @@ impl<S: TaskStore> Ui<S> {
         // Add parent tasks
         for parent in &parents {
             breadcrumb_items.push(Span::raw(" > "));
-            let parent_title = if parent.snapshot.title.len() > 20 {
-                format!("{}...", &parent.snapshot.title[..17])
+            let parent_title: Cow<'_, str> = if parent.snapshot.title.len() > 20 {
+                Cow::Owned(format!("{}...", &parent.snapshot.title[..17]))
             } else {
-                parent.snapshot.title.clone()
+                Cow::Borrowed(parent.snapshot.title.as_str())
             };
             breadcrumb_items.push(Span::raw(parent_title));
         }
@@ -870,17 +865,22 @@ impl<S: TaskStore> Ui<S> {
             let parent_info = if parents.is_empty() {
                 format!("親: {} 件（未読込）", task.snapshot.parents.len())
             } else {
-                let parent_titles: Vec<String> = parents
+                let parent_titles: Vec<Cow<'_, str>> = parents
                     .iter()
                     .map(|p| {
                         if p.snapshot.title.len() > 15 {
-                            format!("{}...", &p.snapshot.title[..12])
+                            Cow::Owned(format!("{}...", &p.snapshot.title[..12]))
                         } else {
-                            p.snapshot.title.clone()
+                            Cow::Borrowed(p.snapshot.title.as_str())
                         }
                     })
                     .collect();
-                format!("親: {}", parent_titles.join(", "))
+                let joined = parent_titles
+                    .iter()
+                    .map(Cow::as_ref)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("親: {joined}")
             };
             lines.push(Line::from(parent_info));
         }
@@ -1219,11 +1219,20 @@ impl<S: TaskStore> Ui<S> {
 
     fn jump_to_parent(&mut self) {
         if let Some(task) = self.app.selected_task() {
-            let parents = self.app.get_parents(task.snapshot.id);
-            if let Some(parent) = parents.first() {
-                let parent_id = parent.snapshot.id;
-                let parent_title = parent.snapshot.title.clone();
+            let parent_id = self
+                .app
+                .get_parents(task.snapshot.id)
+                .first()
+                .map(|parent| parent.snapshot.id);
+            if let Some(parent_id) = parent_id {
                 self.app.jump_to_task(parent_id);
+                let parent_title = self
+                    .app
+                    .tasks
+                    .iter()
+                    .find(|view| view.snapshot.id == parent_id)
+                    .map(|view| view.snapshot.title.as_str())
+                    .unwrap_or("不明");
                 self.info(format!("親タスクへジャンプ: {parent_title}"));
             } else {
                 self.error("親タスクがありません");
@@ -1237,8 +1246,6 @@ impl<S: TaskStore> Ui<S> {
 
         Some(TreeNode {
             task_id: root_view.snapshot.id,
-            title: root_view.snapshot.title.clone(),
-            state: root_view.snapshot.state.clone(),
             children: self.build_children_nodes(root_id),
             expanded: true, // デフォルトで展開
         })
@@ -1251,8 +1258,6 @@ impl<S: TaskStore> Ui<S> {
             .iter()
             .map(|child| TreeNode {
                 task_id: child.snapshot.id,
-                title: child.snapshot.title.clone(),
-                state: child.snapshot.state.clone(),
                 children: self.build_children_nodes(child.snapshot.id),
                 expanded: false, // デフォルトで折りたたみ
             })
@@ -1466,10 +1471,10 @@ impl<S: TaskStore> Ui<S> {
         }
     }
 
-    fn status_text(&self) -> String {
-        self.message.as_ref().map_or_else(
-            || "ステータスメッセージはありません".into(),
-            |msg| msg.text.clone(),
+    fn status_text(&self) -> Cow<'_, str> {
+        self.message.as_ref().map_or(
+            Cow::Borrowed("ステータスメッセージはありません"),
+            |msg| Cow::Borrowed(msg.text.as_str()),
         )
     }
 
@@ -1506,12 +1511,16 @@ fn handle_ui_action<S: TaskStore>(
             ui.apply_comment_input(task, &raw)?;
         }
         UiAction::EditTask { task } => {
-            let view = ui.app.tasks.iter().find(|view| view.snapshot.id == task).cloned();
-            let Some(view) = view else {
+            let Some(template) = ui
+                .app
+                .tasks
+                .iter()
+                .find(|view| view.snapshot.id == task)
+                .map(edit_task_editor_template)
+            else {
                 ui.error("編集対象のタスクが見つかりません");
                 return Ok(());
             };
-            let template = edit_task_editor_template(&view);
             let raw = with_terminal_suspended(terminal, || launch_editor(&template))?;
             ui.apply_edit_task_input(task, &raw)?;
         }
@@ -1521,13 +1530,8 @@ fn handle_ui_action<S: TaskStore>(
             ui.apply_new_task_input(&raw)?;
         }
         UiAction::CreateSubtask { parent } => {
-            let parent_view = ui
-                .app
-                .tasks
-                .iter()
-                .find(|view| view.snapshot.id == parent)
-                .cloned();
-            let template = new_task_editor_template(parent_view.as_ref());
+            let parent_view = ui.app.tasks.iter().find(|view| view.snapshot.id == parent);
+            let template = new_task_editor_template(parent_view);
             let raw = with_terminal_suspended(terminal, || launch_editor(&template))?;
             ui.apply_new_subtask_input(parent, &raw)?;
         }
@@ -1667,10 +1671,10 @@ fn new_task_editor_template(parent: Option<&TaskView>) -> String {
 }
 
 fn parse_new_task_editor_output(raw: &str) -> Result<Option<NewTaskData>, String> {
-    let mut title = String::new();
-    let mut state = String::new();
-    let mut labels = String::new();
-    let mut assignees = String::new();
+    let mut title: Option<&str> = None;
+    let mut state: Option<&str> = None;
+    let mut labels: Option<&str> = None;
+    let mut assignees: Option<&str> = None;
     let mut description_lines = Vec::new();
     let mut in_description = false;
 
@@ -1694,10 +1698,10 @@ fn parse_new_task_editor_output(raw: &str) -> Result<Option<NewTaskData>, String
         if let Some((key, value)) = trimmed.split_once(':') {
             let value = value.trim();
             match key.trim() {
-                "title" => value.clone_into(&mut title),
-                "state" => value.clone_into(&mut state),
-                "labels" => value.clone_into(&mut labels),
-                "assignees" => value.clone_into(&mut assignees),
+                "title" => title = Some(value),
+                "state" => state = Some(value),
+                "labels" => labels = Some(value),
+                "assignees" => assignees = Some(value),
                 unknown => {
                     return Err(format!("未知のフィールドです: {unknown}"));
                 }
@@ -1707,10 +1711,10 @@ fn parse_new_task_editor_output(raw: &str) -> Result<Option<NewTaskData>, String
         }
     }
 
-    let title = title.trim().to_owned();
-    let state = state.trim();
-    let labels = labels.trim();
-    let assignees = assignees.trim();
+    let title = title.unwrap_or("").trim();
+    let state = state.unwrap_or("").trim();
+    let labels = labels.unwrap_or("").trim();
+    let assignees = assignees.unwrap_or("").trim();
     let description = description_lines.join("\n");
 
     let is_all_empty = title.is_empty()
@@ -1740,7 +1744,7 @@ fn parse_new_task_editor_output(raw: &str) -> Result<Option<NewTaskData>, String
     };
 
     Ok(Some(NewTaskData {
-        title,
+        title: title.to_owned(),
         state,
         labels,
         assignees,
@@ -2393,14 +2397,10 @@ assignees:
             .expect("task should exist");
         assert_eq!(view.snapshot.title, "Updated");
         assert_eq!(view.snapshot.state, None);
-        assert_eq!(
-            view.snapshot.labels.iter().cloned().collect::<Vec<_>>(),
-            vec!["type/docs".to_owned()]
-        );
-        assert_eq!(
-            view.snapshot.assignees.iter().cloned().collect::<Vec<_>>(),
-            vec!["bob".to_owned()]
-        );
+        let labels: Vec<&str> = view.snapshot.labels.iter().map(String::as_str).collect();
+        assert_eq!(labels, vec!["type/docs"]);
+        let assignees: Vec<&str> = view.snapshot.assignees.iter().map(String::as_str).collect();
+        assert_eq!(assignees, vec!["bob"]);
         assert_eq!(view.snapshot.description, "new description");
 
         let events = app.store.events.borrow();
@@ -2447,13 +2447,11 @@ assignees:
 
         let store = MockStore::new().with_task(task, vec![created]);
         let mut app = App::new(store)?;
-        let snapshot = app
-            .tasks
-            .iter()
-            .find(|view| view.snapshot.id == task)
-            .expect("task should exist")
-            .snapshot
-            .clone();
+        let snapshot = {
+            let events = app.store.events.borrow();
+            let stored = events.get(&task).expect("events for task");
+            TaskSnapshot::replay(stored)
+        };
 
         let updated = app.update_task(
             task,

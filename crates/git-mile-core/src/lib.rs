@@ -379,7 +379,7 @@ mod tests {
         second.id = fixed_event_id(2);
         third.id = fixed_event_id(3);
 
-        let events = vec![third.clone(), second, first];
+        let events = vec![third, second, first];
 
         let ordered = OrderedEvents::from(events.as_slice());
         let titles: Vec<_> = ordered
@@ -391,7 +391,15 @@ mod tests {
             .collect();
 
         assert_eq!(titles, vec!["first", "second", "third"]);
-        assert_eq!(ordered.latest().map(|ev| ev.id), Some(third.id));
+        let expected_latest = events
+            .iter()
+            .max_by(|a, b| match a.ts.cmp(&b.ts) {
+                Ordering::Equal => a.id.cmp(&b.id),
+                other => other,
+            })
+            .map(|ev| ev.id)
+            .unwrap_or_else(|| panic!("events must be non-empty"));
+        assert_eq!(ordered.latest().map(|ev| ev.id), Some(expected_latest));
     }
 
     #[test]
@@ -524,7 +532,7 @@ mod tests {
 
         let child = TaskId::new();
         let related = TaskId::new();
-        let relation_kind = "relatesTo".to_owned();
+        let relation_kind = "relatesTo";
 
         let mut created = Event::new(
             task,
@@ -549,7 +557,7 @@ mod tests {
             task,
             &actor,
             EventKind::RelationAdded {
-                kind: relation_kind.clone(),
+                kind: relation_kind.to_owned(),
                 target: related,
             },
         );
@@ -559,7 +567,7 @@ mod tests {
             task,
             &actor,
             EventKind::RelationRemoved {
-                kind: relation_kind,
+                kind: relation_kind.to_owned(),
                 target: related,
             },
         );
@@ -619,19 +627,15 @@ mod tests {
         );
         let state_cleared = Event::new(task, &actor, EventKind::TaskStateCleared);
 
-        let replayed = TaskSnapshot::replay(&[
-            created.clone(),
-            title_set.clone(),
-            description_set.clone(),
-            state_cleared.clone(),
-        ]);
+        let events = vec![created, title_set, description_set, state_cleared];
+        let replayed = TaskSnapshot::replay(&events);
         assert_eq!(replayed.title, "Updated");
         assert_eq!(replayed.description, "refined");
         assert_eq!(replayed.state, None);
 
         let mut applied = TaskSnapshot::default();
-        for ev in [created, title_set, description_set, state_cleared] {
-            applied.apply(&ev);
+        for ev in &events {
+            applied.apply(ev);
         }
         assert_eq!(applied.title, "Updated");
         assert_eq!(applied.description, "refined");
