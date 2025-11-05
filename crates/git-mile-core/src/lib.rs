@@ -397,8 +397,7 @@ mod tests {
                 Ordering::Equal => a.id.cmp(&b.id),
                 other => other,
             })
-            .map(|ev| ev.id)
-            .unwrap_or_else(|| panic!("events must be non-empty"));
+            .map_or_else(|| panic!("events must be non-empty"), |ev| ev.id);
         assert_eq!(ordered.latest().map(|ev| ev.id), Some(expected_latest));
     }
 

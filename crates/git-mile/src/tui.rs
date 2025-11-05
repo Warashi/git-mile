@@ -1231,8 +1231,7 @@ impl<S: TaskStore> Ui<S> {
                     .tasks
                     .iter()
                     .find(|view| view.snapshot.id == parent_id)
-                    .map(|view| view.snapshot.title.as_str())
-                    .unwrap_or("不明");
+                    .map_or("不明", |view| view.snapshot.title.as_str());
                 self.info(format!("親タスクへジャンプ: {parent_title}"));
             } else {
                 self.error("親タスクがありません");
