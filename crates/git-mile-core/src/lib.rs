@@ -134,6 +134,14 @@ impl TaskSnapshot {
         Self::replay_ordered(&ordered)
     }
 
+    /// Latest update timestamp as `OffsetDateTime`, if present.
+    #[must_use]
+    pub fn updated_at(&self) -> Option<OffsetDateTime> {
+        self.updated_rfc3339
+            .as_deref()
+            .and_then(|ts| OffsetDateTime::parse(ts, &Rfc3339).ok())
+    }
+
     fn sync_from_crdt(&mut self) {
         self.id = self.crdt.id.unwrap_or_default();
         self.title = self.crdt.title.val.clone();
@@ -151,6 +159,169 @@ impl TaskSnapshot {
             .filter(|(_, members)| !members.is_empty())
             .collect();
         self.updated_rfc3339 = self.crdt.updated.and_then(EventStamp::into_rfc3339);
+    }
+}
+
+/// Declarative filter used to match task snapshots.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskFilter {
+    /// Match tasks whose state is one of these values.
+    #[serde(default)]
+    pub states: BTreeSet<String>,
+    /// Require all listed labels to be present on the task.
+    #[serde(default)]
+    pub labels: BTreeSet<String>,
+    /// Match tasks that include any of these assignees.
+    #[serde(default)]
+    pub assignees: BTreeSet<String>,
+    /// Match tasks that include any of these parents.
+    #[serde(default)]
+    pub parents: BTreeSet<TaskId>,
+    /// Match tasks that include any of these children.
+    #[serde(default)]
+    pub children: BTreeSet<TaskId>,
+    /// Case-insensitive substring matched against title/description/state/labels/assignees.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// Timestamp range filter.
+    #[serde(default)]
+    pub updated: Option<UpdatedFilter>,
+}
+
+impl TaskFilter {
+    /// Check whether the provided snapshot satisfies this filter.
+    #[must_use]
+    pub fn matches(&self, task: &TaskSnapshot) -> bool {
+        self.matches_state(task)
+            && self.matches_labels(task)
+            && self.matches_assignees(task)
+            && self.matches_parents(task)
+            && self.matches_children(task)
+            && self.matches_text(task)
+            && self.matches_updated(task)
+    }
+
+    /// Determine whether this filter has any active criteria.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.states.is_empty()
+            && self.labels.is_empty()
+            && self.assignees.is_empty()
+            && self.parents.is_empty()
+            && self.children.is_empty()
+            && self
+                .text
+                .as_deref()
+                .map_or(true, |needle| needle.trim().is_empty())
+            && self.updated.as_ref().map_or(true, UpdatedFilter::is_empty)
+    }
+
+    fn matches_state(&self, task: &TaskSnapshot) -> bool {
+        if self.states.is_empty() {
+            return true;
+        }
+        task.state
+            .as_ref()
+            .is_some_and(|state| self.states.contains(state))
+    }
+
+    fn matches_labels(&self, task: &TaskSnapshot) -> bool {
+        self.labels.iter().all(|label| task.labels.contains(label))
+    }
+
+    fn matches_assignees(&self, task: &TaskSnapshot) -> bool {
+        if self.assignees.is_empty() {
+            return true;
+        }
+        task.assignees
+            .iter()
+            .any(|assignee| self.assignees.contains(assignee))
+    }
+
+    fn matches_parents(&self, task: &TaskSnapshot) -> bool {
+        if self.parents.is_empty() {
+            return true;
+        }
+        task.parents.iter().any(|parent| self.parents.contains(parent))
+    }
+
+    fn matches_children(&self, task: &TaskSnapshot) -> bool {
+        if self.children.is_empty() {
+            return true;
+        }
+        task.children.iter().any(|child| self.children.contains(child))
+    }
+
+    fn matches_text(&self, task: &TaskSnapshot) -> bool {
+        let Some(needle) = self
+            .text
+            .as_ref()
+            .and_then(|value| (!value.trim().is_empty()).then(|| value.to_ascii_lowercase()))
+        else {
+            return true;
+        };
+
+        let mut haystacks = Vec::new();
+        haystacks.push(task.title.as_str());
+        haystacks.push(task.description.as_str());
+        if let Some(state) = task.state.as_deref() {
+            haystacks.push(state);
+        }
+        if haystacks
+            .into_iter()
+            .any(|field| field.to_ascii_lowercase().contains(&needle))
+        {
+            return true;
+        }
+
+        task.labels
+            .iter()
+            .map(String::as_str)
+            .chain(task.assignees.iter().map(String::as_str))
+            .any(|field| field.to_ascii_lowercase().contains(&needle))
+    }
+
+    fn matches_updated(&self, task: &TaskSnapshot) -> bool {
+        match &self.updated {
+            None => true,
+            Some(filter) => filter.matches(task.updated_at()),
+        }
+    }
+}
+
+/// Timestamp filter for updated_at.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdatedFilter {
+    /// Match tasks updated at or after this timestamp.
+    pub since: Option<OffsetDateTime>,
+    /// Match tasks updated at or before this timestamp.
+    pub until: Option<OffsetDateTime>,
+}
+
+impl UpdatedFilter {
+    /// Check if the provided timestamp satisfies this range.
+    #[must_use]
+    pub fn matches(&self, ts: Option<OffsetDateTime>) -> bool {
+        let Some(actual) = ts else {
+            return false;
+        };
+        if let Some(since) = self.since {
+            if actual < since {
+                return false;
+            }
+        }
+        if let Some(until) = self.until {
+            if actual > until {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Returns true when neither bound is specified.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.since.is_none() && self.until.is_none()
     }
 }
 
@@ -336,6 +507,18 @@ mod tests {
     use crate::event::{Actor, Event, EventKind};
     use time::{Duration, OffsetDateTime};
     use uuid::Uuid;
+
+    fn blank_snapshot() -> TaskSnapshot {
+        TaskSnapshot {
+            title: "Task".into(),
+            ..TaskSnapshot::default()
+        }
+    }
+
+    fn timestamp_string(ts: OffsetDateTime) -> String {
+        ts.format(&Rfc3339)
+            .unwrap_or_else(|err| panic!("timestamp must format: {err}"))
+    }
 
     fn fixed_event_id(seed: u128) -> EventId {
         EventId(Uuid::from_u128(seed))
@@ -639,5 +822,123 @@ mod tests {
         assert_eq!(applied.title, "Updated");
         assert_eq!(applied.description, "refined");
         assert_eq!(applied.state, None);
+    }
+
+    #[test]
+    fn task_filter_matches_state_and_labels() {
+        let mut snapshot = blank_snapshot();
+        snapshot.state = Some("state/todo".into());
+        snapshot.labels.extend(["type/bug".into(), "area/core".into()]);
+
+        let mut filter = TaskFilter::default();
+        filter.states.insert("state/todo".into());
+        filter.labels.insert("type/bug".into());
+
+        assert!(filter.matches(&snapshot));
+
+        filter.labels.insert("missing".into());
+        assert!(!filter.matches(&snapshot));
+    }
+
+    #[test]
+    fn task_filter_matches_assignees_using_or_logic() {
+        let mut snapshot = blank_snapshot();
+        snapshot
+            .assignees
+            .extend(["alice".into(), "bob".into(), "carol".into()]);
+
+        let mut filter = TaskFilter::default();
+        filter.assignees.insert("dora".into());
+        filter.assignees.insert("bob".into());
+
+        assert!(filter.matches(&snapshot));
+
+        filter.assignees.clear();
+        filter.assignees.insert("eve".into());
+        assert!(!filter.matches(&snapshot));
+    }
+
+    #[test]
+    fn task_filter_text_matches_multiple_fields() {
+        let mut snapshot = blank_snapshot();
+        snapshot.title = "Fix login bug".into();
+        snapshot.description = "Regression in oauth flow".into();
+        snapshot.state = Some("state/in-progress".into());
+        snapshot
+            .labels
+            .extend(["kind/bug".into(), "priority/high".into()]);
+        snapshot.assignees.extend(["alice".into(), "bob".into()]);
+
+        let mut filter = TaskFilter::default();
+        filter.text = Some("BUG".into());
+        assert!(filter.matches(&snapshot));
+
+        filter.text = Some("oauth".into());
+        assert!(filter.matches(&snapshot));
+
+        filter.text = Some("missing".into());
+        assert!(!filter.matches(&snapshot));
+    }
+
+    #[test]
+    fn task_filter_matches_parent_and_child_relationships() {
+        let mut snapshot = blank_snapshot();
+        let parent_a = TaskId::new();
+        let parent_b = TaskId::new();
+        let child_a = TaskId::new();
+        snapshot.parents.extend([parent_a, parent_b]);
+        snapshot.children.insert(child_a);
+
+        let mut filter = TaskFilter::default();
+        filter.parents.insert(parent_b);
+        assert!(filter.matches(&snapshot));
+
+        filter.parents.clear();
+        filter.children.insert(child_a);
+        assert!(filter.matches(&snapshot));
+
+        filter.children.insert(TaskId::new());
+        assert!(filter.matches(&snapshot));
+
+        filter.parents.insert(TaskId::new());
+        filter.children.clear();
+        assert!(!filter.matches(&snapshot));
+    }
+
+    #[test]
+    fn task_filter_updated_range_evaluates_bounds() {
+        let mut snapshot = blank_snapshot();
+        let now = OffsetDateTime::now_utc();
+        snapshot.updated_rfc3339 = Some(timestamp_string(now));
+
+        let mut filter = TaskFilter::default();
+        filter.updated = Some(UpdatedFilter {
+            since: Some(now - Duration::hours(1)),
+            until: Some(now + Duration::hours(1)),
+        });
+        assert!(filter.matches(&snapshot));
+
+        filter.updated = Some(UpdatedFilter {
+            since: Some(now + Duration::hours(2)),
+            until: None,
+        });
+        assert!(!filter.matches(&snapshot));
+    }
+
+    #[test]
+    fn task_filter_is_empty_tracks_criteria() {
+        let filter = TaskFilter::default();
+        assert!(filter.is_empty());
+
+        let mut filter = TaskFilter::default();
+        filter.labels.insert("type/bug".into());
+        assert!(!filter.is_empty());
+
+        filter.labels.clear();
+        filter.text = Some("   ".into());
+        assert!(filter.is_empty());
+
+        filter.text = Some("foo".into());
+        assert!(!filter.is_empty());
     }
 }
