@@ -313,22 +313,20 @@ impl<S: TaskStore> App<S> {
 
     /// Update an existing task and refresh the view. Returns `true` when any changes were applied.
     pub fn update_task(&mut self, task: TaskId, data: NewTaskData, actor: &Actor) -> Result<bool> {
-        let current = self
-            .tasks
-            .iter()
-            .find(|view| view.snapshot.id == task)
-            .cloned()
-            .map_or_else(
-                || {
-                    self.store
-                        .load_events(task)
-                        .map(|events| TaskView::from_events(&events))
-                        .context("タスクの読み込みに失敗しました")
-                },
-                Ok,
-            )?;
+        let mut loaded_snapshot = None;
+        let snapshot = if let Some(view) = self.tasks.iter().find(|view| view.snapshot.id == task) {
+            &view.snapshot
+        } else {
+            let snapshot = self
+                .store
+                .load_events(task)
+                .map(|events| TaskSnapshot::replay(&events))
+                .context("タスクの読み込みに失敗しました")?;
+            let snapshot_ref: &TaskSnapshot = loaded_snapshot.insert(snapshot);
+            snapshot_ref
+        };
 
-        let patch = TaskPatch::from_snapshot(&current.snapshot, data);
+        let patch = TaskPatch::from_snapshot(snapshot, data);
         if patch.is_empty() {
             return Ok(false);
         }
@@ -380,9 +378,9 @@ impl TaskPatch {
             patch.title = Some(title);
         }
 
-        patch.state = match (snapshot.state.as_ref(), state.as_ref()) {
-            (Some(old), Some(new)) if old != new => Some(StatePatch::Set { state: new.clone() }),
-            (None, Some(new)) => Some(StatePatch::Set { state: new.clone() }),
+        patch.state = match (snapshot.state.as_ref(), state) {
+            (Some(old), Some(new)) if *old != new => Some(StatePatch::Set { state: new }),
+            (None, Some(new)) => Some(StatePatch::Set { state: new }),
             (Some(_), None) => Some(StatePatch::Clear),
             _ => None,
         };
