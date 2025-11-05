@@ -356,6 +356,38 @@ impl<S: TaskStore> App<S> {
         self.refresh_tasks_with(Some(task))?;
         Ok(true)
     }
+
+    /// Update only the workflow state of an existing task.
+    pub fn set_task_state(&mut self, task: TaskId, state: Option<String>, actor: &Actor) -> Result<bool> {
+        self.workflow.validate_state(state.as_deref())?;
+
+        let mut loaded_snapshot = None;
+        let snapshot = if let Some(view) = self.tasks.iter().find(|view| view.snapshot.id == task) {
+            &view.snapshot
+        } else {
+            let snapshot = self
+                .store
+                .load_events(task)
+                .map(|events| TaskSnapshot::replay(&events))
+                .context("タスクの読み込みに失敗しました")?;
+            let snapshot_ref: &TaskSnapshot = loaded_snapshot.insert(snapshot);
+            snapshot_ref
+        };
+
+        if snapshot.state.as_deref() == state.as_deref() {
+            return Ok(false);
+        }
+
+        let event = match state {
+            Some(state_value) => Event::new(task, actor, EventKind::TaskStateSet { state: state_value }),
+            None => Event::new(task, actor, EventKind::TaskStateCleared),
+        };
+        self.store
+            .append_event(&event)
+            .context("タスクのステータス更新イベントの書き込みに失敗しました")?;
+        self.refresh_tasks_with(Some(task))?;
+        Ok(true)
+    }
 }
 
 /// Input collected from the new task form.
@@ -669,6 +701,32 @@ impl TreeViewState {
     }
 }
 
+#[derive(Debug, Clone)]
+struct StatePickerOption {
+    value: Option<String>,
+}
+
+impl StatePickerOption {
+    fn new(value: Option<String>) -> Self {
+        Self { value }
+    }
+
+    fn matches(&self, other: Option<&str>) -> bool {
+        match (&self.value, other) {
+            (None, None) => true,
+            (Some(left), Some(right)) => left == right,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct StatePickerState {
+    task_id: TaskId,
+    options: Vec<StatePickerOption>,
+    selected: usize,
+}
+
 /// Focus state for detail view components.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DetailFocus {
@@ -676,6 +734,8 @@ enum DetailFocus {
     None,
     /// Focus on tree view (floating window).
     TreeView,
+    /// Focus on state picker popup.
+    StatePicker,
 }
 
 trait ClipboardSink {
@@ -741,6 +801,8 @@ struct Ui<S: TaskStore> {
     detail_focus: DetailFocus,
     /// Tree view state.
     tree_state: TreeViewState,
+    /// State picker popup state.
+    state_picker: Option<StatePickerState>,
     clipboard: Box<dyn ClipboardSink>,
 }
 
@@ -759,6 +821,7 @@ impl<S: TaskStore> Ui<S> {
             should_quit: false,
             detail_focus: DetailFocus::None,
             tree_state: TreeViewState::new(),
+            state_picker: None,
             clipboard,
         }
     }
@@ -773,9 +836,11 @@ impl<S: TaskStore> Ui<S> {
         self.draw_main(f, chunks[0]);
         self.draw_status(f, chunks[1]);
 
-        // Draw tree view on top if active
-        if self.detail_focus == DetailFocus::TreeView {
-            self.draw_tree_view_popup(f);
+        // Draw overlays on top if active
+        match self.detail_focus {
+            DetailFocus::TreeView => self.draw_tree_view_popup(f),
+            DetailFocus::StatePicker => self.draw_state_picker_popup(f),
+            DetailFocus::None => {}
         }
     }
 
@@ -1160,6 +1225,74 @@ impl<S: TaskStore> Ui<S> {
         f.render_widget(paragraph, area);
     }
 
+    fn draw_state_picker_popup(&self, f: &mut ratatui::Frame<'_>) {
+        let Some(picker) = &self.state_picker else {
+            return;
+        };
+        let area = f.area();
+
+        let mut popup_width = (area.width * 2) / 5;
+        popup_width = popup_width.max(30).min(area.width);
+        let mut popup_height = (area.height * 3) / 5;
+        popup_height = popup_height.max(6).min(area.height);
+        let popup_x = area.width.saturating_sub(popup_width) / 2;
+        let popup_y = area.height.saturating_sub(popup_height) / 2;
+        let popup_area = Rect {
+            x: popup_x,
+            y: popup_y,
+            width: popup_width,
+            height: popup_height,
+        };
+
+        let task_title = self
+            .app
+            .tasks
+            .iter()
+            .find(|view| view.snapshot.id == picker.task_id)
+            .map(|view| view.snapshot.title.as_str())
+            .unwrap_or("不明");
+
+        let block = Block::default()
+            .title(format!("ステータス選択: {}", task_title))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan));
+        f.render_widget(Clear, popup_area);
+        f.render_widget(block.clone(), popup_area);
+        let inner = block.inner(popup_area);
+
+        let workflow = self.app.workflow();
+        let items: Vec<ListItem<'_>> = picker
+            .options
+            .iter()
+            .map(|option| {
+                let value = option.value.as_deref();
+                let label = workflow.display_label(value);
+                let marker = workflow.state_marker(value);
+                let text = if let Some(value) = value {
+                    format!("{label}{marker} ({value})")
+                } else {
+                    "未設定 (stateなし)".to_string()
+                };
+                ListItem::new(Line::from(text))
+            })
+            .collect();
+
+        let mut list_state = ListState::default();
+        if picker.selected < picker.options.len() {
+            list_state.select(Some(picker.selected));
+        }
+        let list = List::new(items)
+            .highlight_style(
+                Style::default()
+                    .bg(Color::Yellow)
+                    .fg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▶ ");
+
+        f.render_stateful_widget(list, inner, &mut list_state);
+    }
+
     /// Helper to find node in current tree state (read-only).
     fn find_node_in_state(&self, task_id: TaskId) -> Option<&TreeNode> {
         for root in &self.tree_state.roots {
@@ -1251,6 +1384,10 @@ impl<S: TaskStore> Ui<S> {
                     self.copy_selected_task_id();
                     Ok(None)
                 }
+                KeyCode::Char('t' | 'T') => {
+                    self.open_state_picker();
+                    Ok(None)
+                }
                 _ => Ok(None),
             },
             DetailFocus::TreeView => match key.code {
@@ -1276,6 +1413,25 @@ impl<S: TaskStore> Ui<S> {
                 }
                 KeyCode::Enter => {
                     self.tree_view_jump();
+                    Ok(None)
+                }
+                _ => Ok(None),
+            },
+            DetailFocus::StatePicker => match key.code {
+                KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
+                    self.close_state_picker();
+                    Ok(None)
+                }
+                KeyCode::Down | KeyCode::Char('j' | 'J') => {
+                    self.state_picker_down();
+                    Ok(None)
+                }
+                KeyCode::Up | KeyCode::Char('k' | 'K') => {
+                    self.state_picker_up();
+                    Ok(None)
+                }
+                KeyCode::Enter => {
+                    self.apply_state_picker_selection()?;
                     Ok(None)
                 }
                 _ => Ok(None),
@@ -1317,6 +1473,105 @@ impl<S: TaskStore> Ui<S> {
         } else {
             self.info(format!("タスクIDをコピーしました: {task_id}"));
         }
+    }
+
+    fn open_state_picker(&mut self) {
+        let Some(task) = self.app.selected_task() else {
+            self.error("ステータスを変更するタスクが選択されていません");
+            return;
+        };
+
+        let options = self.state_picker_options(task.snapshot.state.as_deref());
+        if options.is_empty() {
+            self.error("ステータス候補が見つかりません");
+            return;
+        }
+        let selected = options
+            .iter()
+            .position(|option| option.matches(task.snapshot.state.as_deref()))
+            .unwrap_or(0);
+        self.state_picker = Some(StatePickerState {
+            task_id: task.snapshot.id,
+            options,
+            selected,
+        });
+        self.detail_focus = DetailFocus::StatePicker;
+    }
+
+    fn state_picker_options(&self, current_state: Option<&str>) -> Vec<StatePickerOption> {
+        let mut options = vec![StatePickerOption::new(None)];
+        let workflow = self.app.workflow();
+        if workflow.is_restricted() {
+            options.extend(
+                workflow
+                    .states()
+                    .iter()
+                    .map(|state| StatePickerOption::new(Some(state.value().to_owned()))),
+            );
+        } else {
+            let values: BTreeSet<String> = self
+                .app
+                .tasks
+                .iter()
+                .filter_map(|view| view.snapshot.state.clone())
+                .collect();
+            for value in values {
+                options.push(StatePickerOption::new(Some(value)));
+            }
+        }
+
+        if let Some(current) = current_state {
+            if !options.iter().any(|option| option.matches(Some(current))) {
+                options.push(StatePickerOption::new(Some(current.to_owned())));
+            }
+        }
+
+        options
+    }
+
+    fn state_picker_down(&mut self) {
+        if let Some(picker) = &mut self.state_picker {
+            if picker.options.is_empty() {
+                return;
+            }
+            let max_index = picker.options.len() - 1;
+            picker.selected = (picker.selected + 1).min(max_index);
+        }
+    }
+
+    fn state_picker_up(&mut self) {
+        if let Some(picker) = &mut self.state_picker {
+            if picker.options.is_empty() {
+                return;
+            }
+            picker.selected = picker.selected.saturating_sub(1);
+        }
+    }
+
+    fn close_state_picker(&mut self) {
+        self.state_picker = None;
+        self.detail_focus = DetailFocus::None;
+    }
+
+    fn apply_state_picker_selection(&mut self) -> Result<()> {
+        let Some(picker) = self.state_picker.take() else {
+            return Ok(());
+        };
+        self.detail_focus = DetailFocus::None;
+        let Some(option) = picker.options.get(picker.selected) else {
+            self.error("ステータス候補が見つかりません");
+            return Ok(());
+        };
+        let desired_state = option.value.clone();
+        match self
+            .app
+            .set_task_state(picker.task_id, desired_state, &self.actor)
+        {
+            Ok(true) => self.info("ステータスを更新しました"),
+            Ok(false) => self.info("ステータスは変更されませんでした"),
+            Err(err) => self.error(format!("ステータス更新に失敗しました: {err}")),
+        }
+        Ok(())
     }
 
     /// Build tree starting from a root task.
@@ -1544,10 +1799,11 @@ impl<S: TaskStore> Ui<S> {
         match self.detail_focus {
             DetailFocus::None => {
                 let base =
-                    "j/k:移動 ↵:ツリー n:新規 s:子タスク e:編集 c:コメント r:再読込 p:親へ y:IDコピー q:終了";
+                    "j/k:移動 ↵:ツリー n:新規 s:子タスク e:編集 c:コメント r:再読込 p:親へ y:IDコピー t:状態 q:終了";
                 format!("{} [{} <{}>]", base, self.actor.name, self.actor.email)
             }
             DetailFocus::TreeView => "j/k:移動 h:閉じる l:開く ↵:ジャンプ q/Esc:閉じる".to_string(),
+            DetailFocus::StatePicker => "j/k:移動 ↵:決定 q/Esc:キャンセル".to_string(),
         }
     }
 
@@ -2694,6 +2950,143 @@ assignees:
         let events = app.store.events.borrow();
         let stored = events.get(&task).expect("events for task");
         assert_eq!(stored.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn set_task_state_applies_new_value() -> Result<()> {
+        let task = TaskId::new();
+        let created = Event::new(
+            task,
+            &actor(),
+            EventKind::TaskCreated {
+                title: "Initial".into(),
+                labels: Vec::new(),
+                assignees: Vec::new(),
+                description: None,
+                state: Some("state/todo".into()),
+            },
+        );
+        let workflow = WorkflowConfig::from_states(vec![
+            WorkflowState::new("state/todo"),
+            WorkflowState::new("state/done"),
+        ]);
+        let store = MockStore::new().with_task(task, vec![created]);
+        let mut app = App::new(store, workflow)?;
+
+        let changed = app.set_task_state(task, Some("state/done".into()), &actor())?;
+        assert!(changed);
+
+        let view = app
+            .tasks
+            .iter()
+            .find(|view| view.snapshot.id == task)
+            .expect("task should exist");
+        assert_eq!(view.snapshot.state.as_deref(), Some("state/done"));
+
+        let events = app.store.events.borrow();
+        let stored = events.get(&task).expect("events for task");
+        assert_eq!(stored.len(), 2);
+        assert!(stored
+            .iter()
+            .any(|ev| matches!(&ev.kind, EventKind::TaskStateSet { state } if state == "state/done")));
+        Ok(())
+    }
+
+    #[test]
+    fn set_task_state_returns_false_when_unchanged() -> Result<()> {
+        let task = TaskId::new();
+        let created = Event::new(
+            task,
+            &actor(),
+            EventKind::TaskCreated {
+                title: "Initial".into(),
+                labels: Vec::new(),
+                assignees: Vec::new(),
+                description: None,
+                state: Some("state/todo".into()),
+            },
+        );
+        let workflow = WorkflowConfig::from_states(vec![WorkflowState::new("state/todo")]);
+        let store = MockStore::new().with_task(task, vec![created]);
+        let mut app = App::new(store, workflow)?;
+
+        let changed = app.set_task_state(task, Some("state/todo".into()), &actor())?;
+        assert!(!changed);
+
+        let events = app.store.events.borrow();
+        let stored = events.get(&task).expect("events for task");
+        assert_eq!(stored.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn open_state_picker_prefills_current_state() -> Result<()> {
+        let task = TaskId::new();
+        let created = Event::new(
+            task,
+            &actor(),
+            EventKind::TaskCreated {
+                title: "Initial".into(),
+                labels: Vec::new(),
+                assignees: Vec::new(),
+                description: None,
+                state: Some("state/done".into()),
+            },
+        );
+        let workflow = WorkflowConfig::from_states(vec![
+            WorkflowState::new("state/todo"),
+            WorkflowState::new("state/done"),
+        ]);
+        let store = MockStore::new().with_task(task, vec![created]);
+        let app = App::new(store, workflow)?;
+        let mut ui = ui_with_clipboard(app, Box::new(NoopClipboard::default()));
+        ui.open_state_picker();
+
+        assert_eq!(ui.detail_focus, DetailFocus::StatePicker);
+        let picker = ui.state_picker.as_ref().expect("state picker");
+        assert_eq!(
+            picker.options[picker.selected].value.as_deref(),
+            Some("state/done")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn apply_state_picker_selection_updates_state() -> Result<()> {
+        let task = TaskId::new();
+        let created = Event::new(
+            task,
+            &actor(),
+            EventKind::TaskCreated {
+                title: "Initial".into(),
+                labels: Vec::new(),
+                assignees: Vec::new(),
+                description: None,
+                state: Some("state/todo".into()),
+            },
+        );
+        let workflow = WorkflowConfig::from_states(vec![
+            WorkflowState::new("state/todo"),
+            WorkflowState::new("state/done"),
+        ]);
+        let store = MockStore::new().with_task(task, vec![created]);
+        let app = App::new(store, workflow)?;
+        let mut ui = ui_with_clipboard(app, Box::new(NoopClipboard::default()));
+
+        ui.open_state_picker();
+        ui.state_picker_down();
+        ui.apply_state_picker_selection()?;
+
+        let view = ui
+            .app
+            .tasks
+            .iter()
+            .find(|view| view.snapshot.id == task)
+            .expect("task exists");
+        assert_eq!(view.snapshot.state.as_deref(), Some("state/done"));
+        assert!(ui.state_picker.is_none());
+        assert_eq!(ui.detail_focus, DetailFocus::None);
         Ok(())
     }
 }

@@ -83,7 +83,6 @@ impl WorkflowConfig {
     }
 
     /// Iterate over allowed workflow states (if any).
-    #[cfg(test)]
     pub(crate) fn states(&self) -> &[WorkflowState] {
         &self.states
     }
@@ -95,12 +94,9 @@ impl WorkflowConfig {
 
     /// Get display label for a state value, using label if available, otherwise the value itself.
     pub fn display_label<'a>(&'a self, value: Option<&'a str>) -> &'a str {
-        value.and_then(|v| {
-            self.find_state(v)
-                .and_then(|state| state.label())
-                .or(Some(v))
-        })
-        .unwrap_or("未設定")
+        value
+            .and_then(|v| self.find_state(v).and_then(|state| state.label()).or(Some(v)))
+            .unwrap_or("未設定")
     }
 
     /// Get state marker based on state kind.
