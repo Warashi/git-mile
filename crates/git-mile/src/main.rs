@@ -81,11 +81,14 @@ enum Command {
 }
 
 fn main() -> Result<()> {
-    install_tracing();
-    let cli = Cli::parse();
+    let Cli { repo, cmd } = Cli::parse();
 
-    let repo_path = cli.repo.unwrap_or_else(|| ".".to_owned());
-    execute_command(&repo_path, cli.cmd)
+    if should_install_tracing(&cmd) {
+        install_tracing();
+    }
+
+    let repo_path = repo.unwrap_or_else(|| ".".to_owned());
+    execute_command(&repo_path, cmd)
 }
 
 fn execute_command(repo_path: &str, command: Command) -> Result<()> {
@@ -117,6 +120,10 @@ fn execute_command(repo_path: &str, command: Command) -> Result<()> {
             commands::run(other, &service)
         }
     }
+}
+
+fn should_install_tracing(cmd: &Command) -> bool {
+    !matches!(cmd, Command::Mcp)
 }
 
 fn install_tracing() {
@@ -195,5 +202,15 @@ mod tests {
             Command::Tui => {}
             _ => panic!("expected tui command"),
         }
+    }
+
+    #[test]
+    fn skips_tracing_in_mcp_mode() {
+        assert!(!should_install_tracing(&Command::Mcp));
+    }
+
+    #[test]
+    fn installs_tracing_for_other_commands() {
+        assert!(should_install_tracing(&Command::Tui));
     }
 }
