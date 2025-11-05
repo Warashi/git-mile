@@ -112,7 +112,8 @@ impl WorkflowConfig {
                 StateKind::Done => " ✓",
                 StateKind::InProgress => " →",
                 StateKind::Blocked => " ⊗",
-                StateKind::Pending => "",
+                StateKind::Todo => " □",
+                StateKind::Backlog => "",
             })
     }
 
@@ -170,8 +171,10 @@ pub enum StateKind {
     InProgress,
     /// Task is blocked or waiting.
     Blocked,
-    /// Task is pending or not yet started.
-    Pending,
+    /// Task is ready to be worked on (prioritized).
+    Todo,
+    /// Task is in backlog (not yet prioritized).
+    Backlog,
 }
 
 /// Individual workflow state definition.
