@@ -15,6 +15,8 @@ use crate::config::WorkflowConfig;
 #[cfg(test)]
 use crate::config::WorkflowState;
 use anyhow::{anyhow, Context, Result};
+use arboard::Clipboard as ArboardClipboard;
+use base64::{engine::general_purpose::STANDARD as Base64Standard, Engine as _};
 use crossterm::{
     event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind},
     execute,
@@ -34,7 +36,7 @@ use ratatui::{
 };
 use tempfile::NamedTempFile;
 use time::OffsetDateTime;
-use tracing::subscriber::NoSubscriber;
+use tracing::{subscriber::NoSubscriber, warn};
 
 /// Storage abstraction so the TUI logic can be unit-tested.
 pub trait TaskStore {
@@ -676,6 +678,60 @@ enum DetailFocus {
     TreeView,
 }
 
+trait ClipboardSink {
+    fn set_text(&mut self, text: &str) -> Result<()>;
+}
+
+struct SystemClipboard {
+    inner: ArboardClipboard,
+}
+
+impl SystemClipboard {
+    fn new() -> Result<Self> {
+        let inner = ArboardClipboard::new().context("クリップボードの初期化に失敗しました")?;
+        Ok(Self { inner })
+    }
+}
+
+impl ClipboardSink for SystemClipboard {
+    fn set_text(&mut self, text: &str) -> Result<()> {
+        self.inner
+            .set_text(text.to_string())
+            .context("クリップボードへの書き込みに失敗しました")
+    }
+}
+
+struct Osc52Clipboard;
+
+impl ClipboardSink for Osc52Clipboard {
+    fn set_text(&mut self, text: &str) -> Result<()> {
+        let sequence = osc52_sequence(text);
+        let mut stdout = io::stdout().lock();
+        stdout
+            .write_all(sequence.as_bytes())
+            .context("OSC 52 シーケンスの送信に失敗しました")?;
+        stdout
+            .flush()
+            .context("OSC 52 シーケンス送信後のフラッシュに失敗しました")?;
+        Ok(())
+    }
+}
+
+fn osc52_sequence(text: &str) -> String {
+    let encoded = Base64Standard.encode(text);
+    format!("\x1b]52;c;{encoded}\x07")
+}
+
+fn default_clipboard() -> Box<dyn ClipboardSink> {
+    match SystemClipboard::new() {
+        Ok(cb) => Box::new(cb),
+        Err(err) => {
+            warn!("システムクリップボードに接続できませんでした: {err}. OSC52へフォールバックします");
+            Box::new(Osc52Clipboard)
+        }
+    }
+}
+
 struct Ui<S: TaskStore> {
     app: App<S>,
     actor: Actor,
@@ -685,10 +741,16 @@ struct Ui<S: TaskStore> {
     detail_focus: DetailFocus,
     /// Tree view state.
     tree_state: TreeViewState,
+    clipboard: Box<dyn ClipboardSink>,
 }
 
 impl<S: TaskStore> Ui<S> {
     fn new(app: App<S>, actor: Actor) -> Self {
+        let clipboard = default_clipboard();
+        Self::with_clipboard(app, actor, clipboard)
+    }
+
+    fn with_clipboard(app: App<S>, actor: Actor, clipboard: Box<dyn ClipboardSink>) -> Self {
         let _ = thread::current().id();
         Self {
             app,
@@ -697,6 +759,7 @@ impl<S: TaskStore> Ui<S> {
             should_quit: false,
             detail_focus: DetailFocus::None,
             tree_state: TreeViewState::new(),
+            clipboard,
         }
     }
 
@@ -748,11 +811,7 @@ impl<S: TaskStore> Ui<S> {
                     );
                     let state_value = view.snapshot.state.as_deref();
                     let state_label = workflow.display_label(state_value);
-                    let meta = format!(
-                        "{} | {}",
-                        view.snapshot.id,
-                        state_label
-                    );
+                    let meta = format!("{} | {}", view.snapshot.id, state_label);
                     let meta_span = Span::styled(meta, Style::default().fg(Color::DarkGray));
                     ListItem::new(vec![Line::from(vec![title]), Line::from(vec![meta_span])])
                 })
@@ -952,12 +1011,7 @@ impl<S: TaskStore> Ui<S> {
                 let state_marker = workflow.state_marker(state_value);
                 let state_label = workflow.display_label(state_value);
 
-                let text = format!(
-                    "▸ {} [{}]{}",
-                    child.snapshot.title,
-                    state_label,
-                    state_marker
-                );
+                let text = format!("▸ {} [{}]{}", child.snapshot.title, state_label, state_marker);
 
                 ListItem::new(text)
             })
@@ -1086,11 +1140,7 @@ impl<S: TaskStore> Ui<S> {
 
             let line_text = format!(
                 "{}{} {} [{}]{}",
-                indent,
-                tree_char,
-                task.snapshot.title,
-                state_label,
-                state_marker
+                indent, tree_char, task.snapshot.title, state_label, state_marker
             );
 
             let style = if is_selected {
@@ -1197,6 +1247,10 @@ impl<S: TaskStore> Ui<S> {
                     },
                     |parent| Ok(Some(UiAction::CreateSubtask { parent })),
                 ),
+                KeyCode::Char('y' | 'Y') => {
+                    self.copy_selected_task_id();
+                    Ok(None)
+                }
                 _ => Ok(None),
             },
             DetailFocus::TreeView => match key.code {
@@ -1248,6 +1302,20 @@ impl<S: TaskStore> Ui<S> {
             } else {
                 self.error("親タスクがありません");
             }
+        }
+    }
+
+    fn copy_selected_task_id(&mut self) {
+        let Some(task) = self.app.selected_task() else {
+            self.error("コピー対象のタスクが選択されていません");
+            return;
+        };
+
+        let task_id = task.snapshot.id.to_string();
+        if let Err(err) = self.clipboard.set_text(&task_id) {
+            self.error(format!("タスクIDのコピーに失敗しました: {err}"));
+        } else {
+            self.info(format!("タスクIDをコピーしました: {task_id}"));
         }
     }
 
@@ -1475,7 +1543,8 @@ impl<S: TaskStore> Ui<S> {
     fn instructions(&self) -> String {
         match self.detail_focus {
             DetailFocus::None => {
-                let base = "j/k:移動 ↵:ツリー n:新規 s:子タスク e:編集 c:コメント r:再読込 p:親へ q:終了";
+                let base =
+                    "j/k:移動 ↵:ツリー n:新規 s:子タスク e:編集 c:コメント r:再読込 p:親へ y:IDコピー q:終了";
                 format!("{} [{} <{}>]", base, self.actor.name, self.actor.email)
             }
             DetailFocus::TreeView => "j/k:移動 h:閉じる l:開く ↵:ジャンプ q/Esc:閉じる".to_string(),
@@ -1892,10 +1961,11 @@ mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
-    use anyhow::Result;
+    use anyhow::{anyhow, Result};
     use git_mile_core::event::EventKind;
     use std::cell::RefCell;
     use std::collections::{BTreeSet, HashMap};
+    use std::rc::Rc;
     use std::str::FromStr;
     use time::OffsetDateTime;
 
@@ -1990,6 +2060,60 @@ mod tests {
 
     fn child_link(secs: i64, parent: TaskId, child: TaskId) -> Event {
         event(child, ts(secs), EventKind::ChildLinked { parent, child })
+    }
+
+    #[derive(Default)]
+    struct NoopClipboard;
+
+    impl ClipboardSink for NoopClipboard {
+        fn set_text(&mut self, _text: &str) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    struct RecordingClipboard {
+        writes: Rc<RefCell<Vec<String>>>,
+    }
+
+    impl RecordingClipboard {
+        fn new(writes: Rc<RefCell<Vec<String>>>) -> Self {
+            Self { writes }
+        }
+    }
+
+    impl ClipboardSink for RecordingClipboard {
+        fn set_text(&mut self, text: &str) -> Result<()> {
+            self.writes.borrow_mut().push(text.to_string());
+            Ok(())
+        }
+    }
+
+    struct FailingClipboard {
+        message: String,
+    }
+
+    impl FailingClipboard {
+        fn new(message: impl Into<String>) -> Self {
+            Self {
+                message: message.into(),
+            }
+        }
+    }
+
+    impl ClipboardSink for FailingClipboard {
+        fn set_text(&mut self, _text: &str) -> Result<()> {
+            Err(anyhow!(self.message.clone()))
+        }
+    }
+
+    fn ui_with_clipboard(app: App<MockStore>, clipboard: Box<dyn ClipboardSink>) -> Ui<MockStore> {
+        Ui::with_clipboard(app, actor(), clipboard)
+    }
+
+    #[test]
+    fn osc52_sequence_encodes_text() {
+        let seq = super::osc52_sequence("Task-ID");
+        assert_eq!(seq, "\x1b]52;c;VGFzay1JRA==\x07");
     }
 
     #[test]
@@ -2218,7 +2342,7 @@ mod tests {
             .with_task(parent, parent_events)
             .with_task(child, child_events);
         let app = App::new(store, WorkflowConfig::default())?;
-        let mut ui = Ui::new(app, actor());
+        let mut ui = ui_with_clipboard(app, Box::new(NoopClipboard));
         ui.open_tree_view();
 
         assert_eq!(ui.detail_focus, DetailFocus::TreeView);
@@ -2229,6 +2353,58 @@ mod tests {
             .map(|(_, task_id)| *task_id)
             .collect();
         assert_eq!(visible, vec![parent, child]);
+        Ok(())
+    }
+
+    #[test]
+    fn copy_selected_task_id_writes_to_clipboard() -> Result<()> {
+        let task = TaskId::new();
+        let store = MockStore::new().with_task(task, vec![created(task, 0, "Task")]);
+        let app = App::new(store, WorkflowConfig::default())?;
+        let writes = Rc::new(RefCell::new(Vec::new()));
+        let clipboard = RecordingClipboard::new(Rc::clone(&writes));
+        let mut ui = ui_with_clipboard(app, Box::new(clipboard));
+
+        ui.copy_selected_task_id();
+
+        let recorded = writes.borrow().last().cloned();
+        assert_eq!(recorded, Some(task.to_string()));
+        let message = ui.message.expect("info message must be set");
+        assert!(matches!(message.level, MessageLevel::Info));
+        assert!(message.text.contains("コピー"));
+        Ok(())
+    }
+
+    #[test]
+    fn copy_selected_task_id_reports_clipboard_failure() -> Result<()> {
+        let task = TaskId::new();
+        let store = MockStore::new().with_task(task, vec![created(task, 0, "Task")]);
+        let app = App::new(store, WorkflowConfig::default())?;
+        let mut ui = ui_with_clipboard(app, Box::new(FailingClipboard::new("broken clipboard")));
+
+        ui.copy_selected_task_id();
+
+        let message = ui.message.expect("error message must be set");
+        assert!(matches!(message.level, MessageLevel::Error));
+        assert!(
+            message.text.contains("broken clipboard"),
+            "actual text: {}",
+            message.text
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn copy_selected_task_id_without_selection_shows_error() -> Result<()> {
+        let store = MockStore::new();
+        let app = App::new(store, WorkflowConfig::default())?;
+        let mut ui = ui_with_clipboard(app, Box::new(NoopClipboard));
+
+        ui.copy_selected_task_id();
+
+        let message = ui.message.expect("error message must be set");
+        assert!(matches!(message.level, MessageLevel::Error));
+        assert!(message.text.contains("コピー対象"));
         Ok(())
     }
 

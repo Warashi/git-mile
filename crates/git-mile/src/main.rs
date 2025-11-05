@@ -122,7 +122,7 @@ fn execute_command(repo_path: &str, command: Command) -> Result<()> {
     }
 }
 
-fn should_install_tracing(cmd: &Command) -> bool {
+const fn should_install_tracing(cmd: &Command) -> bool {
     !matches!(cmd, Command::Mcp)
 }
 
