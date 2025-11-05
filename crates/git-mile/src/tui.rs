@@ -317,7 +317,6 @@ impl<S: TaskStore> App<S> {
     }
 
     /// Update an existing task and refresh the view. Returns `true` when any changes were applied.
-    #[allow(clippy::too_many_lines)]
     pub fn update_task(&mut self, task: TaskId, data: NewTaskData, actor: &Actor) -> Result<bool> {
         let current = self
             .tasks
@@ -334,106 +333,14 @@ impl<S: TaskStore> App<S> {
                 Ok,
             )?;
 
-        let NewTaskData {
-            title,
-            state,
-            labels,
-            assignees,
-            description,
-            parent: _,
-        } = data;
-
-        let mut events = Vec::new();
-
-        if title != current.snapshot.title {
-            events.push(Event::new(task, actor, EventKind::TaskTitleSet { title }));
-        }
-
-        match (current.snapshot.state.as_ref(), state.as_ref()) {
-            (Some(old), Some(new)) if old != new => events.push(Event::new(
-                task,
-                actor,
-                EventKind::TaskStateSet { state: new.clone() },
-            )),
-            (None, Some(new)) => events.push(Event::new(
-                task,
-                actor,
-                EventKind::TaskStateSet { state: new.clone() },
-            )),
-            (Some(_), None) => events.push(Event::new(task, actor, EventKind::TaskStateCleared)),
-            _ => {}
-        }
-
-        let current_labels = &current.snapshot.labels;
-        let new_labels: BTreeSet<String> = labels.into_iter().collect();
-        let added_labels: Vec<String> = new_labels.difference(current_labels).cloned().collect();
-        if !added_labels.is_empty() {
-            events.push(Event::new(
-                task,
-                actor,
-                EventKind::LabelsAdded { labels: added_labels },
-            ));
-        }
-        let removed_labels: Vec<String> = current_labels.difference(&new_labels).cloned().collect();
-        if !removed_labels.is_empty() {
-            events.push(Event::new(
-                task,
-                actor,
-                EventKind::LabelsRemoved {
-                    labels: removed_labels,
-                },
-            ));
-        }
-
-        let current_assignees = &current.snapshot.assignees;
-        let new_assignees: BTreeSet<String> = assignees.into_iter().collect();
-        let added_assignees: Vec<String> = new_assignees.difference(current_assignees).cloned().collect();
-        if !added_assignees.is_empty() {
-            events.push(Event::new(
-                task,
-                actor,
-                EventKind::AssigneesAdded {
-                    assignees: added_assignees,
-                },
-            ));
-        }
-        let removed_assignees: Vec<String> = current_assignees.difference(&new_assignees).cloned().collect();
-        if !removed_assignees.is_empty() {
-            events.push(Event::new(
-                task,
-                actor,
-                EventKind::AssigneesRemoved {
-                    assignees: removed_assignees,
-                },
-            ));
-        }
-
-        let new_description = description.unwrap_or_default();
-        if current.snapshot.description != new_description {
-            if new_description.is_empty() {
-                events.push(Event::new(
-                    task,
-                    actor,
-                    EventKind::TaskDescriptionSet { description: None },
-                ));
-            } else {
-                events.push(Event::new(
-                    task,
-                    actor,
-                    EventKind::TaskDescriptionSet {
-                        description: Some(new_description),
-                    },
-                ));
-            }
-        }
-
-        if events.is_empty() {
+        let patch = TaskPatch::from_snapshot(&current.snapshot, data);
+        if patch.is_empty() {
             return Ok(false);
         }
 
-        for event in &events {
+        for event in patch.into_events(task, actor) {
             self.store
-                .append_event(event)
+                .append_event(&event)
                 .context("タスク更新イベントの書き込みに失敗しました")?;
         }
         self.refresh_tasks_with(Some(task))?;
@@ -450,6 +357,164 @@ pub struct NewTaskData {
     pub assignees: Vec<String>,
     pub description: Option<String>,
     pub parent: Option<TaskId>,
+}
+
+#[derive(Debug, Default)]
+struct TaskPatch {
+    title: Option<String>,
+    state: Option<StatePatch>,
+    description: Option<DescriptionPatch>,
+    labels: SetDiff<String>,
+    assignees: SetDiff<String>,
+}
+
+impl TaskPatch {
+    fn from_snapshot(snapshot: &TaskSnapshot, data: NewTaskData) -> Self {
+        let NewTaskData {
+            title,
+            state,
+            labels,
+            assignees,
+            description,
+            parent: _,
+        } = data;
+
+        let mut patch = Self::default();
+
+        if title != snapshot.title {
+            patch.title = Some(title);
+        }
+
+        patch.state = match (snapshot.state.as_ref(), state.as_ref()) {
+            (Some(old), Some(new)) if old != new => Some(StatePatch::Set { state: new.clone() }),
+            (None, Some(new)) => Some(StatePatch::Set { state: new.clone() }),
+            (Some(_), None) => Some(StatePatch::Clear),
+            _ => None,
+        };
+
+        let desired_labels: BTreeSet<String> = labels.into_iter().collect();
+        patch.labels = diff_sets(&snapshot.labels, &desired_labels);
+
+        let desired_assignees: BTreeSet<String> = assignees.into_iter().collect();
+        patch.assignees = diff_sets(&snapshot.assignees, &desired_assignees);
+
+        let desired_description = description.unwrap_or_default();
+        if snapshot.description != desired_description {
+            patch.description = Some(if desired_description.is_empty() {
+                DescriptionPatch::Clear
+            } else {
+                DescriptionPatch::Set {
+                    description: desired_description,
+                }
+            });
+        }
+
+        patch
+    }
+
+    fn into_events(self, task: TaskId, actor: &Actor) -> Vec<Event> {
+        let mut events = Vec::new();
+
+        if let Some(title) = self.title {
+            events.push(Event::new(task, actor, EventKind::TaskTitleSet { title }));
+        }
+
+        if let Some(state) = self.state {
+            events.push(match state {
+                StatePatch::Set { state } => Event::new(task, actor, EventKind::TaskStateSet { state }),
+                StatePatch::Clear => Event::new(task, actor, EventKind::TaskStateCleared),
+            });
+        }
+
+        if let Some(description) = self.description {
+            let payload = match description {
+                DescriptionPatch::Set { description } => Some(description),
+                DescriptionPatch::Clear => None,
+            };
+            events.push(Event::new(
+                task,
+                actor,
+                EventKind::TaskDescriptionSet { description: payload },
+            ));
+        }
+
+        if !self.labels.added.is_empty() {
+            events.push(Event::new(
+                task,
+                actor,
+                EventKind::LabelsAdded {
+                    labels: self.labels.added,
+                },
+            ));
+        }
+
+        if !self.labels.removed.is_empty() {
+            events.push(Event::new(
+                task,
+                actor,
+                EventKind::LabelsRemoved {
+                    labels: self.labels.removed,
+                },
+            ));
+        }
+
+        if !self.assignees.added.is_empty() {
+            events.push(Event::new(
+                task,
+                actor,
+                EventKind::AssigneesAdded {
+                    assignees: self.assignees.added,
+                },
+            ));
+        }
+
+        if !self.assignees.removed.is_empty() {
+            events.push(Event::new(
+                task,
+                actor,
+                EventKind::AssigneesRemoved {
+                    assignees: self.assignees.removed,
+                },
+            ));
+        }
+
+        events
+    }
+
+    const fn is_empty(&self) -> bool {
+        self.title.is_none()
+            && self.state.is_none()
+            && self.description.is_none()
+            && self.labels.added.is_empty()
+            && self.labels.removed.is_empty()
+            && self.assignees.added.is_empty()
+            && self.assignees.removed.is_empty()
+    }
+}
+
+#[derive(Debug)]
+enum StatePatch {
+    Set { state: String },
+    Clear,
+}
+
+#[derive(Debug)]
+enum DescriptionPatch {
+    Set { description: String },
+    Clear,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct SetDiff<T> {
+    added: Vec<T>,
+    removed: Vec<T>,
+}
+
+fn diff_sets<T: Ord + Clone>(current: &BTreeSet<T>, desired: &BTreeSet<T>) -> SetDiff<T> {
+    SetDiff {
+        added: desired.difference(current).cloned().collect(),
+        removed: current.difference(desired).cloned().collect(),
+    }
 }
 
 /// Launch the interactive TUI.
@@ -1809,7 +1874,7 @@ mod tests {
     use anyhow::Result;
     use git_mile_core::event::EventKind;
     use std::cell::RefCell;
-    use std::collections::HashMap;
+    use std::collections::{BTreeSet, HashMap};
     use std::str::FromStr;
     use time::OffsetDateTime;
 
@@ -1904,6 +1969,17 @@ mod tests {
 
     fn child_link(secs: i64, parent: TaskId, child: TaskId) -> Event {
         event(child, ts(secs), EventKind::ChildLinked { parent, child })
+    }
+
+    #[test]
+    fn diff_sets_detects_added_and_removed_items() {
+        let current = BTreeSet::from([String::from("a"), String::from("b")]);
+        let desired = BTreeSet::from([String::from("b"), String::from("c")]);
+
+        let diff = super::diff_sets(&current, &desired);
+
+        assert_eq!(diff.added, vec![String::from("c")]);
+        assert_eq!(diff.removed, vec![String::from("a")]);
     }
 
     #[test]
