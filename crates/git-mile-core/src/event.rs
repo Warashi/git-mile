@@ -1,4 +1,5 @@
 use crate::id::{EventId, TaskId};
+use crate::state::StateKind;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -49,11 +50,17 @@ pub enum EventKind {
         /// Optional workflow state label.
         #[serde(default)]
         state: Option<String>,
+        /// Optional workflow classification.
+        #[serde(default)]
+        state_kind: Option<StateKind>,
     },
     /// The workflow state is overwritten.
     TaskStateSet {
         /// New state label.
         state: String,
+        /// Optional workflow classification.
+        #[serde(default)]
+        state_kind: Option<StateKind>,
     },
     /// The workflow state is cleared.
     TaskStateCleared,

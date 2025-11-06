@@ -4,6 +4,9 @@
 pub mod event;
 /// Identifier types.
 pub mod id;
+mod state;
+
+pub use state::StateKind;
 
 use crate::event::{Event, EventKind};
 use crate::id::{EventId, TaskId};
@@ -62,6 +65,8 @@ pub struct TaskSnapshot {
     pub title: String,
     /// Current state label.
     pub state: Option<String>,
+    /// Classification of the current state.
+    pub state_kind: Option<StateKind>,
     /// Assigned labels.
     pub labels: BTreeSet<String>,
     /// Current assignees.
@@ -88,6 +93,7 @@ impl Default for TaskSnapshot {
             id: TaskId::default(),
             title: String::new(),
             state: None,
+            state_kind: None,
             labels: BTreeSet::new(),
             assignees: BTreeSet::new(),
             description: String::new(),
@@ -146,6 +152,7 @@ impl TaskSnapshot {
         self.id = self.crdt.id.unwrap_or_default();
         self.title = self.crdt.title.val.clone();
         self.state = self.crdt.state.val.clone();
+        self.state_kind = self.crdt.state_kind.val;
         self.description = self.crdt.description.val.clone();
         self.labels = orswot_to_set(&self.crdt.labels);
         self.assignees = orswot_to_set(&self.crdt.assignees);
@@ -168,6 +175,9 @@ pub struct TaskFilter {
     /// Match tasks whose state is one of these values.
     #[serde(default)]
     pub states: BTreeSet<String>,
+    /// Match tasks by inferred state kind.
+    #[serde(default)]
+    pub state_kinds: StateKindFilter,
     /// Require all listed labels to be present on the task.
     #[serde(default)]
     pub labels: BTreeSet<String>,
@@ -193,6 +203,7 @@ impl TaskFilter {
     #[must_use]
     pub fn matches(&self, task: &TaskSnapshot) -> bool {
         self.matches_state(task)
+            && self.matches_state_kind(task)
             && self.matches_labels(task)
             && self.matches_assignees(task)
             && self.matches_parents(task)
@@ -205,6 +216,7 @@ impl TaskFilter {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.states.is_empty()
+            && self.state_kinds.is_empty()
             && self.labels.is_empty()
             && self.assignees.is_empty()
             && self.parents.is_empty()
@@ -220,6 +232,10 @@ impl TaskFilter {
         task.state
             .as_ref()
             .is_some_and(|state| self.states.contains(state))
+    }
+
+    fn matches_state_kind(&self, task: &TaskSnapshot) -> bool {
+        self.state_kinds.matches(task.state_kind)
     }
 
     fn matches_labels(&self, task: &TaskSnapshot) -> bool {
@@ -285,6 +301,44 @@ impl TaskFilter {
     }
 }
 
+/// Inclusion/exclusion filter for state kinds.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StateKindFilter {
+    /// Require the task to match at least one of these kinds.
+    #[serde(default)]
+    pub include: BTreeSet<StateKind>,
+    /// Exclude tasks that match any of these kinds.
+    #[serde(default)]
+    pub exclude: BTreeSet<StateKind>,
+}
+
+impl StateKindFilter {
+    /// Returns true when neither include nor exclude sets are specified.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.include.is_empty() && self.exclude.is_empty()
+    }
+
+    /// Check if the provided kind satisfies this filter.
+    #[must_use]
+    pub fn matches(&self, actual: Option<StateKind>) -> bool {
+        if self.is_empty() {
+            return true;
+        }
+        if let Some(kind) = actual {
+            if !self.include.is_empty() && !self.include.contains(&kind) {
+                return false;
+            }
+            if self.exclude.contains(&kind) {
+                return false;
+            }
+            true
+        } else {
+            self.include.is_empty()
+        }
+    }
+}
+
 /// Timestamp filter for `updated_at`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdatedFilter {
@@ -326,6 +380,7 @@ struct TaskCrdt {
     id: Option<TaskId>,
     title: LWWReg<String, EventStamp>,
     state: LWWReg<Option<String>, EventStamp>,
+    state_kind: LWWReg<Option<StateKind>, EventStamp>,
     description: LWWReg<String, EventStamp>,
     labels: Orswot<String, EventId>,
     assignees: Orswot<String, EventId>,
@@ -348,6 +403,7 @@ impl TaskCrdt {
                 assignees,
                 description,
                 state,
+                state_kind,
             } => {
                 self.title.update(title.clone(), stamp);
                 self.description
@@ -355,14 +411,17 @@ impl TaskCrdt {
                 if let Some(st) = state {
                     self.state.update(Some(st.clone()), stamp);
                 }
+                self.state_kind.update(*state_kind, stamp);
                 add_all(&mut self.labels, labels.iter().cloned(), ev.id);
                 add_all(&mut self.assignees, assignees.iter().cloned(), ev.id);
             }
-            EventKind::TaskStateSet { state } => {
+            EventKind::TaskStateSet { state, state_kind } => {
                 self.state.update(Some(state.clone()), stamp);
+                self.state_kind.update(*state_kind, stamp);
             }
             EventKind::TaskStateCleared => {
                 self.state.update(None, stamp);
+                self.state_kind.update(None, stamp);
             }
             EventKind::TaskTitleSet { title } => {
                 self.title.update(title.clone(), stamp);
@@ -597,6 +656,7 @@ mod tests {
                 assignees: vec!["alice".into()],
                 description: Some("desc".into()),
                 state: Some("state/todo".into()),
+                state_kind: Some(StateKind::Todo),
             },
         );
 
@@ -654,6 +714,7 @@ mod tests {
                 assignees: vec!["alice".into()],
                 description: Some("desc".into()),
                 state: Some("state/todo".into()),
+                state_kind: Some(StateKind::Todo),
             },
         );
         created.ts = OffsetDateTime::now_utc() - Duration::seconds(10);
@@ -672,6 +733,7 @@ mod tests {
             &actor,
             EventKind::TaskStateSet {
                 state: "state/done".into(),
+                state_kind: Some(StateKind::Done),
             },
         );
         state_set.ts = label_removed.ts + Duration::seconds(5);
@@ -695,6 +757,7 @@ mod tests {
         assert_eq!(snapshot.title, "Initial");
         assert_eq!(snapshot.description, "desc");
         assert_eq!(snapshot.state.as_deref(), Some("state/done"));
+        assert_eq!(snapshot.state_kind, Some(StateKind::Done));
         assert!(snapshot.assignees.contains("alice"));
         assert!(snapshot.labels.contains("type/bug"));
         assert_eq!(snapshot.updated_rfc3339.as_deref(), Some(expected_ts.as_str()));
@@ -721,6 +784,7 @@ mod tests {
                 assignees: vec!["alice".into()],
                 description: Some("desc".into()),
                 state: Some("state/todo".into()),
+                state_kind: Some(StateKind::Todo),
             },
         );
         created.ts = OffsetDateTime::now_utc() - Duration::seconds(30);
@@ -786,6 +850,7 @@ mod tests {
                 assignees: Vec::new(),
                 description: Some("first".into()),
                 state: Some("state/in-progress".into()),
+                state_kind: Some(StateKind::InProgress),
             },
         );
 
@@ -810,6 +875,7 @@ mod tests {
         assert_eq!(replayed.title, "Updated");
         assert_eq!(replayed.description, "refined");
         assert_eq!(replayed.state, None);
+        assert_eq!(replayed.state_kind, None);
 
         let mut applied = TaskSnapshot::default();
         for ev in &events {
@@ -818,6 +884,7 @@ mod tests {
         assert_eq!(applied.title, "Updated");
         assert_eq!(applied.description, "refined");
         assert_eq!(applied.state, None);
+        assert_eq!(applied.state_kind, None);
     }
 
     #[test]
@@ -833,6 +900,28 @@ mod tests {
         assert!(filter.matches(&snapshot));
 
         filter.labels.insert("missing".into());
+        assert!(!filter.matches(&snapshot));
+    }
+
+    #[test]
+    fn task_filter_matches_state_kind_constraints() {
+        let mut snapshot = blank_snapshot();
+        snapshot.state_kind = Some(StateKind::InProgress);
+
+        let mut filter = TaskFilter::default();
+        filter.state_kinds.include.insert(StateKind::InProgress);
+        assert!(filter.matches(&snapshot));
+
+        filter.state_kinds.include.clear();
+        filter.state_kinds.exclude.insert(StateKind::Done);
+        assert!(filter.matches(&snapshot));
+
+        filter.state_kinds.exclude.insert(StateKind::InProgress);
+        assert!(!filter.matches(&snapshot));
+
+        snapshot.state_kind = None;
+        filter.state_kinds.exclude.clear();
+        filter.state_kinds.include.insert(StateKind::Todo);
         assert!(!filter.matches(&snapshot));
     }
 
@@ -939,6 +1028,10 @@ mod tests {
         assert!(filter.is_empty());
 
         filter.text = Some("foo".into());
+        assert!(!filter.is_empty());
+
+        filter.text = None;
+        filter.state_kinds.exclude.insert(StateKind::Done);
         assert!(!filter.is_empty());
     }
 }

@@ -415,6 +415,7 @@ impl<S: TaskStore> App<S> {
     /// Create a fresh task and refresh the view, returning the new identifier.
     pub fn create_task(&mut self, data: NewTaskData, actor: &Actor) -> Result<TaskId> {
         self.workflow.validate_state(data.state.as_deref())?;
+        let state_kind = self.workflow.resolve_state_kind(data.state.as_deref());
 
         let task = TaskId::new();
         let event = Event::new(
@@ -426,6 +427,7 @@ impl<S: TaskStore> App<S> {
                 assignees: data.assignees,
                 description: data.description,
                 state: data.state,
+                state_kind,
             },
         );
         self.store.append_event(&event)?;
@@ -463,7 +465,7 @@ impl<S: TaskStore> App<S> {
             self.workflow.validate_state(Some(state))?;
         }
 
-        for event in patch.into_events(task, actor) {
+        for event in patch.into_events(task, actor, &self.workflow) {
             self.store
                 .append_event(&event)
                 .context("タスク更新イベントの書き込みに失敗しました")?;
@@ -493,10 +495,20 @@ impl<S: TaskStore> App<S> {
             return Ok(false);
         }
 
-        let event = state.map_or_else(
-            || Event::new(task, actor, EventKind::TaskStateCleared),
-            |state_value| Event::new(task, actor, EventKind::TaskStateSet { state: state_value }),
-        );
+        let event = match state {
+            Some(state_value) => {
+                let state_kind = self.workflow.resolve_state_kind(Some(&state_value));
+                Event::new(
+                    task,
+                    actor,
+                    EventKind::TaskStateSet {
+                        state: state_value,
+                        state_kind,
+                    },
+                )
+            }
+            None => Event::new(task, actor, EventKind::TaskStateCleared),
+        };
         self.store
             .append_event(&event)
             .context("タスクのステータス更新イベントの書き込みに失敗しました")?;
@@ -569,7 +581,7 @@ impl TaskPatch {
         patch
     }
 
-    fn into_events(self, task: TaskId, actor: &Actor) -> Vec<Event> {
+    fn into_events(self, task: TaskId, actor: &Actor, workflow: &WorkflowConfig) -> Vec<Event> {
         let mut events = Vec::new();
 
         if let Some(title) = self.title {
@@ -578,7 +590,10 @@ impl TaskPatch {
 
         if let Some(state) = self.state {
             events.push(match state {
-                StatePatch::Set { state } => Event::new(task, actor, EventKind::TaskStateSet { state }),
+                StatePatch::Set { state } => {
+                    let state_kind = workflow.resolve_state_kind(Some(&state));
+                    Event::new(task, actor, EventKind::TaskStateSet { state, state_kind })
+                }
                 StatePatch::Clear => Event::new(task, actor, EventKind::TaskStateCleared),
             });
         }
@@ -2471,6 +2486,7 @@ fn parse_filter_editor_output(raw: &str) -> Result<FilterEditorResult, String> {
     Ok(FilterEditorResult {
         filter: TaskFilter {
             states,
+            state_kinds: git_mile_core::StateKindFilter::default(),
             labels,
             assignees,
             parents,
@@ -2854,6 +2870,7 @@ mod tests {
                 assignees: Vec::new(),
                 description: None,
                 state: None,
+                state_kind: None,
             },
         )
     }
@@ -2948,6 +2965,7 @@ mod tests {
                     assignees: Vec::new(),
                     description: None,
                     state: None,
+                    state_kind: None,
                 },
             ),
             event(
@@ -2982,6 +3000,7 @@ mod tests {
                     assignees: Vec::new(),
                     description: None,
                     state: None,
+                    state_kind: None,
                 },
             ),
             event(
@@ -3003,6 +3022,7 @@ mod tests {
                 assignees: Vec::new(),
                 description: None,
                 state: None,
+                state_kind: None,
             },
         )];
 
@@ -3177,6 +3197,7 @@ mod tests {
                 assignees: Vec::new(),
                 description: None,
                 state: None,
+                state_kind: None,
             },
         )];
         let child_events = vec![
@@ -3189,6 +3210,7 @@ mod tests {
                     assignees: Vec::new(),
                     description: None,
                     state: None,
+                    state_kind: None,
                 },
             ),
             event(child, ts(20), EventKind::ChildLinked { parent, child }),
@@ -3281,6 +3303,7 @@ mod tests {
                         assignees: Vec::new(),
                         description: None,
                         state: None,
+                        state_kind: None,
                     },
                 )],
             )
@@ -3295,6 +3318,7 @@ mod tests {
                         assignees: Vec::new(),
                         description: None,
                         state: None,
+                        state_kind: None,
                     },
                 )],
             );
@@ -3530,6 +3554,7 @@ states = [
                 assignees: vec!["alice".into(), "carol".into()],
                 description: Some("old description".into()),
                 state: Some("state/in-progress".into()),
+                state_kind: Some(StateKind::InProgress),
             },
         );
 
@@ -3602,6 +3627,7 @@ states = [
                 assignees: vec!["alice".into()],
                 description: Some("desc".into()),
                 state: Some("state/todo".into()),
+                state_kind: Some(StateKind::Todo),
             },
         );
 
@@ -3649,6 +3675,7 @@ states = [
                 assignees: Vec::new(),
                 description: None,
                 state: Some("state/todo".into()),
+                state_kind: Some(StateKind::Todo),
             },
         );
         let workflow = WorkflowConfig::from_states(vec![
@@ -3673,7 +3700,7 @@ states = [
         assert_eq!(stored.len(), 2);
         assert!(stored
             .iter()
-            .any(|ev| matches!(&ev.kind, EventKind::TaskStateSet { state } if state == "state/done")));
+            .any(|ev| matches!(&ev.kind, EventKind::TaskStateSet { state, .. } if state == "state/done")));
         Ok(())
     }
 
@@ -3689,6 +3716,7 @@ states = [
                 assignees: Vec::new(),
                 description: None,
                 state: Some("state/todo".into()),
+                state_kind: Some(StateKind::Todo),
             },
         );
         let workflow = WorkflowConfig::from_states(vec![WorkflowState::new("state/todo")]);
@@ -3716,6 +3744,7 @@ states = [
                 assignees: Vec::new(),
                 description: None,
                 state: Some("state/done".into()),
+                state_kind: Some(StateKind::Done),
             },
         );
         let workflow = WorkflowConfig::from_states(vec![
@@ -3748,6 +3777,7 @@ states = [
                 assignees: Vec::new(),
                 description: None,
                 state: Some("state/todo".into()),
+                state_kind: Some(StateKind::Todo),
             },
         );
         let workflow = WorkflowConfig::from_states(vec![

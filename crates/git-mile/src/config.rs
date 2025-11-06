@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use git2::Repository;
+pub use git_mile_core::StateKind;
 use serde::Deserialize;
 
 const CONFIG_DIR: &str = ".git-mile";
@@ -155,22 +156,11 @@ impl WorkflowConfig {
         }
         Ok(())
     }
-}
 
-/// Classification of workflow state behavior.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StateKind {
-    /// Task is completed.
-    Done,
-    /// Task is actively being worked on.
-    InProgress,
-    /// Task is blocked or waiting.
-    Blocked,
-    /// Task is ready to be worked on (prioritized).
-    Todo,
-    /// Task is in backlog (not yet prioritized).
-    Backlog,
+    /// Resolve the configured state kind (if any) for the provided workflow state.
+    pub fn resolve_state_kind(&self, value: Option<&str>) -> Option<StateKind> {
+        value.and_then(|state| self.find_state(state).and_then(WorkflowState::kind))
+    }
 }
 
 /// Individual workflow state definition.

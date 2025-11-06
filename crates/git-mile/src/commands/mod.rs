@@ -58,6 +58,7 @@ impl<S: TaskRepository> TaskService<S> {
         } = input;
 
         self.workflow.validate_state(state.as_deref())?;
+        let state_kind = self.workflow.resolve_state_kind(state.as_deref());
 
         let task = TaskId::new();
         let created_event = Event::new(
@@ -69,6 +70,7 @@ impl<S: TaskRepository> TaskService<S> {
                 assignees,
                 description,
                 state,
+                state_kind,
             },
         );
         let created_event_oid = self.store.append_event(&created_event)?;

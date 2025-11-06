@@ -206,6 +206,7 @@ mod tests {
                 assignees: vec![],
                 description: None,
                 state: None,
+                state_kind: None,
             },
         );
 

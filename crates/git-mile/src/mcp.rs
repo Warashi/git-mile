@@ -199,6 +199,7 @@ impl GitMileServer {
         self.workflow
             .validate_state(params.state.as_deref())
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+        let state_kind = self.workflow.resolve_state_kind(params.state.as_deref());
 
         let store = self.store.lock().await;
         let task = TaskId::new();
@@ -216,6 +217,7 @@ impl GitMileServer {
                 assignees: params.assignees,
                 description: params.description,
                 state: params.state,
+                state_kind,
             },
         );
 
@@ -317,7 +319,8 @@ impl GitMileServer {
             self.workflow
                 .validate_state(Some(&state))
                 .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-            let event = Event::new(task, &actor, EventKind::TaskStateSet { state });
+            let state_kind = self.workflow.resolve_state_kind(Some(&state));
+            let event = Event::new(task, &actor, EventKind::TaskStateSet { state, state_kind });
             store
                 .append_event(&event)
                 .map_err(|e| McpError::internal_error(e.to_string(), None))?;
