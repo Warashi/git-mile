@@ -12,9 +12,7 @@ use std::str::FromStr;
 use std::thread;
 use std::time::{Duration, Instant};
 
-#[cfg(test)]
-use crate::config::WorkflowState;
-use crate::config::{StateKind, WorkflowConfig};
+use crate::config::{StateKind, WorkflowConfig, WorkflowState};
 use anyhow::{anyhow, Context, Result};
 use arboard::Clipboard as ArboardClipboard;
 use base64::{engine::general_purpose::STANDARD as Base64Standard, Engine as _};
@@ -155,7 +153,7 @@ impl<S: TaskStore> App<S> {
         self.selected = self.resolve_selection(keep_id);
     }
 
-    pub fn has_visible_tasks(&self) -> bool {
+    pub const fn has_visible_tasks(&self) -> bool {
         !self.visible.is_empty()
     }
 
@@ -996,14 +994,7 @@ impl<S: TaskStore> Ui<S> {
     }
 
     fn draw_task_list(&self, f: &mut ratatui::Frame<'_>, area: Rect) {
-        let items = if !self.app.has_visible_tasks() {
-            let message = if self.app.filter().is_empty() {
-                "タスクがありません"
-            } else {
-                "フィルタに一致するタスクがありません"
-            };
-            vec![ListItem::new(Line::from(message))]
-        } else {
+        let items = if self.app.has_visible_tasks() {
             let workflow = self.app.workflow();
             self.app
                 .visible_tasks()
@@ -1019,6 +1010,13 @@ impl<S: TaskStore> Ui<S> {
                     ListItem::new(vec![Line::from(vec![title]), Line::from(vec![meta_span])])
                 })
                 .collect()
+        } else {
+            let message = if self.app.filter().is_empty() {
+                "タスクがありません"
+            } else {
+                "フィルタに一致するタスクがありません"
+            };
+            vec![ListItem::new(Line::from(message))]
         };
 
         let list = List::new(items)
@@ -1944,7 +1942,7 @@ impl<S: TaskStore> Ui<S> {
         apply_state_kind_filter(filter, self.app.workflow(), &self.state_kind_filter);
     }
 
-    fn apply_filter_editor_output(&mut self, raw: &str) -> Result<()> {
+    fn apply_filter_editor_output(&mut self, raw: &str) {
         match parse_filter_editor_output(raw) {
             Ok(result) => {
                 let FilterEditorResult {
@@ -1967,7 +1965,6 @@ impl<S: TaskStore> Ui<S> {
             }
             Err(err) => self.error(format!("フィルタの解析に失敗しました: {err}")),
         }
-        Ok(())
     }
 
     fn info(&mut self, message: impl Into<String>) {
@@ -2065,7 +2062,7 @@ fn handle_ui_action<S: TaskStore>(
         UiAction::EditFilter => {
             let template = filter_editor_template(ui.app.filter(), &ui.state_kind_filter);
             let raw = with_terminal_suspended(terminal, || launch_editor(&template))?;
-            ui.apply_filter_editor_output(&raw)?;
+            ui.apply_filter_editor_output(&raw);
         }
     }
     Ok(())
@@ -2549,7 +2546,7 @@ fn parse_state_kind_name(name: &str) -> Option<StateKind> {
     }
 }
 
-fn state_kind_to_str(kind: StateKind) -> &'static str {
+const fn state_kind_to_str(kind: StateKind) -> &'static str {
     match kind {
         StateKind::Done => "done",
         StateKind::InProgress => "in_progress",
@@ -2592,8 +2589,8 @@ fn apply_state_kind_filter(filter: &mut TaskFilter, workflow: &WorkflowConfig, k
         states.retain(|value| {
             workflow
                 .find_state(value)
-                .and_then(|state| state.kind())
-                .map_or(true, |kind| !kinds.exclude.contains(&kind))
+                .and_then(WorkflowState::kind)
+                .is_none_or(|kind| !kinds.exclude.contains(&kind))
         });
     }
 
@@ -2677,7 +2674,7 @@ fn parse_list(input: &str) -> Vec<String> {
 }
 
 fn summarize_task_filter(filter: &TaskFilter, state_kind_filter: Option<&StateKindFilter>) -> String {
-    if filter.is_empty() && state_kind_filter.map_or(true, StateKindFilter::is_empty) {
+    if filter.is_empty() && state_kind_filter.is_none_or(StateKindFilter::is_empty) {
         return "未設定".to_string();
     }
     let mut parts = Vec::new();
@@ -3147,8 +3144,10 @@ mod tests {
                 ],
             );
         let mut app = App::new(store, WorkflowConfig::default())?;
-        let mut filter = TaskFilter::default();
-        filter.text = Some("Grand".into());
+        let filter = TaskFilter {
+            text: Some("Grand".into()),
+            ..TaskFilter::default()
+        };
         app.set_filter(filter);
 
         let titles: Vec<String> = app
@@ -3171,8 +3170,10 @@ mod tests {
                 vec![created(child, 10, "Child"), child_link(11, root, child)],
             );
         let mut app = App::new(store, WorkflowConfig::default())?;
-        let mut filter = TaskFilter::default();
-        filter.text = Some("Root".into());
+        let filter = TaskFilter {
+            text: Some("Root".into()),
+            ..TaskFilter::default()
+        };
         app.set_filter(filter);
 
         let titles: Vec<String> = app

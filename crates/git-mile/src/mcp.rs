@@ -642,7 +642,7 @@ mod tests {
     use git_mile_core::{
         event::{Actor, Event, EventKind},
         id::TaskId,
-        TaskSnapshot,
+        StateKind, TaskSnapshot,
     };
     use rmcp::model::{ErrorCode, RawContent};
     use tempfile::tempdir;
@@ -661,10 +661,9 @@ mod tests {
             }))
             .await?;
 
-        let content = result
-            .content
-            .first()
-            .expect("tool response should include content");
+        let Some(content) = result.content.first() else {
+            panic!("tool response should include content");
+        };
         let text = match &content.raw {
             RawContent::Text(block) => block.text.clone(),
             _ => panic!("expected text content"),
@@ -687,12 +686,14 @@ mod tests {
 
         let server = GitMileServer::new(GitStore::open(repo.path())?, WorkflowConfig::default());
 
-        let err = server
+        let Err(err) = server
             .get_task(Parameters(GetTaskParams {
                 task_id: TaskId::new().to_string(),
             }))
             .await
-            .expect_err("missing task should return error");
+        else {
+            panic!("missing task should return error");
+        };
 
         assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
         assert!(err.message.contains("Task not found"));
@@ -717,6 +718,7 @@ mod tests {
                 assignees: vec![],
                 description: Some("hello".into()),
                 state: Some("state/todo".into()),
+                state_kind: Some(StateKind::Todo),
             },
         );
 
