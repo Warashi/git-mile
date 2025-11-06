@@ -1,6 +1,12 @@
 {
   inputs = {
     # keep-sorted start block=yes
+    devshell = {
+      url = "github:numtide/devshell";
+      inputs = {
+        nixpkgs.follows = "nixpkgs";
+      };
+    };
     flake-parts = {
       url = "github:hercules-ci/flake-parts";
     };
@@ -35,8 +41,11 @@
       ];
 
       imports = [
+        # keep-sorted start
+        inputs.devshell.flakeModule
         inputs.git-hooks.flakeModule
         inputs.treefmt-nix.flakeModule
+        # keep-sorted end
       ];
 
       perSystem =
@@ -47,6 +56,12 @@
           ...
         }:
         {
+          _module.args.pkgs = import inputs.nixpkgs {
+            inherit system;
+            overlays = [ inputs.rust-overlay.overlays.default ];
+            config = { };
+          };
+
           pre-commit = {
             check.enable = true;
             settings = {
@@ -72,25 +87,38 @@
             };
           };
 
-          packages.default = pkgs.callPackage ./. { };
+          packages = rec {
+            git-mile = pkgs.callPackage ./. { };
+            default = git-mile;
+          };
 
-          devShells.default =
+          devshells.default =
             let
               overlays = [ (import inputs.rust-overlay) ];
               pkgs = import inputs.nixpkgs { inherit system overlays; };
             in
             with pkgs;
-            mkShell {
-              packages = [
-                nixfmt
-                just
-                llvmPackages.libclang
-                clang
-                (rust-bin.fromRustupToolchainFile ./rust-toolchain.toml)
+            {
+              env = [
+                {
+                  name = "LIBCLANG_PATH";
+                  value = "${llvmPackages.libclang.lib}/lib";
+                }
               ];
-              shellHook = ''
-                export LIBCLANG_PATH=${llvmPackages.libclang.lib}/lib
-              '';
+              devshell = {
+                packages = [
+                  nixfmt
+                  just
+                  llvmPackages.libclang
+                  clang
+                  (rust-bin.fromRustupToolchainFile ./rust-toolchain.toml)
+                ];
+                startup = {
+                  pre-commit = {
+                    text = config.pre-commit.installationScript;
+                  };
+                };
+              };
             };
         };
     };

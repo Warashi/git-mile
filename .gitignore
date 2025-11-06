@@ -5,3 +5,4 @@
 /.idea
 /.cargo-ok
 /result
+/.pre-commit-config.yaml
