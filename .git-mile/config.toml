@@ -1,4 +1,5 @@
 [workflow]
+# kind を指定すると CLI/TUI が種別を表示・フィルタできます
 states = [
   { value = "state/todo", label = "Todo", kind = "todo" },
   { value = "state/in-progress", label = "In Progress", kind = "in_progress" },

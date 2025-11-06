@@ -100,20 +100,6 @@ impl WorkflowConfig {
             .unwrap_or("未設定")
     }
 
-    /// Get state marker based on state kind.
-    pub fn state_marker(&self, value: Option<&str>) -> &'static str {
-        value
-            .and_then(|v| self.find_state(v))
-            .and_then(WorkflowState::kind)
-            .map_or("", |kind| match kind {
-                StateKind::Done => " ✓",
-                StateKind::InProgress => " →",
-                StateKind::Blocked => " ⊗",
-                StateKind::Todo => " □",
-                StateKind::Backlog => " ◇",
-            })
-    }
-
     /// Validate that the provided state (if any) is part of the configured set.
     pub fn validate_state(&self, candidate: Option<&str>) -> Result<()> {
         let Some(value) = candidate else {

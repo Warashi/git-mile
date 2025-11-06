@@ -23,7 +23,7 @@ use crossterm::{
 };
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::{EventId, TaskId};
-use git_mile_core::{OrderedEvents, TaskFilter, TaskSnapshot, UpdatedFilter};
+use git_mile_core::{OrderedEvents, StateKindFilter, TaskFilter, TaskSnapshot, UpdatedFilter};
 use git_mile_store_git::GitStore;
 use ratatui::{
     backend::CrosstermBackend,
@@ -932,7 +932,6 @@ struct Ui<S: TaskStore> {
     /// State picker popup state.
     state_picker: Option<StatePickerState>,
     clipboard: Box<dyn ClipboardSink>,
-    state_kind_filter: StateKindFilter,
 }
 
 impl<S: TaskStore> Ui<S> {
@@ -952,10 +951,17 @@ impl<S: TaskStore> Ui<S> {
             tree_state: TreeViewState::new(),
             state_picker: None,
             clipboard,
-            state_kind_filter: StateKindFilter::default(),
         };
-        ui.set_filter_with_state_kind(TaskFilter::default());
+        ui.apply_default_filter();
         ui
+    }
+
+    fn apply_default_filter(&mut self) {
+        if self.app.filter().is_empty() {
+            let mut filter = TaskFilter::default();
+            filter.state_kinds.exclude.insert(StateKind::Done);
+            self.app.set_filter(filter);
+        }
     }
 
     fn draw(&self, f: &mut ratatui::Frame<'_>) {
@@ -1209,7 +1215,7 @@ impl<S: TaskStore> Ui<S> {
             .iter()
             .map(|child| {
                 let state_value = child.snapshot.state.as_deref();
-                let state_marker = workflow.state_marker(state_value);
+                let state_marker = state_kind_marker(child.snapshot.state_kind);
                 let state_label = workflow.display_label(state_value);
 
                 let text = format!("▸ {} [{}]{}", child.snapshot.title, state_label, state_marker);
@@ -1341,7 +1347,7 @@ impl<S: TaskStore> Ui<S> {
 
             // State marker and label
             let state_value = task.snapshot.state.as_deref();
-            let state_marker = workflow.state_marker(state_value);
+            let state_marker = state_kind_marker(task.snapshot.state_kind);
             let state_label = workflow.display_label(state_value);
 
             let line_text = format!(
@@ -1407,7 +1413,10 @@ impl<S: TaskStore> Ui<S> {
             .map(|option| {
                 let value = option.value.as_deref();
                 let label = workflow.display_label(value);
-                let marker = workflow.state_marker(value);
+                let marker = value
+                    .and_then(|state_value| workflow.find_state(state_value))
+                    .and_then(WorkflowState::kind)
+                    .map_or("", |kind| state_kind_marker(Some(kind)));
                 let text = value.map_or_else(
                     || "未設定 (stateなし)".to_string(),
                     |value| format!("{label}{marker} ({value})"),
@@ -1933,29 +1942,14 @@ impl<S: TaskStore> Ui<S> {
         Ok(())
     }
 
-    fn set_filter_with_state_kind(&mut self, mut filter: TaskFilter) {
-        self.apply_state_kind_filter_to(&mut filter);
-        self.app.set_filter(filter);
-    }
-
-    fn apply_state_kind_filter_to(&self, filter: &mut TaskFilter) {
-        apply_state_kind_filter(filter, self.app.workflow(), &self.state_kind_filter);
-    }
-
     fn apply_filter_editor_output(&mut self, raw: &str) {
         match parse_filter_editor_output(raw) {
-            Ok(result) => {
-                let FilterEditorResult {
-                    mut filter,
-                    state_kind_filter,
-                } = result;
-                self.state_kind_filter = state_kind_filter;
-                self.apply_state_kind_filter_to(&mut filter);
+            Ok(filter) => {
                 if &filter == self.app.filter() {
                     self.info("フィルタに変更はありません");
                 } else {
                     self.app.set_filter(filter.clone());
-                    let summary = summarize_task_filter(&filter, Some(&self.state_kind_filter));
+                    let summary = summarize_task_filter(&filter);
                     if self.app.has_visible_tasks() {
                         self.info(format!("フィルタを更新しました: {summary}"));
                     } else {
@@ -1988,7 +1982,7 @@ impl<S: TaskStore> Ui<S> {
     }
 
     fn filter_summary_text(&self) -> String {
-        summarize_task_filter(self.app.filter(), Some(&self.state_kind_filter))
+        summarize_task_filter(self.app.filter())
     }
 
     fn status_text(&self) -> Cow<'_, str> {
@@ -2060,7 +2054,7 @@ fn handle_ui_action<S: TaskStore>(
             ui.apply_new_subtask_input(parent, &raw)?;
         }
         UiAction::EditFilter => {
-            let template = filter_editor_template(ui.app.filter(), &ui.state_kind_filter);
+            let template = filter_editor_template(ui.app.filter());
             let raw = with_terminal_suspended(terminal, || launch_editor(&template))?;
             ui.apply_filter_editor_output(&raw);
         }
@@ -2209,7 +2203,7 @@ fn new_task_editor_template(parent: Option<&TaskView>, state_hint: Option<&str>)
     lines.join("\n")
 }
 
-fn filter_editor_template(filter: &TaskFilter, state_kind_filter: &StateKindFilter) -> String {
+fn filter_editor_template(filter: &TaskFilter) -> String {
     let states = filter.states.iter().cloned().collect::<Vec<_>>().join(", ");
     let labels = filter.labels.iter().cloned().collect::<Vec<_>>().join(", ");
     let assignees = filter.assignees.iter().cloned().collect::<Vec<_>>().join(", ");
@@ -2246,7 +2240,10 @@ fn filter_editor_template(filter: &TaskFilter, state_kind_filter: &StateKindFilt
         "# state_kinds には done/in_progress などの kind を指定し、!done で除外できます。".to_string(),
         format!("# state_kinds の候補: {}", state_kind_options_hint()),
         format!("states: {states}"),
-        format!("state_kinds: {}", state_kind_filter.to_editor_value()),
+        format!(
+            "state_kinds: {}",
+            state_kind_filter_to_editor_value(&filter.state_kinds)
+        ),
         format!("labels: {labels}"),
         format!("assignees: {assignees}"),
         format!("parents: {parents}"),
@@ -2259,77 +2256,44 @@ fn filter_editor_template(filter: &TaskFilter, state_kind_filter: &StateKindFilt
     lines.join("\n")
 }
 
-#[derive(Debug, Clone)]
-struct FilterEditorResult {
-    filter: TaskFilter,
-    state_kind_filter: StateKindFilter,
+fn state_kind_filter_to_editor_value(filter: &StateKindFilter) -> String {
+    if filter.is_empty() {
+        return String::new();
+    }
+    let mut tokens = Vec::new();
+    for kind in &filter.include {
+        tokens.push(kind.as_str().to_string());
+    }
+    for kind in &filter.exclude {
+        tokens.push(format!("!{}", kind.as_str()));
+    }
+    tokens.join(", ")
 }
 
-#[derive(Debug, Clone)]
-struct StateKindFilter {
-    include: BTreeSet<StateKind>,
-    exclude: BTreeSet<StateKind>,
-}
-
-impl Default for StateKindFilter {
-    fn default() -> Self {
-        let mut exclude = BTreeSet::new();
-        exclude.insert(StateKind::Done);
-        Self {
-            include: BTreeSet::new(),
-            exclude,
-        }
+fn state_kind_summary_tokens(filter: &StateKindFilter) -> Vec<String> {
+    if filter.is_empty() {
+        return Vec::new();
     }
-}
-
-impl StateKindFilter {
-    const fn empty() -> Self {
-        Self {
-            include: BTreeSet::new(),
-            exclude: BTreeSet::new(),
-        }
+    let mut tokens = Vec::new();
+    if !filter.include.is_empty() {
+        let includes = filter
+            .include
+            .iter()
+            .map(|kind| kind.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        tokens.push(format!("state-kind={includes}"));
     }
-
-    fn is_empty(&self) -> bool {
-        self.include.is_empty() && self.exclude.is_empty()
+    if !filter.exclude.is_empty() {
+        let excludes = filter
+            .exclude
+            .iter()
+            .map(|kind| kind.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        tokens.push(format!("state-kind!={excludes}"));
     }
-
-    fn to_editor_value(&self) -> String {
-        let mut tokens = Vec::new();
-        for kind in &self.include {
-            tokens.push(state_kind_to_str(*kind).to_string());
-        }
-        for kind in &self.exclude {
-            tokens.push(format!("!{}", state_kind_to_str(*kind)));
-        }
-        tokens.join(", ")
-    }
-
-    fn summary_tokens(&self) -> Vec<String> {
-        if self.is_empty() {
-            return Vec::new();
-        }
-        let mut tokens = Vec::new();
-        if !self.include.is_empty() {
-            let includes = self
-                .include
-                .iter()
-                .map(|kind| state_kind_to_str(*kind))
-                .collect::<Vec<_>>()
-                .join(", ");
-            tokens.push(format!("state-kind={includes}"));
-        }
-        if !self.exclude.is_empty() {
-            let excludes = self
-                .exclude
-                .iter()
-                .map(|kind| state_kind_to_str(*kind))
-                .collect::<Vec<_>>()
-                .join(", ");
-            tokens.push(format!("state-kind!={excludes}"));
-        }
-        tokens
-    }
+    tokens
 }
 
 fn parse_new_task_editor_output(raw: &str) -> Result<Option<NewTaskData>, String> {
@@ -2415,7 +2379,7 @@ fn parse_new_task_editor_output(raw: &str) -> Result<Option<NewTaskData>, String
     }))
 }
 
-fn parse_filter_editor_output(raw: &str) -> Result<FilterEditorResult, String> {
+fn parse_filter_editor_output(raw: &str) -> Result<TaskFilter, String> {
     let mut states = BTreeSet::new();
     let mut labels = BTreeSet::new();
     let mut assignees = BTreeSet::new();
@@ -2478,20 +2442,17 @@ fn parse_filter_editor_output(raw: &str) -> Result<FilterEditorResult, String> {
         }),
     };
 
-    let state_kind_filter = parse_state_kind_filter(state_kinds_raw.unwrap_or(""))?;
+    let state_kinds = parse_state_kind_filter(state_kinds_raw.unwrap_or(""))?;
 
-    Ok(FilterEditorResult {
-        filter: TaskFilter {
-            states,
-            state_kinds: git_mile_core::StateKindFilter::default(),
-            labels,
-            assignees,
-            parents,
-            children,
-            text,
-            updated,
-        },
-        state_kind_filter,
+    Ok(TaskFilter {
+        states,
+        state_kinds,
+        labels,
+        assignees,
+        parents,
+        children,
+        text,
+        updated,
     })
 }
 
@@ -2515,9 +2476,9 @@ fn parse_optional_timestamp(input: &str) -> Result<Option<OffsetDateTime>, Strin
 
 fn parse_state_kind_filter(input: &str) -> Result<StateKindFilter, String> {
     if input.trim().is_empty() {
-        return Ok(StateKindFilter::empty());
+        return Ok(StateKindFilter::default());
     }
-    let mut filter = StateKindFilter::empty();
+    let mut filter = StateKindFilter::default();
     for token in parse_list(input) {
         let (negated, name) = token
             .strip_prefix('!')
@@ -2546,55 +2507,21 @@ fn parse_state_kind_name(name: &str) -> Option<StateKind> {
     }
 }
 
-const fn state_kind_to_str(kind: StateKind) -> &'static str {
-    match kind {
-        StateKind::Done => "done",
-        StateKind::InProgress => "in_progress",
-        StateKind::Blocked => "blocked",
-        StateKind::Todo => "todo",
-        StateKind::Backlog => "backlog",
-    }
-}
-
 const STATE_KIND_HINT: &str = "done, in_progress, blocked, todo, backlog";
 
 const fn state_kind_options_hint() -> &'static str {
     STATE_KIND_HINT
 }
 
-fn apply_state_kind_filter(filter: &mut TaskFilter, workflow: &WorkflowConfig, kinds: &StateKindFilter) {
-    if kinds.is_empty() {
-        return;
+fn state_kind_marker(kind: Option<StateKind>) -> &'static str {
+    match kind {
+        Some(StateKind::Done) => " ✓",
+        Some(StateKind::InProgress) => " →",
+        Some(StateKind::Blocked) => " ⊗",
+        Some(StateKind::Todo) => " □",
+        Some(StateKind::Backlog) => " ◇",
+        None => "",
     }
-    let states_cfg = workflow.states();
-    if states_cfg.is_empty() {
-        return;
-    }
-
-    let mut states = filter.states.clone();
-
-    if !kinds.include.is_empty() {
-        for state in states_cfg {
-            if state.kind().is_some_and(|kind| kinds.include.contains(&kind)) {
-                states.insert(state.value().to_owned());
-            }
-        }
-    }
-
-    if states.is_empty() && !kinds.exclude.is_empty() {
-        states.extend(states_cfg.iter().map(|state| state.value().to_owned()));
-    }
-
-    if !kinds.exclude.is_empty() {
-        states.retain(|value| {
-            workflow
-                .find_state(value)
-                .and_then(WorkflowState::kind)
-                .is_none_or(|kind| !kinds.exclude.contains(&kind))
-        });
-    }
-
-    filter.states = states;
 }
 
 fn with_terminal_suspended<F, T>(terminal: &mut Terminal<CrosstermBackend<Stdout>>, f: F) -> Result<T>
@@ -2673,8 +2600,8 @@ fn parse_list(input: &str) -> Vec<String> {
         .collect()
 }
 
-fn summarize_task_filter(filter: &TaskFilter, state_kind_filter: Option<&StateKindFilter>) -> String {
-    if filter.is_empty() && state_kind_filter.is_none_or(StateKindFilter::is_empty) {
+fn summarize_task_filter(filter: &TaskFilter) -> String {
+    if filter.is_empty() {
         return "未設定".to_string();
     }
     let mut parts = Vec::new();
@@ -2707,9 +2634,7 @@ fn summarize_task_filter(filter: &TaskFilter, state_kind_filter: Option<&StateKi
             parts.push(format!("until={}", format_timestamp(until)));
         }
     }
-    if let Some(kind_filter) = state_kind_filter {
-        parts.extend(kind_filter.summary_tokens());
-    }
+    parts.extend(state_kind_summary_tokens(&filter.state_kinds));
     if parts.is_empty() {
         "未設定".into()
     } else {
@@ -3468,15 +3393,14 @@ updated_since: 2025-01-01T00:00:00Z
 updated_until: 2025-01-02T00:00:00Z
 "
         );
-        let result = parse_filter_editor_output(&raw).expect("parse succeeds");
-        let filter = result.filter;
+        let filter = parse_filter_editor_output(&raw).expect("parse succeeds");
         assert!(filter.states.contains("state/todo"));
         assert!(filter.labels.contains("type/bug"));
         assert!(filter.assignees.contains("alice"));
         assert!(filter.parents.contains(&parent));
         assert!(filter.children.contains(&child));
         assert_eq!(filter.text.as_deref(), Some("panic"));
-        assert!(result.state_kind_filter.exclude.contains(&StateKind::Done));
+        assert!(filter.state_kinds.exclude.contains(&StateKind::Done));
         let updated = filter.updated.expect("updated filter");
         let expected_since = OffsetDateTime::parse("2025-01-01T00:00:00Z", &Rfc3339).expect("ts");
         let expected_until = OffsetDateTime::parse("2025-01-02T00:00:00Z", &Rfc3339).expect("ts");
@@ -3495,17 +3419,16 @@ updated_until: 2025-01-02T00:00:00Z
         let mut filter = TaskFilter::default();
         filter.states.insert("state/todo".into());
         filter.text = Some("panic".into());
-        let summary = summarize_task_filter(&filter, None);
+        let summary = summarize_task_filter(&filter);
         assert!(summary.contains("state=state/todo"));
         assert!(summary.contains("text=\"panic\""));
     }
 
     #[test]
     fn summarize_task_filter_includes_state_kind_clause() {
-        let filter = TaskFilter::default();
-        let mut kind_filter = StateKindFilter::empty();
-        kind_filter.exclude.insert(StateKind::Done);
-        let summary = summarize_task_filter(&filter, Some(&kind_filter));
+        let mut filter = TaskFilter::default();
+        filter.state_kinds.exclude.insert(StateKind::Done);
+        let summary = summarize_task_filter(&filter);
         assert!(summary.contains("state-kind!=done"));
     }
 
@@ -3514,25 +3437,6 @@ updated_until: 2025-01-02T00:00:00Z
         let filter = parse_state_kind_filter("in_progress, !done").expect("parse succeeds");
         assert!(filter.include.contains(&StateKind::InProgress));
         assert!(filter.exclude.contains(&StateKind::Done));
-    }
-
-    #[test]
-    fn apply_state_kind_filter_excludes_done_states() {
-        let workflow: WorkflowConfig = toml::from_str(
-            r#"
-states = [
-  { value = "state/todo", kind = "todo" },
-  { value = "state/done", kind = "done" }
-]
-"#,
-        )
-        .expect("workflow config");
-        let mut filter = TaskFilter::default();
-        let mut kind_filter = StateKindFilter::empty();
-        kind_filter.exclude.insert(StateKind::Done);
-        apply_state_kind_filter(&mut filter, &workflow, &kind_filter);
-        assert!(filter.states.contains("state/todo"));
-        assert!(!filter.states.contains("state/done"));
     }
 
     #[test]
@@ -3755,6 +3659,7 @@ states = [
         let store = MockStore::new().with_task(task, vec![created]);
         let app = App::new(store, workflow)?;
         let mut ui = ui_with_clipboard(app, Box::new(NoopClipboard));
+        ui.app.set_filter(TaskFilter::default());
         ui.open_state_picker();
 
         assert_eq!(ui.detail_focus, DetailFocus::StatePicker);
