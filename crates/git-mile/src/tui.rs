@@ -8,12 +8,13 @@ use std::fs;
 use std::io::{self, Stdout, Write};
 use std::path::PathBuf;
 use std::process::Command;
+use std::str::FromStr;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::config::WorkflowConfig;
 #[cfg(test)]
 use crate::config::WorkflowState;
+use crate::config::{StateKind, WorkflowConfig};
 use anyhow::{anyhow, Context, Result};
 use arboard::Clipboard as ArboardClipboard;
 use base64::{engine::general_purpose::STANDARD as Base64Standard, Engine as _};
@@ -24,7 +25,7 @@ use crossterm::{
 };
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::{EventId, TaskId};
-use git_mile_core::{OrderedEvents, TaskSnapshot};
+use git_mile_core::{OrderedEvents, TaskFilter, TaskSnapshot, UpdatedFilter};
 use git_mile_store_git::GitStore;
 use ratatui::{
     backend::CrosstermBackend,
@@ -35,7 +36,7 @@ use ratatui::{
     Terminal,
 };
 use tempfile::NamedTempFile;
-use time::OffsetDateTime;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use tracing::{subscriber::NoSubscriber, warn};
 
 /// Storage abstraction so the TUI logic can be unit-tested.
@@ -104,13 +105,17 @@ impl TaskView {
 pub struct App<S: TaskStore> {
     store: S,
     workflow: WorkflowConfig,
-    /// Cached task list sorted by most recent updates.
+    /// Cached task list sorted by最終更新順。フィルタ適用前の全体集合。
     pub tasks: Vec<TaskView>,
-    /// Currently selected task index.
+    /// 表示対象タスクのインデックス（`tasks` への参照）。
+    visible: Vec<usize>,
+    /// 現在の選択位置（`visible` のインデックス）。
     pub selected: usize,
     task_index: HashMap<TaskId, usize>,
     parents_index: HashMap<TaskId, Vec<TaskId>>,
     children_index: HashMap<TaskId, Vec<TaskId>>,
+    visible_index: HashMap<TaskId, usize>,
+    filter: TaskFilter,
 }
 
 impl<S: TaskStore> App<S> {
@@ -120,10 +125,13 @@ impl<S: TaskStore> App<S> {
             store,
             workflow,
             tasks: Vec::new(),
+            visible: Vec::new(),
             selected: 0,
             task_index: HashMap::new(),
             parents_index: HashMap::new(),
             children_index: HashMap::new(),
+            visible_index: HashMap::new(),
+            filter: TaskFilter::default(),
         };
         app.refresh_tasks()?;
         Ok(app)
@@ -131,6 +139,36 @@ impl<S: TaskStore> App<S> {
 
     pub const fn workflow(&self) -> &WorkflowConfig {
         &self.workflow
+    }
+
+    pub const fn filter(&self) -> &TaskFilter {
+        &self.filter
+    }
+
+    pub fn set_filter(&mut self, filter: TaskFilter) {
+        if self.filter == filter {
+            return;
+        }
+        let keep_id = self.selected_task_id();
+        self.filter = filter;
+        self.rebuild_visibility();
+        self.selected = self.resolve_selection(keep_id);
+    }
+
+    pub fn has_visible_tasks(&self) -> bool {
+        !self.visible.is_empty()
+    }
+
+    pub fn visible_tasks(&self) -> impl Iterator<Item = &TaskView> + '_ {
+        self.visible.iter().filter_map(|&idx| self.tasks.get(idx))
+    }
+
+    fn visible_index_of(&self, task_id: TaskId) -> Option<usize> {
+        self.visible_index.get(&task_id).copied()
+    }
+
+    fn is_visible(&self, task_id: TaskId) -> bool {
+        self.visible_index.contains_key(&task_id)
     }
 
     /// Get parent tasks of the given task.
@@ -163,7 +201,7 @@ impl<S: TaskStore> App<S> {
 
     /// Jump to a specific task by ID.
     pub fn jump_to_task(&mut self, task_id: TaskId) {
-        if let Some(index) = self.task_index.get(&task_id).copied() {
+        if let Some(index) = self.visible_index_of(task_id) {
             self.selected = index;
         }
     }
@@ -234,24 +272,98 @@ impl<S: TaskStore> App<S> {
         self.task_index = task_index;
         self.parents_index = parents_index;
         self.children_index = children_index;
-
-        if let Some(id) = keep_id {
-            self.selected = if self.tasks.is_empty() {
-                0
-            } else {
-                self.task_index.get(&id).copied().unwrap_or(0)
-            };
-        } else if self.tasks.is_empty() {
-            self.selected = 0;
-        } else {
-            self.selected = self.selected.min(self.tasks.len() - 1);
-        }
+        self.rebuild_visibility();
+        self.selected = self.resolve_selection(keep_id);
         Ok(())
+    }
+
+    fn resolve_selection(&self, preferred: Option<TaskId>) -> usize {
+        if self.visible.is_empty() {
+            return 0;
+        }
+        if let Some(id) = preferred {
+            if let Some(index) = self.visible_index_of(id) {
+                return index;
+            }
+        }
+        self.selected.min(self.visible.len() - 1)
+    }
+
+    fn rebuild_visibility(&mut self) {
+        self.visible.clear();
+        self.visible_index.clear();
+
+        if self.tasks.is_empty() {
+            return;
+        }
+
+        if self.filter.is_empty() {
+            for (idx, view) in self.tasks.iter().enumerate() {
+                let pos = self.visible.len();
+                self.visible.push(idx);
+                self.visible_index.insert(view.snapshot.id, pos);
+            }
+            return;
+        }
+
+        let mut matches = BTreeSet::new();
+        for view in &self.tasks {
+            if self.filter.matches(&view.snapshot) {
+                matches.insert(view.snapshot.id);
+            }
+        }
+
+        if matches.is_empty() {
+            return;
+        }
+
+        let mut visible_ids = matches.clone();
+        self.include_ancestors(&mut visible_ids);
+        self.include_descendants_from(matches.iter().copied(), &mut visible_ids);
+
+        for (idx, view) in self.tasks.iter().enumerate() {
+            if visible_ids.contains(&view.snapshot.id) {
+                let pos = self.visible.len();
+                self.visible.push(idx);
+                self.visible_index.insert(view.snapshot.id, pos);
+            }
+        }
+    }
+
+    fn include_ancestors(&self, ids: &mut BTreeSet<TaskId>) {
+        let mut queue: VecDeque<TaskId> = ids.iter().copied().collect();
+        while let Some(current) = queue.pop_front() {
+            if let Some(parents) = self.parents_index.get(&current) {
+                for parent in parents {
+                    if ids.insert(*parent) {
+                        queue.push_back(*parent);
+                    }
+                }
+            }
+        }
+    }
+
+    fn include_descendants_from<I>(&self, seeds: I, acc: &mut BTreeSet<TaskId>)
+    where
+        I: IntoIterator<Item = TaskId>,
+    {
+        let mut queue: VecDeque<TaskId> = seeds.into_iter().collect();
+        while let Some(current) = queue.pop_front() {
+            if let Some(children) = self.children_index.get(&current) {
+                for child in children {
+                    if acc.insert(*child) {
+                        queue.push_back(*child);
+                    }
+                }
+            }
+        }
     }
 
     /// Selected task (if any).
     pub fn selected_task(&self) -> Option<&TaskView> {
-        self.tasks.get(self.selected)
+        self.visible
+            .get(self.selected)
+            .and_then(|&idx| self.tasks.get(idx))
     }
 
     /// Identifier of the selected task (if any).
@@ -267,10 +379,10 @@ impl<S: TaskStore> App<S> {
     /// Move selection to the next task.
     pub fn select_next(&mut self) {
         Self::runtime_touch();
-        if self.tasks.is_empty() {
+        if self.visible.is_empty() {
             return;
         }
-        if self.selected + 1 < self.tasks.len() {
+        if self.selected + 1 < self.visible.len() {
             self.selected += 1;
         }
     }
@@ -278,6 +390,9 @@ impl<S: TaskStore> App<S> {
     /// Move selection to the previous task.
     pub fn select_prev(&mut self) {
         Self::runtime_touch();
+        if self.visible.is_empty() {
+            return;
+        }
         if self.selected > 0 {
             self.selected -= 1;
         }
@@ -804,6 +919,7 @@ struct Ui<S: TaskStore> {
     /// State picker popup state.
     state_picker: Option<StatePickerState>,
     clipboard: Box<dyn ClipboardSink>,
+    state_kind_filter: StateKindFilter,
 }
 
 impl<S: TaskStore> Ui<S> {
@@ -814,7 +930,7 @@ impl<S: TaskStore> Ui<S> {
 
     fn with_clipboard(app: App<S>, actor: Actor, clipboard: Box<dyn ClipboardSink>) -> Self {
         let _ = thread::current().id();
-        Self {
+        let mut ui = Self {
             app,
             actor,
             message: None,
@@ -823,7 +939,10 @@ impl<S: TaskStore> Ui<S> {
             tree_state: TreeViewState::new(),
             state_picker: None,
             clipboard,
-        }
+            state_kind_filter: StateKindFilter::default(),
+        };
+        ui.set_filter_with_state_kind(TaskFilter::default());
+        ui
     }
 
     fn draw(&self, f: &mut ratatui::Frame<'_>) {
@@ -862,13 +981,17 @@ impl<S: TaskStore> Ui<S> {
     }
 
     fn draw_task_list(&self, f: &mut ratatui::Frame<'_>, area: Rect) {
-        let items = if self.app.tasks.is_empty() {
-            vec![ListItem::new(Line::from("タスクがありません"))]
+        let items = if !self.app.has_visible_tasks() {
+            let message = if self.app.filter().is_empty() {
+                "タスクがありません"
+            } else {
+                "フィルタに一致するタスクがありません"
+            };
+            vec![ListItem::new(Line::from(message))]
         } else {
             let workflow = self.app.workflow();
             self.app
-                .tasks
-                .iter()
+                .visible_tasks()
                 .map(|view| {
                     let title = Span::styled(
                         &view.snapshot.title,
@@ -888,7 +1011,7 @@ impl<S: TaskStore> Ui<S> {
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
             .highlight_symbol("▶ ");
         let mut state = ListState::default();
-        if !self.app.tasks.is_empty() {
+        if self.app.has_visible_tasks() {
             state.select(Some(self.app.selected));
         }
         f.render_stateful_widget(list, area, &mut state);
@@ -1127,7 +1250,7 @@ impl<S: TaskStore> Ui<S> {
     fn draw_status(&self, f: &mut ratatui::Frame<'_>, area: Rect) {
         let rows = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(4), Constraint::Length(3)])
+            .constraints([Constraint::Length(3), Constraint::Length(2), Constraint::Min(2)])
             .split(area);
 
         let instructions = Paragraph::new(self.instructions())
@@ -1135,10 +1258,15 @@ impl<S: TaskStore> Ui<S> {
             .wrap(Wrap { trim: true });
         f.render_widget(instructions, rows[0]);
 
+        let filter = Paragraph::new(self.filter_summary_text())
+            .block(Block::default().title("フィルタ").borders(Borders::ALL))
+            .wrap(Wrap { trim: true });
+        f.render_widget(filter, rows[1]);
+
         let message = Paragraph::new(self.status_text())
             .block(Block::default().title("ステータス").borders(Borders::ALL))
             .style(self.status_style());
-        f.render_widget(message, rows[1]);
+        f.render_widget(message, rows[2]);
     }
 
     fn draw_tree_view_popup(&self, f: &mut ratatui::Frame<'_>) {
@@ -1387,6 +1515,7 @@ impl<S: TaskStore> Ui<S> {
                     self.open_state_picker();
                     Ok(None)
                 }
+                KeyCode::Char('f' | 'F') => Ok(Some(UiAction::EditFilter)),
                 _ => Ok(None),
             },
             DetailFocus::TreeView => match key.code {
@@ -1577,6 +1706,10 @@ impl<S: TaskStore> Ui<S> {
     fn build_tree_from_root(&self, root_id: TaskId) -> Option<TreeNode> {
         let root_view = self.app.tasks.iter().find(|t| t.snapshot.id == root_id)?;
 
+        if !self.app.is_visible(root_id) {
+            return None;
+        }
+
         Some(TreeNode {
             task_id: root_view.snapshot.id,
             children: self.build_children_nodes(root_id),
@@ -1589,6 +1722,7 @@ impl<S: TaskStore> Ui<S> {
         let children = self.app.get_children(parent_id);
         children
             .iter()
+            .filter(|child| self.app.is_visible(child.snapshot.id))
             .map(|child| TreeNode {
                 task_id: child.snapshot.id,
                 children: self.build_children_nodes(child.snapshot.id),
@@ -1786,6 +1920,41 @@ impl<S: TaskStore> Ui<S> {
         Ok(())
     }
 
+    fn set_filter_with_state_kind(&mut self, mut filter: TaskFilter) {
+        self.apply_state_kind_filter_to(&mut filter);
+        self.app.set_filter(filter);
+    }
+
+    fn apply_state_kind_filter_to(&self, filter: &mut TaskFilter) {
+        apply_state_kind_filter(filter, self.app.workflow(), &self.state_kind_filter);
+    }
+
+    fn apply_filter_editor_output(&mut self, raw: &str) -> Result<()> {
+        match parse_filter_editor_output(raw) {
+            Ok(result) => {
+                let FilterEditorResult {
+                    mut filter,
+                    state_kind_filter,
+                } = result;
+                self.state_kind_filter = state_kind_filter;
+                self.apply_state_kind_filter_to(&mut filter);
+                if &filter == self.app.filter() {
+                    self.info("フィルタに変更はありません");
+                } else {
+                    self.app.set_filter(filter.clone());
+                    let summary = summarize_task_filter(&filter, Some(&self.state_kind_filter));
+                    if self.app.has_visible_tasks() {
+                        self.info(format!("フィルタを更新しました: {summary}"));
+                    } else {
+                        self.info(format!("フィルタを更新しました（該当なし）: {summary}"));
+                    }
+                }
+            }
+            Err(err) => self.error(format!("フィルタの解析に失敗しました: {err}")),
+        }
+        Ok(())
+    }
+
     fn info(&mut self, message: impl Into<String>) {
         self.message = Some(Message::info(message));
     }
@@ -1798,12 +1967,16 @@ impl<S: TaskStore> Ui<S> {
         match self.detail_focus {
             DetailFocus::None => {
                 let base =
-                    "j/k:移動 ↵:ツリー n:新規 s:子タスク e:編集 c:コメント r:再読込 p:親へ y:IDコピー t:状態 q:終了";
+                    "j/k:移動 ↵:ツリー n:新規 s:子タスク e:編集 c:コメント r:再読込 p:親へ y:IDコピー t:状態 f:フィルタ q:終了";
                 format!("{} [{} <{}>]", base, self.actor.name, self.actor.email)
             }
             DetailFocus::TreeView => "j/k:移動 h:閉じる l:開く ↵:ジャンプ q/Esc:閉じる".to_string(),
             DetailFocus::StatePicker => "j/k:移動 ↵:決定 q/Esc:キャンセル".to_string(),
         }
+    }
+
+    fn filter_summary_text(&self) -> String {
+        summarize_task_filter(self.app.filter(), Some(&self.state_kind_filter))
     }
 
     fn status_text(&self) -> Cow<'_, str> {
@@ -1832,6 +2005,7 @@ enum UiAction {
     EditTask { task: TaskId },
     CreateTask,
     CreateSubtask { parent: TaskId },
+    EditFilter,
 }
 
 fn handle_ui_action<S: TaskStore>(
@@ -1872,6 +2046,11 @@ fn handle_ui_action<S: TaskStore>(
             let template = new_task_editor_template(parent_view, hint.as_deref());
             let raw = with_terminal_suspended(terminal, || launch_editor(&template))?;
             ui.apply_new_subtask_input(parent, &raw)?;
+        }
+        UiAction::EditFilter => {
+            let template = filter_editor_template(ui.app.filter(), &ui.state_kind_filter);
+            let raw = with_terminal_suspended(terminal, || launch_editor(&template))?;
+            ui.apply_filter_editor_output(&raw)?;
         }
     }
     Ok(())
@@ -2018,6 +2197,129 @@ fn new_task_editor_template(parent: Option<&TaskView>, state_hint: Option<&str>)
     lines.join("\n")
 }
 
+fn filter_editor_template(filter: &TaskFilter, state_kind_filter: &StateKindFilter) -> String {
+    let states = filter.states.iter().cloned().collect::<Vec<_>>().join(", ");
+    let labels = filter.labels.iter().cloned().collect::<Vec<_>>().join(", ");
+    let assignees = filter.assignees.iter().cloned().collect::<Vec<_>>().join(", ");
+    let parents = filter
+        .parents
+        .iter()
+        .map(TaskId::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let children = filter
+        .children
+        .iter()
+        .map(TaskId::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let text = filter.text.clone().unwrap_or_default();
+    let updated_since = filter
+        .updated
+        .as_ref()
+        .and_then(|updated| updated.since)
+        .map(format_timestamp)
+        .unwrap_or_default();
+    let updated_until = filter
+        .updated
+        .as_ref()
+        .and_then(|updated| updated.until)
+        .map(format_timestamp)
+        .unwrap_or_default();
+
+    let lines = vec![
+        "# フィルタを編集します。空欄のフィールドは該当条件なしとして扱われます。".to_string(),
+        "# states/labels/assignees/parents/children はカンマ区切りで入力してください。".to_string(),
+        "# updated_since / updated_until は RFC3339 (例: 2025-01-01T09:00:00+09:00) 形式。".to_string(),
+        "# state_kinds には done/in_progress などの kind を指定し、!done で除外できます。".to_string(),
+        format!("# state_kinds の候補: {}", state_kind_options_hint()),
+        format!("states: {states}"),
+        format!("state_kinds: {}", state_kind_filter.to_editor_value()),
+        format!("labels: {labels}"),
+        format!("assignees: {assignees}"),
+        format!("parents: {parents}"),
+        format!("children: {children}"),
+        format!("text: {text}"),
+        format!("updated_since: {updated_since}"),
+        format!("updated_until: {updated_until}"),
+        String::new(),
+    ];
+    lines.join("\n")
+}
+
+#[derive(Debug, Clone)]
+struct FilterEditorResult {
+    filter: TaskFilter,
+    state_kind_filter: StateKindFilter,
+}
+
+#[derive(Debug, Clone)]
+struct StateKindFilter {
+    include: BTreeSet<StateKind>,
+    exclude: BTreeSet<StateKind>,
+}
+
+impl Default for StateKindFilter {
+    fn default() -> Self {
+        let mut exclude = BTreeSet::new();
+        exclude.insert(StateKind::Done);
+        Self {
+            include: BTreeSet::new(),
+            exclude,
+        }
+    }
+}
+
+impl StateKindFilter {
+    const fn empty() -> Self {
+        Self {
+            include: BTreeSet::new(),
+            exclude: BTreeSet::new(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.include.is_empty() && self.exclude.is_empty()
+    }
+
+    fn to_editor_value(&self) -> String {
+        let mut tokens = Vec::new();
+        for kind in &self.include {
+            tokens.push(state_kind_to_str(*kind).to_string());
+        }
+        for kind in &self.exclude {
+            tokens.push(format!("!{}", state_kind_to_str(*kind)));
+        }
+        tokens.join(", ")
+    }
+
+    fn summary_tokens(&self) -> Vec<String> {
+        if self.is_empty() {
+            return Vec::new();
+        }
+        let mut tokens = Vec::new();
+        if !self.include.is_empty() {
+            let includes = self
+                .include
+                .iter()
+                .map(|kind| state_kind_to_str(*kind))
+                .collect::<Vec<_>>()
+                .join(", ");
+            tokens.push(format!("state-kind={includes}"));
+        }
+        if !self.exclude.is_empty() {
+            let excludes = self
+                .exclude
+                .iter()
+                .map(|kind| state_kind_to_str(*kind))
+                .collect::<Vec<_>>()
+                .join(", ");
+            tokens.push(format!("state-kind!={excludes}"));
+        }
+        tokens
+    }
+}
+
 fn parse_new_task_editor_output(raw: &str) -> Result<Option<NewTaskData>, String> {
     let mut title: Option<&str> = None;
     let mut state: Option<&str> = None;
@@ -2101,6 +2403,187 @@ fn parse_new_task_editor_output(raw: &str) -> Result<Option<NewTaskData>, String
     }))
 }
 
+fn parse_filter_editor_output(raw: &str) -> Result<FilterEditorResult, String> {
+    let mut states = BTreeSet::new();
+    let mut labels = BTreeSet::new();
+    let mut assignees = BTreeSet::new();
+    let mut parents = BTreeSet::new();
+    let mut children = BTreeSet::new();
+    let mut text: Option<String> = None;
+    let mut updated_since: Option<OffsetDateTime> = None;
+    let mut updated_until: Option<OffsetDateTime> = None;
+    let mut state_kinds_raw: Option<&str> = None;
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = trimmed.split_once(':') else {
+            return Err(format!("フィールドの形式が正しくありません: {trimmed}"));
+        };
+        let key = key.trim();
+        let value = value.trim();
+        match key {
+            "states" => {
+                states = parse_list(value).into_iter().collect();
+            }
+            "labels" => {
+                labels = parse_list(value).into_iter().collect();
+            }
+            "assignees" => {
+                assignees = parse_list(value).into_iter().collect();
+            }
+            "parents" => {
+                parents = parse_task_id_list(value)?;
+            }
+            "children" => {
+                children = parse_task_id_list(value)?;
+            }
+            "text" => {
+                if value.is_empty() {
+                    text = None;
+                } else {
+                    text = Some(value.to_owned());
+                }
+            }
+            "updated_since" => {
+                updated_since = parse_optional_timestamp(value)?;
+            }
+            "updated_until" => {
+                updated_until = parse_optional_timestamp(value)?;
+            }
+            "state_kinds" => state_kinds_raw = Some(value),
+            unknown => return Err(format!("未知のフィールドです: {unknown}")),
+        }
+    }
+
+    let updated = match (updated_since, updated_until) {
+        (None, None) => None,
+        _ => Some(UpdatedFilter {
+            since: updated_since,
+            until: updated_until,
+        }),
+    };
+
+    let state_kind_filter = parse_state_kind_filter(state_kinds_raw.unwrap_or(""))?;
+
+    Ok(FilterEditorResult {
+        filter: TaskFilter {
+            states,
+            labels,
+            assignees,
+            parents,
+            children,
+            text,
+            updated,
+        },
+        state_kind_filter,
+    })
+}
+
+fn parse_task_id_list(input: &str) -> Result<BTreeSet<TaskId>, String> {
+    let mut ids = BTreeSet::new();
+    for value in parse_list(input) {
+        let id = TaskId::from_str(&value).map_err(|_| format!("TaskId の形式が正しくありません: {value}"))?;
+        ids.insert(id);
+    }
+    Ok(ids)
+}
+
+fn parse_optional_timestamp(input: &str) -> Result<Option<OffsetDateTime>, String> {
+    if input.is_empty() {
+        return Ok(None);
+    }
+    OffsetDateTime::parse(input, &Rfc3339)
+        .map(Some)
+        .map_err(|err| format!("時刻の形式が正しくありません ({input}): {err}"))
+}
+
+fn parse_state_kind_filter(input: &str) -> Result<StateKindFilter, String> {
+    if input.trim().is_empty() {
+        return Ok(StateKindFilter::empty());
+    }
+    let mut filter = StateKindFilter::empty();
+    for token in parse_list(input) {
+        let (negated, name) = token
+            .strip_prefix('!')
+            .map_or((false, token.as_str()), |rest| (true, rest));
+        let Some(kind) = parse_state_kind_name(name) else {
+            return Err(format!("state_kind の指定が不正です: {name}"));
+        };
+        if negated {
+            filter.exclude.insert(kind);
+        } else {
+            filter.include.insert(kind);
+        }
+    }
+    Ok(filter)
+}
+
+fn parse_state_kind_name(name: &str) -> Option<StateKind> {
+    let normalized = name.trim().to_ascii_lowercase().replace(['-', ' '], "_");
+    match normalized.as_str() {
+        "done" => Some(StateKind::Done),
+        "in_progress" => Some(StateKind::InProgress),
+        "blocked" => Some(StateKind::Blocked),
+        "todo" => Some(StateKind::Todo),
+        "backlog" => Some(StateKind::Backlog),
+        _ => None,
+    }
+}
+
+fn state_kind_to_str(kind: StateKind) -> &'static str {
+    match kind {
+        StateKind::Done => "done",
+        StateKind::InProgress => "in_progress",
+        StateKind::Blocked => "blocked",
+        StateKind::Todo => "todo",
+        StateKind::Backlog => "backlog",
+    }
+}
+
+const STATE_KIND_HINT: &str = "done, in_progress, blocked, todo, backlog";
+
+const fn state_kind_options_hint() -> &'static str {
+    STATE_KIND_HINT
+}
+
+fn apply_state_kind_filter(filter: &mut TaskFilter, workflow: &WorkflowConfig, kinds: &StateKindFilter) {
+    if kinds.is_empty() {
+        return;
+    }
+    let states_cfg = workflow.states();
+    if states_cfg.is_empty() {
+        return;
+    }
+
+    let mut states = filter.states.clone();
+
+    if !kinds.include.is_empty() {
+        for state in states_cfg {
+            if state.kind().is_some_and(|kind| kinds.include.contains(&kind)) {
+                states.insert(state.value().to_owned());
+            }
+        }
+    }
+
+    if states.is_empty() && !kinds.exclude.is_empty() {
+        states.extend(states_cfg.iter().map(|state| state.value().to_owned()));
+    }
+
+    if !kinds.exclude.is_empty() {
+        states.retain(|value| {
+            workflow
+                .find_state(value)
+                .and_then(|state| state.kind())
+                .map_or(true, |kind| !kinds.exclude.contains(&kind))
+        });
+    }
+
+    filter.states = states;
+}
+
 fn with_terminal_suspended<F, T>(terminal: &mut Terminal<CrosstermBackend<Stdout>>, f: F) -> Result<T>
 where
     F: FnOnce() -> Result<T>,
@@ -2177,6 +2660,67 @@ fn parse_list(input: &str) -> Vec<String> {
         .collect()
 }
 
+fn summarize_task_filter(filter: &TaskFilter, state_kind_filter: Option<&StateKindFilter>) -> String {
+    if filter.is_empty() && state_kind_filter.map_or(true, StateKindFilter::is_empty) {
+        return "未設定".to_string();
+    }
+    let mut parts = Vec::new();
+    if !filter.states.is_empty() {
+        parts.push(format!("state={}", join_string_set(&filter.states)));
+    }
+    if !filter.labels.is_empty() {
+        parts.push(format!("label={}", join_string_set(&filter.labels)));
+    }
+    if !filter.assignees.is_empty() {
+        parts.push(format!("assignee={}", join_string_set(&filter.assignees)));
+    }
+    if !filter.parents.is_empty() {
+        parts.push(format!("parent={}", join_task_ids(&filter.parents)));
+    }
+    if !filter.children.is_empty() {
+        parts.push(format!("child={}", join_task_ids(&filter.children)));
+    }
+    if let Some(text) = filter.text.as_deref().and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then_some(trimmed)
+    }) {
+        parts.push(format!("text=\"{text}\""));
+    }
+    if let Some(updated) = &filter.updated {
+        if let Some(since) = updated.since {
+            parts.push(format!("since={}", format_timestamp(since)));
+        }
+        if let Some(until) = updated.until {
+            parts.push(format!("until={}", format_timestamp(until)));
+        }
+    }
+    if let Some(kind_filter) = state_kind_filter {
+        parts.extend(kind_filter.summary_tokens());
+    }
+    if parts.is_empty() {
+        "未設定".into()
+    } else {
+        parts.join(" / ")
+    }
+}
+
+fn join_string_set(values: &BTreeSet<String>) -> String {
+    values.iter().map(String::as_str).collect::<Vec<_>>().join(", ")
+}
+
+fn join_task_ids(values: &BTreeSet<TaskId>) -> String {
+    values.iter().map(short_task_id).collect::<Vec<_>>().join(", ")
+}
+
+fn short_task_id(task_id: &TaskId) -> String {
+    let id = task_id.to_string();
+    id.chars().take(8).collect()
+}
+
+fn format_timestamp(ts: OffsetDateTime) -> String {
+    ts.format(&Rfc3339).unwrap_or_else(|_| ts.to_string())
+}
+
 fn resolve_actor() -> Actor {
     let name = std::env::var("GIT_MILE_ACTOR_NAME")
         .or_else(|_| std::env::var("GIT_AUTHOR_NAME"))
@@ -2216,13 +2760,14 @@ mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
+    use crate::config::StateKind;
     use anyhow::{anyhow, Result};
     use git_mile_core::event::EventKind;
     use std::cell::RefCell;
     use std::collections::{BTreeSet, HashMap};
     use std::rc::Rc;
     use std::str::FromStr;
-    use time::OffsetDateTime;
+    use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
     struct MockStore {
         tasks: RefCell<Vec<TaskId>>,
@@ -2563,6 +3108,62 @@ mod tests {
     }
 
     #[test]
+    fn app_filter_includes_ancestors_and_descendants() -> Result<()> {
+        let root = fixed_task_id(1);
+        let child = fixed_task_id(2);
+        let grandchild = fixed_task_id(3);
+
+        let store = MockStore::new()
+            .with_task(root, vec![created(root, 0, "Root")])
+            .with_task(
+                child,
+                vec![created(child, 10, "Child"), child_link(11, root, child)],
+            )
+            .with_task(
+                grandchild,
+                vec![
+                    created(grandchild, 20, "Grandchild"),
+                    child_link(21, child, grandchild),
+                ],
+            );
+        let mut app = App::new(store, WorkflowConfig::default())?;
+        let mut filter = TaskFilter::default();
+        filter.text = Some("Grand".into());
+        app.set_filter(filter);
+
+        let titles: Vec<String> = app
+            .visible_tasks()
+            .map(|view| view.snapshot.title.clone())
+            .collect();
+        assert_eq!(titles, vec!["Grandchild", "Child", "Root"]);
+        Ok(())
+    }
+
+    #[test]
+    fn app_filter_matching_parent_shows_descendants() -> Result<()> {
+        let root = fixed_task_id(1);
+        let child = fixed_task_id(2);
+
+        let store = MockStore::new()
+            .with_task(root, vec![created(root, 0, "Root")])
+            .with_task(
+                child,
+                vec![created(child, 10, "Child"), child_link(11, root, child)],
+            );
+        let mut app = App::new(store, WorkflowConfig::default())?;
+        let mut filter = TaskFilter::default();
+        filter.text = Some("Root".into());
+        app.set_filter(filter);
+
+        let titles: Vec<String> = app
+            .visible_tasks()
+            .map(|view| view.snapshot.title.clone())
+            .collect();
+        assert_eq!(titles, vec!["Child", "Root"]);
+        Ok(())
+    }
+
+    #[test]
     fn tree_view_includes_parent_and_child() -> Result<()> {
         let parent = TaskId::new();
         let child = TaskId::new();
@@ -2823,6 +3424,90 @@ assignees:
 ";
         let err = parse_new_task_editor_output(raw).expect_err("should error");
         assert_eq!(err, "タイトルを入力してください");
+    }
+
+    #[test]
+    fn filter_editor_output_parses_all_fields() {
+        let parent = fixed_task_id(1);
+        let child = fixed_task_id(2);
+        let raw = format!(
+            "\
+states: state/todo,state/done
+state_kinds: !done
+labels: type/bug
+assignees: alice
+parents: {parent}
+children: {child}
+text: panic
+updated_since: 2025-01-01T00:00:00Z
+updated_until: 2025-01-02T00:00:00Z
+"
+        );
+        let result = parse_filter_editor_output(&raw).expect("parse succeeds");
+        let filter = result.filter;
+        assert!(filter.states.contains("state/todo"));
+        assert!(filter.labels.contains("type/bug"));
+        assert!(filter.assignees.contains("alice"));
+        assert!(filter.parents.contains(&parent));
+        assert!(filter.children.contains(&child));
+        assert_eq!(filter.text.as_deref(), Some("panic"));
+        assert!(result.state_kind_filter.exclude.contains(&StateKind::Done));
+        let updated = filter.updated.expect("updated filter");
+        let expected_since = OffsetDateTime::parse("2025-01-01T00:00:00Z", &Rfc3339).expect("ts");
+        let expected_until = OffsetDateTime::parse("2025-01-02T00:00:00Z", &Rfc3339).expect("ts");
+        assert_eq!(updated.since, Some(expected_since));
+        assert_eq!(updated.until, Some(expected_until));
+    }
+
+    #[test]
+    fn filter_editor_output_rejects_invalid_timestamp() {
+        let err = parse_filter_editor_output("updated_since: invalid").expect_err("should error");
+        assert!(err.contains("時刻"));
+    }
+
+    #[test]
+    fn summarize_task_filter_lists_active_fields() {
+        let mut filter = TaskFilter::default();
+        filter.states.insert("state/todo".into());
+        filter.text = Some("panic".into());
+        let summary = summarize_task_filter(&filter, None);
+        assert!(summary.contains("state=state/todo"));
+        assert!(summary.contains("text=\"panic\""));
+    }
+
+    #[test]
+    fn summarize_task_filter_includes_state_kind_clause() {
+        let filter = TaskFilter::default();
+        let mut kind_filter = StateKindFilter::empty();
+        kind_filter.exclude.insert(StateKind::Done);
+        let summary = summarize_task_filter(&filter, Some(&kind_filter));
+        assert!(summary.contains("state-kind!=done"));
+    }
+
+    #[test]
+    fn parse_state_kind_filter_handles_include_and_exclude() {
+        let filter = parse_state_kind_filter("in_progress, !done").expect("parse succeeds");
+        assert!(filter.include.contains(&StateKind::InProgress));
+        assert!(filter.exclude.contains(&StateKind::Done));
+    }
+
+    #[test]
+    fn apply_state_kind_filter_excludes_done_states() {
+        let workflow: WorkflowConfig = toml::from_str(
+            r#"
+states = [
+  { value = "state/todo", kind = "todo" },
+  { value = "state/done", kind = "done" }
+]
+"#,
+        )
+        .expect("workflow config");
+        let mut filter = TaskFilter::default();
+        let mut kind_filter = StateKindFilter::empty();
+        kind_filter.exclude.insert(StateKind::Done);
+        apply_state_kind_filter(&mut filter, &workflow, &kind_filter);
+        assert!(filter.states.contains("state/todo"));
+        assert!(!filter.states.contains("state/done"));
     }
 
     #[test]
