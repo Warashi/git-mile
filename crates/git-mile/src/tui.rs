@@ -920,6 +920,29 @@ fn default_clipboard() -> Box<dyn ClipboardSink> {
     }
 }
 
+fn truncate_with_ellipsis<'a>(input: &'a str, max_chars: usize) -> Cow<'a, str> {
+    const ELLIPSIS: &str = "...";
+    const ELLIPSIS_LEN: usize = 3;
+
+    if max_chars == 0 {
+        return Cow::Owned(String::new());
+    }
+
+    if input.chars().count() <= max_chars {
+        return Cow::Borrowed(input);
+    }
+
+    if max_chars <= ELLIPSIS_LEN {
+        let truncated: String = input.chars().take(max_chars).collect();
+        return Cow::Owned(truncated);
+    }
+
+    let keep = max_chars - ELLIPSIS_LEN;
+    let mut truncated: String = input.chars().take(keep).collect();
+    truncated.push_str(ELLIPSIS);
+    Cow::Owned(truncated)
+}
+
 struct Ui<S: TaskStore> {
     app: App<S>,
     actor: Actor,
@@ -1104,11 +1127,7 @@ impl<S: TaskStore> Ui<S> {
         // Add parent tasks
         for parent in &parents {
             breadcrumb_items.push(Span::raw(" > "));
-            let parent_title: Cow<'_, str> = if parent.snapshot.title.len() > 20 {
-                Cow::Owned(format!("{}...", &parent.snapshot.title[..17]))
-            } else {
-                Cow::Borrowed(parent.snapshot.title.as_str())
-            };
+            let parent_title = truncate_with_ellipsis(parent.snapshot.title.as_str(), 20);
             breadcrumb_items.push(Span::raw(parent_title));
         }
 
@@ -1166,13 +1185,7 @@ impl<S: TaskStore> Ui<S> {
             } else {
                 let parent_titles: Vec<Cow<'_, str>> = parents
                     .iter()
-                    .map(|p| {
-                        if p.snapshot.title.len() > 15 {
-                            Cow::Owned(format!("{}...", &p.snapshot.title[..12]))
-                        } else {
-                            Cow::Borrowed(p.snapshot.title.as_str())
-                        }
-                    })
+                    .map(|p| truncate_with_ellipsis(p.snapshot.title.as_str(), 15))
                     .collect();
                 let joined = parent_titles
                     .iter()
@@ -2757,6 +2770,21 @@ mod tests {
             }
             store
         }
+    }
+
+    #[test]
+    fn truncate_with_ellipsis_returns_borrowed_when_short() {
+        let title = "Short title";
+        assert!(matches!(
+            truncate_with_ellipsis(title, 20),
+            Cow::Borrowed(result) if result == title
+        ));
+    }
+
+    #[test]
+    fn truncate_with_ellipsis_handles_multibyte_titles() {
+        let title = "あいうえおかきくけこ";
+        assert_eq!(truncate_with_ellipsis(title, 5), "あい...");
     }
 
     impl TaskStore for MockStore {
