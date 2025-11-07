@@ -36,6 +36,7 @@ use ratatui::{
 use tempfile::NamedTempFile;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use tracing::{subscriber::NoSubscriber, warn};
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Storage abstraction so the TUI logic can be unit-tested.
 pub trait TaskStore {
@@ -920,25 +921,28 @@ fn default_clipboard() -> Box<dyn ClipboardSink> {
     }
 }
 
-fn truncate_with_ellipsis<'a>(input: &'a str, max_chars: usize) -> Cow<'a, str> {
+fn truncate_with_ellipsis<'a>(input: &'a str, max_graphemes: usize) -> Cow<'a, str> {
     const ELLIPSIS: &str = "...";
-    const ELLIPSIS_LEN: usize = 3;
+    const ELLIPSIS_GRAPHEMES: usize = 3;
 
-    if max_chars == 0 {
+    if max_graphemes == 0 {
         return Cow::Owned(String::new());
     }
 
-    if input.chars().count() <= max_chars {
+    let grapheme_count = UnicodeSegmentation::graphemes(input, true).count();
+    if grapheme_count <= max_graphemes {
         return Cow::Borrowed(input);
     }
 
-    if max_chars <= ELLIPSIS_LEN {
-        let truncated: String = input.chars().take(max_chars).collect();
+    if max_graphemes <= ELLIPSIS_GRAPHEMES {
+        let truncated: String = UnicodeSegmentation::graphemes(input, true)
+            .take(max_graphemes)
+            .collect();
         return Cow::Owned(truncated);
     }
 
-    let keep = max_chars - ELLIPSIS_LEN;
-    let mut truncated: String = input.chars().take(keep).collect();
+    let keep = max_graphemes - ELLIPSIS_GRAPHEMES;
+    let mut truncated: String = UnicodeSegmentation::graphemes(input, true).take(keep).collect();
     truncated.push_str(ELLIPSIS);
     Cow::Owned(truncated)
 }
@@ -2785,6 +2789,12 @@ mod tests {
     fn truncate_with_ellipsis_handles_multibyte_titles() {
         let title = "あいうえおかきくけこ";
         assert_eq!(truncate_with_ellipsis(title, 5), "あい...");
+    }
+
+    #[test]
+    fn truncate_with_ellipsis_keeps_grapheme_clusters_intact() {
+        let title = "a\u{0301}bcdef";
+        assert_eq!(truncate_with_ellipsis(title, 4), "a\u{0301}...");
     }
 
     impl TaskStore for MockStore {

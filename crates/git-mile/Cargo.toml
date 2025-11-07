@@ -33,3 +33,4 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }
 toml = "0.8"
 arboard = "3"
 base64 = "0.22"
+unicode-segmentation = "1.11"
