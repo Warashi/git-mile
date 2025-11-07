@@ -6,7 +6,7 @@
 }:
 rustPlatform.buildRustPackage (finalAttrs: {
   pname = "git-mile";
-  version = "0.0.1";
+  version = "0.1.0";
 
   src = ./.;
 
