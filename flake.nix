@@ -107,10 +107,11 @@
               ];
               devshell = {
                 packages = [
-                  nixfmt
+                  clang
                   just
                   llvmPackages.libclang
-                  clang
+                  nixfmt
+                  tombi
                   (rust-bin.fromRustupToolchainFile ./rust-toolchain.toml)
                 ];
                 startup = {
