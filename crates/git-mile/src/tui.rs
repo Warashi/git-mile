@@ -2513,7 +2513,7 @@ const fn state_kind_options_hint() -> &'static str {
     STATE_KIND_HINT
 }
 
-fn state_kind_marker(kind: Option<StateKind>) -> &'static str {
+const fn state_kind_marker(kind: Option<StateKind>) -> &'static str {
     match kind {
         Some(StateKind::Done) => " ✓",
         Some(StateKind::InProgress) => " →",
