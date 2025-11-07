@@ -935,6 +935,13 @@ struct Ui<S: TaskStore> {
 }
 
 impl<S: TaskStore> Ui<S> {
+    const MAIN_MIN_HEIGHT: u16 = 5;
+    const INSTRUCTIONS_HEIGHT: u16 = 3;
+    const FILTER_HEIGHT: u16 = 3;
+    const STATUS_MESSAGE_MIN_HEIGHT: u16 = 3;
+    const STATUS_FOOTER_MIN_HEIGHT: u16 =
+        Self::INSTRUCTIONS_HEIGHT + Self::FILTER_HEIGHT + Self::STATUS_MESSAGE_MIN_HEIGHT;
+
     fn new(app: App<S>, actor: Actor) -> Self {
         let clipboard = default_clipboard();
         Self::with_clipboard(app, actor, clipboard)
@@ -968,7 +975,10 @@ impl<S: TaskStore> Ui<S> {
         let size = f.area();
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(5), Constraint::Length(7)])
+            .constraints([
+                Constraint::Min(Self::MAIN_MIN_HEIGHT),
+                Constraint::Length(Self::STATUS_FOOTER_MIN_HEIGHT),
+            ])
             .split(size);
 
         self.draw_main(f, chunks[0]);
@@ -1289,7 +1299,11 @@ impl<S: TaskStore> Ui<S> {
     }
 
     const fn status_layout_constraints() -> [Constraint; 3] {
-        [Constraint::Length(3), Constraint::Length(3), Constraint::Min(3)]
+        [
+            Constraint::Length(Self::INSTRUCTIONS_HEIGHT),
+            Constraint::Length(Self::FILTER_HEIGHT),
+            Constraint::Min(Self::STATUS_MESSAGE_MIN_HEIGHT),
+        ]
     }
 
     fn draw_tree_view_popup(&self, f: &mut ratatui::Frame<'_>) {
@@ -2705,7 +2719,7 @@ mod tests {
     use crate::config::StateKind;
     use anyhow::{anyhow, Result};
     use git_mile_core::event::EventKind;
-    use ratatui::layout::{Direction, Layout, Rect};
+    use ratatui::layout::{Constraint, Direction, Layout, Rect};
     use std::cell::RefCell;
     use std::collections::{BTreeSet, HashMap};
     use std::rc::Rc;
@@ -2804,6 +2818,20 @@ mod tests {
 
     fn child_link(secs: i64, parent: TaskId, child: TaskId) -> Event {
         event(child, ts(secs), EventKind::ChildLinked { parent, child })
+    }
+
+    #[test]
+    fn status_footer_height_matches_constraints() {
+        let constraints = Ui::<MockStore>::status_layout_constraints();
+        let total: u16 = constraints.iter().map(min_height_for_constraint).sum();
+        assert_eq!(total, Ui::<MockStore>::STATUS_FOOTER_MIN_HEIGHT);
+    }
+
+    const fn min_height_for_constraint(constraint: &Constraint) -> u16 {
+        match *constraint {
+            Constraint::Length(value) | Constraint::Min(value) => value,
+            _ => 0,
+        }
     }
 
     #[derive(Default)]
