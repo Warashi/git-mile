@@ -1269,7 +1269,7 @@ impl<S: TaskStore> Ui<S> {
     fn draw_status(&self, f: &mut ratatui::Frame<'_>, area: Rect) {
         let rows = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(3), Constraint::Length(2), Constraint::Min(2)])
+            .constraints(Self::status_layout_constraints())
             .split(area);
 
         let instructions = Paragraph::new(self.instructions())
@@ -1286,6 +1286,10 @@ impl<S: TaskStore> Ui<S> {
             .block(Block::default().title("ステータス").borders(Borders::ALL))
             .style(self.status_style());
         f.render_widget(message, rows[2]);
+    }
+
+    const fn status_layout_constraints() -> [Constraint; 3] {
+        [Constraint::Length(3), Constraint::Length(3), Constraint::Min(3)]
     }
 
     fn draw_tree_view_popup(&self, f: &mut ratatui::Frame<'_>) {
@@ -2701,6 +2705,7 @@ mod tests {
     use crate::config::StateKind;
     use anyhow::{anyhow, Result};
     use git_mile_core::event::EventKind;
+    use ratatui::layout::{Direction, Layout, Rect};
     use std::cell::RefCell;
     use std::collections::{BTreeSet, HashMap};
     use std::rc::Rc;
@@ -3437,6 +3442,18 @@ updated_until: 2025-01-02T00:00:00Z
         let filter = parse_state_kind_filter("in_progress, !done").expect("parse succeeds");
         assert!(filter.include.contains(&StateKind::InProgress));
         assert!(filter.exclude.contains(&StateKind::Done));
+    }
+
+    #[test]
+    fn status_layout_allocates_space_for_filter_and_status_blocks() {
+        let area = Rect::new(0, 0, 80, 12);
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(Ui::<MockStore>::status_layout_constraints())
+            .split(area);
+        assert_eq!(rows.len(), 3);
+        assert!(rows[1].height >= 3, "フィルタ欄の高さが不足しています");
+        assert!(rows[2].height >= 3, "ステータス欄の高さが不足しています");
     }
 
     #[test]
