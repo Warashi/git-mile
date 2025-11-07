@@ -921,7 +921,7 @@ fn default_clipboard() -> Box<dyn ClipboardSink> {
     }
 }
 
-fn truncate_with_ellipsis<'a>(input: &'a str, max_graphemes: usize) -> Cow<'a, str> {
+fn truncate_with_ellipsis(input: &str, max_graphemes: usize) -> Cow<'_, str> {
     const ELLIPSIS: &str = "...";
     const ELLIPSIS_GRAPHEMES: usize = 3;
 
