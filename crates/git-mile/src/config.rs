@@ -4,9 +4,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{anyhow, bail, Context, Result};
-use git2::Repository;
+use anyhow::{Context, Result, anyhow, bail};
 pub use git_mile_core::StateKind;
+use git2::Repository;
 use serde::Deserialize;
 
 const CONFIG_DIR: &str = ".git-mile";

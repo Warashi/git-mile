@@ -1,9 +1,9 @@
 //! Git-backed storage implementation for git-mile.
 
-use anyhow::{anyhow, Context, Result};
-use git2::{Commit, Oid, Repository, Signature, Sort};
+use anyhow::{Context, Result, anyhow};
 use git_mile_core::event::Event;
 use git_mile_core::id::TaskId;
+use git2::{Commit, Oid, Repository, Signature, Sort};
 use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -169,10 +169,10 @@ impl GitStore {
         for r in self.repo.references_glob("refs/git-mile/tasks/*")? {
             let r = r?;
             let name = r.name().ok_or_else(|| anyhow!("Invalid ref name"))?;
-            if let Some(id_str) = name.strip_prefix("refs/git-mile/tasks/") {
-                if let Ok(id) = id_str.parse() {
-                    ids.push(id);
-                }
+            if let Some(id_str) = name.strip_prefix("refs/git-mile/tasks/")
+                && let Ok(id) = id_str.parse()
+            {
+                ids.push(id);
             }
         }
         Ok(ids)

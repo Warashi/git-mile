@@ -1,16 +1,16 @@
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use git2::Oid;
+use git_mile_core::TaskSnapshot;
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::{EventId, TaskId};
-use git_mile_core::TaskSnapshot;
 use git_mile_store_git::GitStore;
+use git2::Oid;
 
+use crate::Command;
 use crate::config::WorkflowConfig;
 #[cfg(test)]
 use crate::config::WorkflowState;
-use crate::Command;
 
 /// Minimal abstraction over the backing event store so command handlers can be unit-tested.
 pub trait TaskRepository {

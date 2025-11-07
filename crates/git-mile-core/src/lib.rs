@@ -10,15 +10,15 @@ pub use state::StateKind;
 
 use crate::event::{Event, EventKind};
 use crate::id::{EventId, TaskId};
+use crdts::CmRDT;
 use crdts::lwwreg::LWWReg;
 use crdts::orswot::Orswot;
-use crdts::CmRDT;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::Hash;
-use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 /// Sorted view over a slice of events.
 #[derive(Debug)]
@@ -355,15 +355,15 @@ impl UpdatedFilter {
         let Some(actual) = ts else {
             return false;
         };
-        if let Some(since) = self.since {
-            if actual < since {
-                return false;
-            }
+        if let Some(since) = self.since
+            && actual < since
+        {
+            return false;
         }
-        if let Some(until) = self.until {
-            if actual > until {
-                return false;
-            }
+        if let Some(until) = self.until
+            && actual > until
+        {
+            return false;
         }
         true
     }
@@ -544,11 +544,7 @@ impl EventStamp {
     }
 
     fn max(self, other: Self) -> Self {
-        if other > self {
-            other
-        } else {
-            self
-        }
+        if other > self { other } else { self }
     }
 
     fn into_rfc3339(self) -> Option<String> {

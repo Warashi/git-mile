@@ -13,28 +13,28 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::config::{StateKind, WorkflowConfig, WorkflowState};
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use arboard::Clipboard as ArboardClipboard;
-use base64::{engine::general_purpose::STANDARD as Base64Standard, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as Base64Standard};
 use crossterm::{
     event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::{EventId, TaskId};
 use git_mile_core::{OrderedEvents, StateKindFilter, TaskFilter, TaskSnapshot, UpdatedFilter};
 use git_mile_store_git::GitStore;
 use ratatui::{
+    Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
-    Terminal,
 };
 use tempfile::NamedTempFile;
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tracing::{subscriber::NoSubscriber, warn};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -280,10 +280,10 @@ impl<S: TaskStore> App<S> {
         if self.visible.is_empty() {
             return 0;
         }
-        if let Some(id) = preferred {
-            if let Some(index) = self.visible_index_of(id) {
-                return index;
-            }
+        if let Some(id) = preferred
+            && let Some(index) = self.visible_index_of(id)
+        {
+            return index;
         }
         self.selected.min(self.visible.len() - 1)
     }
@@ -731,10 +731,10 @@ fn run_event_loop(
         if event::poll(timeout)? {
             let evt = event::read()?;
             if let CrosstermEvent::Key(key) = evt {
-                if let Some(action) = ui.handle_key(key)? {
-                    if let Err(err) = handle_ui_action(terminal, &mut ui, action) {
-                        ui.error(format!("エディタ処理中に失敗しました: {err}"));
-                    }
+                if let Some(action) = ui.handle_key(key)?
+                    && let Err(err) = handle_ui_action(terminal, &mut ui, action)
+                {
+                    ui.error(format!("エディタ処理中に失敗しました: {err}"));
                 }
             } else {
                 // リサイズやその他のイベントは次の描画サイクルで自然に反映される。
@@ -1705,10 +1705,10 @@ impl<S: TaskStore> Ui<S> {
             }
         }
 
-        if let Some(current) = current_state {
-            if !options.iter().any(|option| option.matches(Some(current))) {
-                options.push(StatePickerOption::new(Some(current.to_owned())));
-            }
+        if let Some(current) = current_state
+            && !options.iter().any(|option| option.matches(Some(current)))
+        {
+            options.push(StatePickerOption::new(Some(current.to_owned())));
         }
 
         options
@@ -1860,15 +1860,14 @@ impl<S: TaskStore> Ui<S> {
 
     fn move_to_parent_in_tree(&mut self, task_id: TaskId) {
         let parents = self.app.get_parents(task_id);
-        if let Some(parent) = parents.first() {
-            if let Some(index) = self
+        if let Some(parent) = parents.first()
+            && let Some(index) = self
                 .tree_state
                 .visible_nodes
                 .iter()
                 .position(|(_, id)| *id == parent.snapshot.id)
-            {
-                self.tree_state.selected = index;
-            }
+        {
+            self.tree_state.selected = index;
         }
     }
 
@@ -2007,8 +2006,7 @@ impl<S: TaskStore> Ui<S> {
     fn instructions(&self) -> String {
         match self.detail_focus {
             DetailFocus::None => {
-                let base =
-                    "j/k:移動 ↵:ツリー n:新規 s:子タスク e:編集 c:コメント r:再読込 p:親へ y:IDコピー t:状態 f:フィルタ q:終了";
+                let base = "j/k:移動 ↵:ツリー n:新規 s:子タスク e:編集 c:コメント r:再読込 p:親へ y:IDコピー t:状態 f:フィルタ q:終了";
                 format!("{} [{} <{}>]", base, self.actor.name, self.actor.email)
             }
             DetailFocus::TreeView => "j/k:移動 h:閉じる l:開く ↵:ジャンプ q/Esc:閉じる".to_string(),
@@ -2032,10 +2030,10 @@ impl<S: TaskStore> Ui<S> {
     }
 
     fn tick(&mut self) {
-        if let Some(msg) = &self.message {
-            if msg.is_expired(Duration::from_secs(5)) {
-                self.message = None;
-            }
+        if let Some(msg) = &self.message
+            && msg.is_expired(Duration::from_secs(5))
+        {
+            self.message = None;
         }
     }
 }
@@ -2734,14 +2732,14 @@ mod tests {
 
     use super::*;
     use crate::config::StateKind;
-    use anyhow::{anyhow, Result};
+    use anyhow::{Result, anyhow};
     use git_mile_core::event::EventKind;
     use ratatui::layout::{Constraint, Direction, Layout, Rect};
     use std::cell::RefCell;
     use std::collections::{BTreeSet, HashMap};
     use std::rc::Rc;
     use std::str::FromStr;
-    use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+    use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
     struct MockStore {
         tasks: RefCell<Vec<TaskId>>,
@@ -3579,27 +3577,41 @@ updated_until: 2025-01-02T00:00:00Z
         let events = app.store.events.borrow();
         let stored = events.get(&task).expect("events for task");
         assert_eq!(stored.len(), 8);
-        assert!(stored
-            .iter()
-            .any(|ev| matches!(ev.kind, EventKind::TaskTitleSet { .. })));
-        assert!(stored
-            .iter()
-            .any(|ev| matches!(ev.kind, EventKind::TaskStateCleared)));
-        assert!(stored
-            .iter()
-            .any(|ev| matches!(ev.kind, EventKind::TaskDescriptionSet { .. })));
-        assert!(stored
-            .iter()
-            .any(|ev| matches!(ev.kind, EventKind::LabelsAdded { .. })));
-        assert!(stored
-            .iter()
-            .any(|ev| matches!(ev.kind, EventKind::LabelsRemoved { .. })));
-        assert!(stored
-            .iter()
-            .any(|ev| matches!(ev.kind, EventKind::AssigneesAdded { .. })));
-        assert!(stored
-            .iter()
-            .any(|ev| matches!(ev.kind, EventKind::AssigneesRemoved { .. })));
+        assert!(
+            stored
+                .iter()
+                .any(|ev| matches!(ev.kind, EventKind::TaskTitleSet { .. }))
+        );
+        assert!(
+            stored
+                .iter()
+                .any(|ev| matches!(ev.kind, EventKind::TaskStateCleared))
+        );
+        assert!(
+            stored
+                .iter()
+                .any(|ev| matches!(ev.kind, EventKind::TaskDescriptionSet { .. }))
+        );
+        assert!(
+            stored
+                .iter()
+                .any(|ev| matches!(ev.kind, EventKind::LabelsAdded { .. }))
+        );
+        assert!(
+            stored
+                .iter()
+                .any(|ev| matches!(ev.kind, EventKind::LabelsRemoved { .. }))
+        );
+        assert!(
+            stored
+                .iter()
+                .any(|ev| matches!(ev.kind, EventKind::AssigneesAdded { .. }))
+        );
+        assert!(
+            stored
+                .iter()
+                .any(|ev| matches!(ev.kind, EventKind::AssigneesRemoved { .. }))
+        );
         Ok(())
     }
 
@@ -3686,9 +3698,11 @@ updated_until: 2025-01-02T00:00:00Z
         let events = app.store.events.borrow();
         let stored = events.get(&task).expect("events for task");
         assert_eq!(stored.len(), 2);
-        assert!(stored
-            .iter()
-            .any(|ev| matches!(&ev.kind, EventKind::TaskStateSet { state, .. } if state == "state/done")));
+        assert!(
+            stored
+                .iter()
+                .any(|ev| matches!(&ev.kind, EventKind::TaskStateSet { state, .. } if state == "state/done"))
+        );
         Ok(())
     }
 

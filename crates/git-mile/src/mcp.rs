@@ -1,19 +1,19 @@
 //! MCP server implementation for git-mile.
 
 use crate::config::WorkflowConfig;
+use git_mile_core::TaskSnapshot;
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::TaskId;
-use git_mile_core::TaskSnapshot;
 use git_mile_store_git::GitStore;
+use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::tool::{ToolCallContext, ToolRouter};
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
     CallToolRequestParam, CallToolResult, Content, Implementation, InitializeResult, ListToolsResult,
     ProtocolVersion, ServerCapabilities,
 };
 use rmcp::service::{RequestContext, RoleServer};
-use rmcp::{tool, tool_router, ErrorData as McpError};
+use rmcp::{ErrorData as McpError, tool, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -638,12 +638,12 @@ impl ServerHandler for GitMileServer {
 mod tests {
     use super::*;
     use anyhow::Result;
-    use git2::Repository;
     use git_mile_core::{
+        StateKind, TaskSnapshot,
         event::{Actor, Event, EventKind},
         id::TaskId,
-        StateKind, TaskSnapshot,
     };
+    use git2::Repository;
     use rmcp::model::{ErrorCode, RawContent};
     use tempfile::tempdir;
 
