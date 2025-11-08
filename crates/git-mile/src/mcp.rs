@@ -839,7 +839,7 @@ impl ServerHandler for GitMileServer {
 mod tests {
     use super::*;
     use crate::config::WorkflowState;
-    use anyhow::Result;
+    use anyhow::{Context, Result, anyhow};
     use git_mile_core::{
         StateKind, TaskSnapshot,
         event::{Actor, Event, EventKind},
@@ -988,7 +988,7 @@ mod tests {
                     ..Default::default()
                 }))
                 .await?,
-        );
+        )?;
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].id, done_task);
 
@@ -999,7 +999,7 @@ mod tests {
                     ..Default::default()
                 }))
                 .await?,
-        );
+        )?;
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].id, todo_task);
 
@@ -1010,7 +1010,7 @@ mod tests {
                     ..Default::default()
                 }))
                 .await?,
-        );
+        )?;
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].id, done_task);
 
@@ -1021,7 +1021,7 @@ mod tests {
                     ..Default::default()
                 }))
                 .await?,
-        );
+        )?;
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].id, todo_task);
 
@@ -1066,7 +1066,7 @@ mod tests {
             server
                 .create_task(Parameters(create_task_params("Parent task", vec![])))
                 .await?,
-        );
+        )?;
         let parent = parent_snapshot.id;
 
         let _child1 = server
@@ -1157,7 +1157,7 @@ mod tests {
                 parent_task_id: parent.to_string(),
             }))
             .await?;
-        let subtasks = decode_task_list(result);
+        let subtasks = decode_task_list(result)?;
         assert_eq!(subtasks.len(), 1);
         assert_eq!(subtasks[0].id, child);
         Ok(())
@@ -1184,26 +1184,30 @@ mod tests {
         Ok(())
     }
 
-    fn decode_task_list(result: CallToolResult) -> Vec<TaskSnapshot> {
-        let Some(content) = result.content.first() else {
-            panic!("tool response should include content");
+    fn decode_task_list(result: CallToolResult) -> Result<Vec<TaskSnapshot>> {
+        let content = result
+            .content
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("tool response should include content"))?;
+        let text = match content.raw {
+            RawContent::Text(block) => block.text,
+            _ => return Err(anyhow!("expected text content")),
         };
-        let text = match &content.raw {
-            RawContent::Text(block) => block.text.clone(),
-            _ => panic!("expected text content"),
-        };
-        serde_json::from_str(&text).expect("must decode task snapshots")
+        serde_json::from_str(&text).context("must decode task snapshots")
     }
 
-    fn decode_task_result(result: CallToolResult) -> TaskSnapshot {
-        let Some(content) = result.content.first() else {
-            panic!("tool response should include content");
+    fn decode_task_result(result: CallToolResult) -> Result<TaskSnapshot> {
+        let content = result
+            .content
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("tool response should include content"))?;
+        let text = match content.raw {
+            RawContent::Text(block) => block.text,
+            _ => return Err(anyhow!("expected text content")),
         };
-        let text = match &content.raw {
-            RawContent::Text(block) => block.text.clone(),
-            _ => panic!("expected text content"),
-        };
-        serde_json::from_str(&text).expect("must decode task snapshot")
+        serde_json::from_str(&text).context("must decode task snapshot")
     }
 
     fn create_task_params(title: &str, parents: Vec<String>) -> CreateTaskParams {
