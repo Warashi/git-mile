@@ -151,6 +151,13 @@ pub struct GetTaskParams {
     pub task_id: String,
 }
 
+/// Parameters for listing subtasks of a parent task.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ListSubtasksParams {
+    /// Parent task ID whose subtasks to list.
+    pub parent_task_id: String,
+}
+
 /// Workflow state entry returned by the MCP tool.
 #[derive(Debug, Serialize, Deserialize)]
 struct WorkflowStateEntry {
@@ -263,6 +270,50 @@ impl GitMileServer {
 
         let snapshot = TaskSnapshot::replay(&events);
         let json_str = serde_json::to_string_pretty(&snapshot)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json_str)]))
+    }
+
+    /// List all subtasks of a parent task.
+    #[tool(description = "List all subtasks (children) of a given parent task")]
+    async fn list_subtasks(
+        &self,
+        Parameters(params): Parameters<ListSubtasksParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let parent_id_raw = params.parent_task_id.clone();
+        let parent: TaskId = parent_id_raw
+            .parse()
+            .map_err(|e| McpError::invalid_params(format!("Invalid parent task ID: {e}"), None))?;
+
+        let store = self.store.lock().await;
+
+        // Load parent task and get its children
+        let parent_events = store.load_events(parent).map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("Task not found") {
+                McpError::invalid_params(format!("Parent task not found: {parent_id_raw}"), None)
+            } else {
+                McpError::internal_error(msg, None)
+            }
+        })?;
+
+        let parent_snapshot = TaskSnapshot::replay(&parent_events);
+        let child_ids = parent_snapshot.children;
+
+        // Load all subtasks
+        let mut subtasks = Vec::new();
+        for child_id in child_ids {
+            let child_events = store
+                .load_events(child_id)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            let child_snapshot = TaskSnapshot::replay(&child_events);
+            subtasks.push(child_snapshot);
+        }
+
+        drop(store);
+
+        let json_str = serde_json::to_string_pretty(&subtasks)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         Ok(CallToolResult::success(vec![Content::text(json_str)]))
@@ -819,6 +870,131 @@ mod tests {
         assert_eq!(response.default_state.as_deref(), Some("state/todo"));
         assert_eq!(response.states.len(), 2);
         assert_eq!(response.states[0].value, "state/todo");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_subtasks_returns_children() -> Result<()> {
+        let repo = tempdir()?;
+        Repository::init(repo.path())?;
+        let store = GitStore::open(repo.path())?;
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+
+        // Create parent task
+        let parent = TaskId::new();
+        let parent_event = Event::new(
+            parent,
+            &actor,
+            EventKind::TaskCreated {
+                title: "Parent task".into(),
+                labels: vec![],
+                assignees: vec![],
+                description: None,
+                state: None,
+                state_kind: None,
+            },
+        );
+        store.append_event(&parent_event)?;
+
+        // Create two child tasks
+        let child1 = TaskId::new();
+        let child1_event = Event::new(
+            child1,
+            &actor,
+            EventKind::TaskCreated {
+                title: "Child 1".into(),
+                labels: vec![],
+                assignees: vec![],
+                description: None,
+                state: None,
+                state_kind: None,
+            },
+        );
+        store.append_event(&child1_event)?;
+
+        let child2 = TaskId::new();
+        let child2_event = Event::new(
+            child2,
+            &actor,
+            EventKind::TaskCreated {
+                title: "Child 2".into(),
+                labels: vec![],
+                assignees: vec![],
+                description: None,
+                state: None,
+                state_kind: None,
+            },
+        );
+        store.append_event(&child2_event)?;
+
+        // Link children to parent
+        let link1 = Event::new(
+            parent,
+            &actor,
+            EventKind::ChildLinked {
+                parent,
+                child: child1,
+            },
+        );
+        store.append_event(&link1)?;
+
+        let link2 = Event::new(
+            parent,
+            &actor,
+            EventKind::ChildLinked {
+                parent,
+                child: child2,
+            },
+        );
+        store.append_event(&link2)?;
+
+        let server = GitMileServer::new(store, WorkflowConfig::default());
+
+        // Test list_subtasks
+        let result = server
+            .list_subtasks(Parameters(ListSubtasksParams {
+                parent_task_id: parent.to_string(),
+            }))
+            .await?;
+
+        let Some(content) = result.content.first() else {
+            panic!("tool response should include content");
+        };
+        let text = match &content.raw {
+            RawContent::Text(block) => block.text.clone(),
+            _ => panic!("expected text content"),
+        };
+        let subtasks: Vec<TaskSnapshot> = serde_json::from_str(&text)?;
+
+        assert_eq!(subtasks.len(), 2);
+        let titles: Vec<_> = subtasks.iter().map(|s| s.title.as_str()).collect();
+        assert!(titles.contains(&"Child 1"));
+        assert!(titles.contains(&"Child 2"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_subtasks_with_invalid_parent_returns_error() -> Result<()> {
+        let repo = tempdir()?;
+        Repository::init(repo.path())?;
+        let server = GitMileServer::new(GitStore::open(repo.path())?, WorkflowConfig::default());
+
+        let Err(err) = server
+            .list_subtasks(Parameters(ListSubtasksParams {
+                parent_task_id: TaskId::new().to_string(),
+            }))
+            .await
+        else {
+            panic!("missing parent should return error");
+        };
+
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("Parent task not found"));
 
         Ok(())
     }
