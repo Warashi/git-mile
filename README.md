@@ -166,7 +166,7 @@ git-mile mcp
 ```
 
 **Available MCP Tools**:
-- `list_tasks`: Retrieve all tasks
+- `list_tasks`: Retrieve tasks (optionally filtered by `states`, `labels`, `assignees`, `text`)
 - `get_task`: Fetch a single task snapshot by ID
 - `create_task`: Create new task with metadata
 - `update_task`: Modify task properties

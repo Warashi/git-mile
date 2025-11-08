@@ -3,7 +3,7 @@
 use crate::config::WorkflowConfig;
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::TaskId;
-use git_mile_core::{StateKind, TaskSnapshot};
+use git_mile_core::{StateKind, TaskFilter, TaskSnapshot};
 use git_mile_store_git::GitStore;
 use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::tool::{ToolCallContext, ToolRouter};
@@ -158,6 +158,23 @@ pub struct ListSubtasksParams {
     pub parent_task_id: String,
 }
 
+/// Parameters for listing tasks with optional filters.
+#[derive(Debug, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ListTasksParams {
+    /// Limit results to tasks in any of these workflow states.
+    #[serde(default)]
+    pub states: Vec<String>,
+    /// Require every listed label to be present on the task.
+    #[serde(default)]
+    pub labels: Vec<String>,
+    /// Match tasks that include any of these assignees.
+    #[serde(default)]
+    pub assignees: Vec<String>,
+    /// Case-insensitive substring search across title/description/state/labels/assignees.
+    #[serde(default)]
+    pub text: Option<String>,
+}
+
 /// Workflow state entry returned by the MCP tool.
 #[derive(Debug, Serialize, Deserialize)]
 struct WorkflowStateEntry {
@@ -175,6 +192,31 @@ struct WorkflowStatesResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     default_state: Option<String>,
     states: Vec<WorkflowStateEntry>,
+}
+
+impl ListTasksParams {
+    fn into_filter(self) -> TaskFilter {
+        TaskFilter {
+            states: self.states.into_iter().collect(),
+            labels: self.labels.into_iter().collect(),
+            assignees: self.assignees.into_iter().collect(),
+            text: normalize_text(self.text),
+            ..TaskFilter::default()
+        }
+    }
+}
+
+fn normalize_text(input: Option<String>) -> Option<String> {
+    input.and_then(|candidate| {
+        let trimmed = candidate.trim();
+        if trimmed.is_empty() {
+            None
+        } else if trimmed.len() == candidate.len() {
+            Some(candidate)
+        } else {
+            Some(trimmed.to_owned())
+        }
+    })
 }
 
 /// MCP server for git-mile.
@@ -196,9 +238,13 @@ impl GitMileServer {
         }
     }
 
-    /// List all tasks in the repository.
-    #[tool(description = "List all tasks in the repository with their current state")]
-    async fn list_tasks(&self) -> Result<CallToolResult, McpError> {
+    /// List tasks with optional filters.
+    #[tool(description = "List tasks in the repository, optionally filtered by state/label/assignee/text")]
+    async fn list_tasks(
+        &self,
+        Parameters(params): Parameters<ListTasksParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let filter = params.into_filter();
         let store = self.store.lock().await;
         let task_ids = store
             .list_tasks()
@@ -214,6 +260,15 @@ impl GitMileServer {
         }
 
         drop(store);
+
+        let tasks = if filter.is_empty() {
+            tasks
+        } else {
+            tasks
+                .into_iter()
+                .filter(|snapshot| filter.matches(snapshot))
+                .collect()
+        };
 
         let json_str = serde_json::to_string_pretty(&tasks)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -847,6 +902,96 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_tasks_applies_filters() -> Result<()> {
+        let repo = tempdir()?;
+        Repository::init(repo.path())?;
+        let store = GitStore::open(repo.path())?;
+
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+
+        let done_task = TaskId::new();
+        let done_event = Event::new(
+            done_task,
+            &actor,
+            EventKind::TaskCreated {
+                title: "Ship docs".into(),
+                labels: vec!["label/docs".into()],
+                assignees: vec!["alice".into()],
+                description: Some("Document the release".into()),
+                state: Some("state/done".into()),
+                state_kind: None,
+            },
+        );
+        store.append_event(&done_event)?;
+
+        let todo_task = TaskId::new();
+        let todo_event = Event::new(
+            todo_task,
+            &actor,
+            EventKind::TaskCreated {
+                title: "Implement feature".into(),
+                labels: vec!["label/feature".into()],
+                assignees: vec!["bob".into()],
+                description: Some("Feature work is pending".into()),
+                state: Some("state/todo".into()),
+                state_kind: None,
+            },
+        );
+        store.append_event(&todo_event)?;
+
+        let server = GitMileServer::new(store, WorkflowConfig::default());
+
+        let snapshots = decode_task_list(
+            server
+                .list_tasks(Parameters(ListTasksParams {
+                    states: vec!["state/done".into()],
+                    ..Default::default()
+                }))
+                .await?,
+        );
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].id, done_task);
+
+        let snapshots = decode_task_list(
+            server
+                .list_tasks(Parameters(ListTasksParams {
+                    labels: vec!["label/feature".into()],
+                    ..Default::default()
+                }))
+                .await?,
+        );
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].id, todo_task);
+
+        let snapshots = decode_task_list(
+            server
+                .list_tasks(Parameters(ListTasksParams {
+                    assignees: vec!["alice".into()],
+                    ..Default::default()
+                }))
+                .await?,
+        );
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].id, done_task);
+
+        let snapshots = decode_task_list(
+            server
+                .list_tasks(Parameters(ListTasksParams {
+                    text: Some("FEATURE".into()),
+                    ..Default::default()
+                }))
+                .await?,
+        );
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].id, todo_task);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn list_workflow_states_reflects_workflow_config() -> Result<()> {
         let repo = tempdir()?;
         Repository::init(repo.path())?;
@@ -997,6 +1142,17 @@ mod tests {
         assert!(err.message.contains("Parent task not found"));
 
         Ok(())
+    }
+
+    fn decode_task_list(result: CallToolResult) -> Vec<TaskSnapshot> {
+        let Some(content) = result.content.first() else {
+            panic!("tool response should include content");
+        };
+        let text = match &content.raw {
+            RawContent::Text(block) => block.text.clone(),
+            _ => panic!("expected text content"),
+        };
+        serde_json::from_str(&text).expect("must decode task snapshots")
     }
 
     fn seed_task(repo_path: &std::path::Path) -> Result<TaskId> {
