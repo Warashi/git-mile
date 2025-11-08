@@ -900,8 +900,8 @@ mod tests {
             },
         );
 
-        let mut legacy_value = serde_json::to_value(&event)
-            .unwrap_or_else(|err| panic!("serialize event: {err}"));
+        let mut legacy_value =
+            serde_json::to_value(&event).unwrap_or_else(|err| panic!("serialize event: {err}"));
         if let Some(kind) = legacy_value.get_mut("kind")
             && let Some(obj) = kind.as_object_mut()
         {

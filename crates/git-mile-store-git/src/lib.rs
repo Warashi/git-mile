@@ -182,8 +182,8 @@ impl GitStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use git_mile_core::event::{Actor, Event, EventKind};
     use git_mile_core::StateKind;
+    use git_mile_core::event::{Actor, Event, EventKind};
     use git2::Signature;
     use serde_json::Value;
     use std::{fs, path::PathBuf, thread, time::Duration as StdDuration};
