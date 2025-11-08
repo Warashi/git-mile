@@ -107,6 +107,7 @@
               ];
               devshell = {
                 packages = [
+                  cargo-llvm-cov
                   clang
                   just
                   llvmPackages.libclang
