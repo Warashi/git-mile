@@ -89,8 +89,11 @@ impl<S: TaskRepository> TaskService<S> {
                 .load_events(parent)
                 .with_context(|| format!("Parent task not found: {parent}"))?;
 
-            let link_event = Event::new(task, &actor, EventKind::ChildLinked { parent, child: task });
-            let oid = self.store.append_event(&link_event)?;
+            let child_event = Event::new(task, &actor, EventKind::ChildLinked { parent, child: task });
+            self.store.append_event(&child_event)?;
+
+            let parent_event = Event::new(parent, &actor, EventKind::ChildLinked { parent, child: task });
+            let oid = self.store.append_event(&parent_event)?;
             parent_links.push(ParentLink { parent, oid });
         }
 
@@ -461,7 +464,7 @@ mod tests {
         assert_eq!(output.parent_links[0].parent, parent);
 
         let events = store.appended();
-        assert_eq!(events.len(), 2);
+        assert_eq!(events.len(), 3);
         match &events[0].kind {
             EventKind::TaskCreated { title, .. } => assert_eq!(title, "task"),
             other => panic!("unexpected event kind: {other:?}"),
@@ -470,6 +473,15 @@ mod tests {
             EventKind::ChildLinked { parent: p, child } => {
                 assert_eq!(*p, parent);
                 assert_eq!(*child, output.task);
+                assert_eq!(events[1].task, output.task);
+            }
+            other => panic!("unexpected event kind: {other:?}"),
+        }
+        match &events[2].kind {
+            EventKind::ChildLinked { parent: p, child } => {
+                assert_eq!(*p, parent);
+                assert_eq!(*child, output.task);
+                assert_eq!(events[2].task, parent);
             }
             other => panic!("unexpected event kind: {other:?}"),
         }

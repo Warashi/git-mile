@@ -438,6 +438,8 @@ impl<S: TaskStore> App<S> {
         if let Some(parent) = data.parent {
             let link_event = Event::new(task, actor, EventKind::ChildLinked { parent, child: task });
             self.store.append_event(&link_event)?;
+            let parent_event = Event::new(parent, actor, EventKind::ChildLinked { parent, child: task });
+            self.store.append_event(&parent_event)?;
         }
 
         self.refresh_tasks_with(Some(task))?;

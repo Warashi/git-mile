@@ -16,6 +16,7 @@ use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{ErrorData as McpError, tool, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -220,6 +221,15 @@ fn normalize_text(input: Option<String>) -> Option<String> {
     })
 }
 
+fn compare_snapshots(a: &TaskSnapshot, b: &TaskSnapshot) -> Ordering {
+    match (a.updated_at(), b.updated_at()) {
+        (Some(left), Some(right)) => right.cmp(&left),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => a.id.cmp(&b.id),
+    }
+}
+
 /// MCP server for git-mile.
 #[derive(Clone)]
 pub struct GitMileServer {
@@ -354,18 +364,29 @@ impl GitMileServer {
             }
         })?;
 
-        let parent_snapshot = TaskSnapshot::replay(&parent_events);
-        let child_ids = parent_snapshot.children;
+        // Keep parent snapshot for potential future use (currently just validation).
+        let _parent_snapshot = TaskSnapshot::replay(&parent_events);
 
-        // Load all subtasks
+        let task_ids = store
+            .list_tasks()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        // Load subtasks by scanning for tasks that reference the parent.
         let mut subtasks = Vec::new();
-        for child_id in child_ids {
+        for candidate in task_ids {
+            if candidate == parent {
+                continue;
+            }
             let child_events = store
-                .load_events(child_id)
+                .load_events(candidate)
                 .map_err(|e| McpError::internal_error(e.to_string(), None))?;
             let child_snapshot = TaskSnapshot::replay(&child_events);
-            subtasks.push(child_snapshot);
+            if child_snapshot.parents.contains(&parent) {
+                subtasks.push(child_snapshot);
+            }
         }
+
+        subtasks.sort_by(compare_snapshots);
 
         drop(store);
 
@@ -438,9 +459,14 @@ impl GitMileServer {
                 .load_events(parent)
                 .map_err(|e| McpError::invalid_params(format!("Parent task not found: {e}"), None))?;
 
-            let link_event = Event::new(task, &actor, EventKind::ChildLinked { parent, child: task });
+            let child_event = Event::new(task, &actor, EventKind::ChildLinked { parent, child: task });
             store
-                .append_event(&link_event)
+                .append_event(&child_event)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+            let parent_event = Event::new(parent, &actor, EventKind::ChildLinked { parent, child: task });
+            store
+                .append_event(&parent_event)
                 .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         }
 
@@ -595,9 +621,14 @@ impl GitMileServer {
                 .load_events(parent)
                 .map_err(|e| McpError::invalid_params(format!("Parent task not found: {e}"), None))?;
 
-            let event = Event::new(task, &actor, EventKind::ChildLinked { parent, child: task });
+            let child_event = Event::new(task, &actor, EventKind::ChildLinked { parent, child: task });
             store
-                .append_event(&event)
+                .append_event(&child_event)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+            let parent_event = Event::new(parent, &actor, EventKind::ChildLinked { parent, child: task });
+            store
+                .append_event(&parent_event)
                 .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         }
 
@@ -607,9 +638,14 @@ impl GitMileServer {
                 .parse()
                 .map_err(|e| McpError::invalid_params(format!("Invalid parent task ID: {e}"), None))?;
 
-            let event = Event::new(task, &actor, EventKind::ChildUnlinked { parent, child: task });
+            let child_event = Event::new(task, &actor, EventKind::ChildUnlinked { parent, child: task });
             store
-                .append_event(&event)
+                .append_event(&child_event)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+            let parent_event = Event::new(parent, &actor, EventKind::ChildUnlinked { parent, child: task });
+            store
+                .append_event(&parent_event)
                 .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         }
 
@@ -1024,81 +1060,27 @@ mod tests {
     async fn list_subtasks_returns_children() -> Result<()> {
         let repo = tempdir()?;
         Repository::init(repo.path())?;
-        let store = GitStore::open(repo.path())?;
-        let actor = Actor {
-            name: "tester".into(),
-            email: "tester@example.invalid".into(),
-        };
+        let server = GitMileServer::new(GitStore::open(repo.path())?, WorkflowConfig::default());
 
-        // Create parent task
-        let parent = TaskId::new();
-        let parent_event = Event::new(
-            parent,
-            &actor,
-            EventKind::TaskCreated {
-                title: "Parent task".into(),
-                labels: vec![],
-                assignees: vec![],
-                description: None,
-                state: None,
-                state_kind: None,
-            },
+        let parent_snapshot = decode_task_result(
+            server
+                .create_task(Parameters(create_task_params("Parent task", vec![])))
+                .await?,
         );
-        store.append_event(&parent_event)?;
+        let parent = parent_snapshot.id;
 
-        // Create two child tasks
-        let child1 = TaskId::new();
-        let child1_event = Event::new(
-            child1,
-            &actor,
-            EventKind::TaskCreated {
-                title: "Child 1".into(),
-                labels: vec![],
-                assignees: vec![],
-                description: None,
-                state: None,
-                state_kind: None,
-            },
-        );
-        store.append_event(&child1_event)?;
-
-        let child2 = TaskId::new();
-        let child2_event = Event::new(
-            child2,
-            &actor,
-            EventKind::TaskCreated {
-                title: "Child 2".into(),
-                labels: vec![],
-                assignees: vec![],
-                description: None,
-                state: None,
-                state_kind: None,
-            },
-        );
-        store.append_event(&child2_event)?;
-
-        // Link children to parent
-        let link1 = Event::new(
-            parent,
-            &actor,
-            EventKind::ChildLinked {
-                parent,
-                child: child1,
-            },
-        );
-        store.append_event(&link1)?;
-
-        let link2 = Event::new(
-            parent,
-            &actor,
-            EventKind::ChildLinked {
-                parent,
-                child: child2,
-            },
-        );
-        store.append_event(&link2)?;
-
-        let server = GitMileServer::new(store, WorkflowConfig::default());
+        let _child1 = server
+            .create_task(Parameters(create_task_params(
+                "Child 1",
+                vec![parent.to_string()],
+            )))
+            .await?;
+        let _child2 = server
+            .create_task(Parameters(create_task_params(
+                "Child 2",
+                vec![parent.to_string()],
+            )))
+            .await?;
 
         // Test list_subtasks
         let result = server
@@ -1121,6 +1103,63 @@ mod tests {
         assert!(titles.contains(&"Child 1"));
         assert!(titles.contains(&"Child 2"));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_subtasks_supports_legacy_links() -> Result<()> {
+        let repo = tempdir()?;
+        Repository::init(repo.path())?;
+        let store = GitStore::open(repo.path())?;
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+
+        let parent = TaskId::new();
+        let parent_event = Event::new(
+            parent,
+            &actor,
+            EventKind::TaskCreated {
+                title: "Parent".into(),
+                labels: vec![],
+                assignees: vec![],
+                description: None,
+                state: None,
+                state_kind: None,
+            },
+        );
+        store.append_event(&parent_event)?;
+
+        let child = TaskId::new();
+        let child_event = Event::new(
+            child,
+            &actor,
+            EventKind::TaskCreated {
+                title: "Child".into(),
+                labels: vec![],
+                assignees: vec![],
+                description: None,
+                state: None,
+                state_kind: None,
+            },
+        );
+        store.append_event(&child_event)?;
+
+        // Legacy link emits only the child-side event.
+        let child_link = Event::new(child, &actor, EventKind::ChildLinked { parent, child });
+        store.append_event(&child_link)?;
+
+        let server = GitMileServer::new(store, WorkflowConfig::default());
+
+        let result = server
+            .list_subtasks(Parameters(ListSubtasksParams {
+                parent_task_id: parent.to_string(),
+            }))
+            .await?;
+        let subtasks = decode_task_list(result);
+        assert_eq!(subtasks.len(), 1);
+        assert_eq!(subtasks[0].id, child);
         Ok(())
     }
 
@@ -1154,6 +1193,30 @@ mod tests {
             _ => panic!("expected text content"),
         };
         serde_json::from_str(&text).expect("must decode task snapshots")
+    }
+
+    fn decode_task_result(result: CallToolResult) -> TaskSnapshot {
+        let Some(content) = result.content.first() else {
+            panic!("tool response should include content");
+        };
+        let text = match &content.raw {
+            RawContent::Text(block) => block.text.clone(),
+            _ => panic!("expected text content"),
+        };
+        serde_json::from_str(&text).expect("must decode task snapshot")
+    }
+
+    fn create_task_params(title: &str, parents: Vec<String>) -> CreateTaskParams {
+        CreateTaskParams {
+            title: title.to_owned(),
+            state: None,
+            labels: vec![],
+            assignees: vec![],
+            description: None,
+            parents,
+            actor_name: "tester".into(),
+            actor_email: "tester@example.invalid".into(),
+        }
     }
 
     fn seed_task(repo_path: &std::path::Path) -> Result<TaskId> {
