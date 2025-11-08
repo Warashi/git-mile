@@ -3033,7 +3033,7 @@ mod tests {
             .with_task(task_a, events_a)
             .with_task(task_b, events_b);
 
-        let app = App::new(store, WorkflowConfig::default())?;
+        let app = App::new(store, WorkflowConfig::unrestricted())?;
         assert_eq!(app.tasks.len(), 2);
         let titles: Vec<_> = app
             .tasks
@@ -3055,7 +3055,7 @@ mod tests {
         let store = MockStore::new()
             .with_task(parent, parent_events)
             .with_task(child, child_events);
-        let app = App::new(store, WorkflowConfig::default())?;
+        let app = App::new(store, WorkflowConfig::unrestricted())?;
 
         let children = app.get_children(parent);
         assert_eq!(children.len(), 1);
@@ -3085,7 +3085,7 @@ mod tests {
                     child_link(21, parent, recent_child),
                 ],
             );
-        let app = App::new(store, WorkflowConfig::default())?;
+        let app = App::new(store, WorkflowConfig::unrestricted())?;
 
         let children = app.get_children(parent);
         let ids: Vec<TaskId> = children.iter().map(|view| view.snapshot.id).collect();
@@ -3123,7 +3123,7 @@ mod tests {
                 ],
             ),
         ]);
-        let app = App::new(store, WorkflowConfig::default())?;
+        let app = App::new(store, WorkflowConfig::unrestricted())?;
 
         let root_view = app.get_root(leaf).expect("must locate a root despite cycle");
         assert_eq!(root_view.snapshot.id, root);
@@ -3149,7 +3149,7 @@ mod tests {
                     child_link(21, child, grandchild),
                 ],
             );
-        let mut app = App::new(store, WorkflowConfig::default())?;
+        let mut app = App::new(store, WorkflowConfig::unrestricted())?;
         let filter = TaskFilter {
             text: Some("Grand".into()),
             ..TaskFilter::default()
@@ -3175,7 +3175,7 @@ mod tests {
                 child,
                 vec![created(child, 10, "Child"), child_link(11, root, child)],
             );
-        let mut app = App::new(store, WorkflowConfig::default())?;
+        let mut app = App::new(store, WorkflowConfig::unrestricted())?;
         let filter = TaskFilter {
             text: Some("Root".into()),
             ..TaskFilter::default()
@@ -3226,7 +3226,7 @@ mod tests {
         let store = MockStore::new()
             .with_task(parent, parent_events)
             .with_task(child, child_events);
-        let app = App::new(store, WorkflowConfig::default())?;
+        let app = App::new(store, WorkflowConfig::unrestricted())?;
         let mut ui = ui_with_clipboard(app, Box::new(NoopClipboard));
         ui.open_tree_view();
 
@@ -3245,7 +3245,7 @@ mod tests {
     fn copy_selected_task_id_writes_to_clipboard() -> Result<()> {
         let task = TaskId::new();
         let store = MockStore::new().with_task(task, vec![created(task, 0, "Task")]);
-        let app = App::new(store, WorkflowConfig::default())?;
+        let app = App::new(store, WorkflowConfig::unrestricted())?;
         let writes = Rc::new(RefCell::new(Vec::new()));
         let clipboard = RecordingClipboard::new(Rc::clone(&writes));
         let mut ui = ui_with_clipboard(app, Box::new(clipboard));
@@ -3264,7 +3264,7 @@ mod tests {
     fn copy_selected_task_id_reports_clipboard_failure() -> Result<()> {
         let task = TaskId::new();
         let store = MockStore::new().with_task(task, vec![created(task, 0, "Task")]);
-        let app = App::new(store, WorkflowConfig::default())?;
+        let app = App::new(store, WorkflowConfig::unrestricted())?;
         let mut ui = ui_with_clipboard(app, Box::new(FailingClipboard::new("broken clipboard")));
 
         ui.copy_selected_task_id();
@@ -3282,7 +3282,7 @@ mod tests {
     #[test]
     fn copy_selected_task_id_without_selection_shows_error() -> Result<()> {
         let store = MockStore::new();
-        let app = App::new(store, WorkflowConfig::default())?;
+        let app = App::new(store, WorkflowConfig::unrestricted())?;
         let mut ui = ui_with_clipboard(app, Box::new(NoopClipboard));
 
         ui.copy_selected_task_id();
@@ -3330,7 +3330,7 @@ mod tests {
                 )],
             );
 
-        let mut app = App::new(store, WorkflowConfig::default())?;
+        let mut app = App::new(store, WorkflowConfig::unrestricted())?;
         app.selected = 1;
         let target = app.selected_task_id().expect("selected task id");
         app.add_comment(target, "hello".into(), &actor())?;
@@ -3352,7 +3352,7 @@ mod tests {
     #[test]
     fn create_task_registers_and_selects_new_entry() -> Result<()> {
         let store = MockStore::new();
-        let mut app = App::new(store, WorkflowConfig::default())?;
+        let mut app = App::new(store, WorkflowConfig::unrestricted())?;
 
         let data = NewTaskData {
             title: "Title".into(),
@@ -3587,7 +3587,7 @@ updated_until: 2025-01-02T00:00:00Z
         );
 
         let store = MockStore::new().with_task(task, vec![created]);
-        let mut app = App::new(store, WorkflowConfig::default())?;
+        let mut app = App::new(store, WorkflowConfig::unrestricted())?;
 
         let updated = app.update_task(
             task,
@@ -3674,7 +3674,7 @@ updated_until: 2025-01-02T00:00:00Z
         );
 
         let store = MockStore::new().with_task(task, vec![created]);
-        let mut app = App::new(store, WorkflowConfig::default())?;
+        let mut app = App::new(store, WorkflowConfig::unrestricted())?;
         let snapshot = {
             let events = app.store.events.borrow();
             let stored = events.get(&task).expect("events for task");

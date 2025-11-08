@@ -301,7 +301,7 @@ mod tests {
 
     fn service_with_store() -> (TaskService<MockStore>, MockStore) {
         let store = MockStore::default();
-        let service = TaskService::new(store.clone(), WorkflowConfig::default());
+        let service = TaskService::new(store.clone(), WorkflowConfig::unrestricted());
         (service, store)
     }
 

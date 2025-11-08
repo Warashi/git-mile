@@ -66,7 +66,7 @@ fn repo_workdir(repo: &Repository) -> Result<PathBuf> {
 }
 
 /// Workflow configuration block.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct WorkflowConfig {
     #[serde(default)]
     states: Vec<WorkflowState>,
@@ -74,7 +74,44 @@ pub struct WorkflowConfig {
     default_state: Option<String>,
 }
 
+impl Default for WorkflowConfig {
+    fn default() -> Self {
+        Self {
+            states: Self::builtin_states(),
+            default_state: Some("state/todo".into()),
+        }
+    }
+}
+
 impl WorkflowConfig {
+    /// Configuration without workflow restrictions (used mainly in tests).
+    pub fn unrestricted() -> Self {
+        Self {
+            states: Vec::new(),
+            default_state: None,
+        }
+    }
+
+    fn builtin_states() -> Vec<WorkflowState> {
+        vec![
+            WorkflowState {
+                value: "state/todo".into(),
+                label: Some("Todo".into()),
+                kind: Some(StateKind::Todo),
+            },
+            WorkflowState {
+                value: "state/in-progress".into(),
+                label: Some("In Progress".into()),
+                kind: Some(StateKind::InProgress),
+            },
+            WorkflowState {
+                value: "state/done".into(),
+                label: Some("Done".into()),
+                kind: Some(StateKind::Done),
+            },
+        ]
+    }
+
     /// Construct a workflow configuration from explicit states.
     #[cfg(test)]
     pub const fn from_states(states: Vec<WorkflowState>) -> Self {
@@ -233,10 +270,12 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn missing_config_returns_default() -> Result<()> {
+    fn missing_config_returns_builtin_workflow() -> Result<()> {
         let dir = tempdir()?;
         let cfg = ProjectConfig::from_workdir(dir.path())?;
-        assert!(!cfg.workflow.is_restricted());
+        assert!(cfg.workflow.is_restricted());
+        assert_eq!(cfg.workflow.states().len(), 3);
+        assert_eq!(cfg.workflow.default_state(), Some("state/todo"));
         Ok(())
     }
 
@@ -311,6 +350,14 @@ mod tests {
             err.to_string()
                 .contains("default workflow state must not be empty")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn unrestricted_workflow_has_no_states_or_default() -> Result<()> {
+        let workflow = WorkflowConfig::unrestricted();
+        assert!(!workflow.is_restricted());
+        assert!(workflow.default_state().is_none());
         Ok(())
     }
 }

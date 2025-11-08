@@ -174,6 +174,7 @@ git-mile mcp
 - Add `kind` (`todo`, `in_progress`, `blocked`, `done`, `backlog`) to classify each state so CLI/TUI can render kind markers and enable kind filters
 - TUI/CLI/MCP will validate `state` values and show hints when this file lists allowed entries
 - Set `default_state` to automatically apply a state when new tasks omit it
+- When the file is missing, git-mile falls back to a built-in workflow (`state/todo`, `state/in-progress`, `state/done`). Set `states = []` if you prefer an unrestricted setup instead.
 
 ```toml
 [workflow]
