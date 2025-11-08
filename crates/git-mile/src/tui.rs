@@ -1507,10 +1507,15 @@ impl<S: TaskStore> Ui<S> {
         let inner = block.inner(popup_area);
 
         // Render comments
-        if let Some(task) = self.app.tasks.iter().find(|view| view.snapshot.id == viewer.task_id) {
+        if let Some(task) = self
+            .app
+            .tasks
+            .iter()
+            .find(|view| view.snapshot.id == viewer.task_id)
+        {
             if task.comments.is_empty() {
-                let paragraph = Paragraph::new("コメントはまだありません。")
-                    .style(Style::default().fg(Color::DarkGray));
+                let paragraph =
+                    Paragraph::new("コメントはまだありません。").style(Style::default().fg(Color::DarkGray));
                 f.render_widget(paragraph, inner);
             } else {
                 let mut lines = Vec::new();
@@ -1841,17 +1846,23 @@ impl<S: TaskStore> Ui<S> {
         self.detail_focus = DetailFocus::CommentViewer;
     }
 
+    // `const fn` で &mut self を扱うには const_mut_refs が必要
+    #[allow(clippy::missing_const_for_fn)]
     fn close_comment_viewer(&mut self) {
         self.comment_viewer = None;
         self.detail_focus = DetailFocus::None;
     }
 
+    // `const fn` で &mut self を扱うには const_mut_refs が必要
+    #[allow(clippy::missing_const_for_fn)]
     fn comment_viewer_scroll_down(&mut self, lines: u16) {
         if let Some(viewer) = &mut self.comment_viewer {
             viewer.scroll_offset = viewer.scroll_offset.saturating_add(lines);
         }
     }
 
+    // `const fn` で &mut self を扱うには const_mut_refs が必要
+    #[allow(clippy::missing_const_for_fn)]
     fn comment_viewer_scroll_up(&mut self, lines: u16) {
         if let Some(viewer) = &mut self.comment_viewer {
             viewer.scroll_offset = viewer.scroll_offset.saturating_sub(lines);
@@ -2131,7 +2142,9 @@ impl<S: TaskStore> Ui<S> {
             }
             DetailFocus::TreeView => "j/k:移動 h:閉じる l:開く ↵:ジャンプ q/Esc:閉じる".to_string(),
             DetailFocus::StatePicker => "j/k:移動 ↵:決定 q/Esc:キャンセル".to_string(),
-            DetailFocus::CommentViewer => "j/k:スクロール Ctrl-d/Ctrl-u:半画面スクロール q/Esc:閉じる".to_string(),
+            DetailFocus::CommentViewer => {
+                "j/k:スクロール Ctrl-d/Ctrl-u:半画面スクロール q/Esc:閉じる".to_string()
+            }
         }
     }
 

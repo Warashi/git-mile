@@ -421,7 +421,7 @@ impl GitMileServer {
                             None,
                         ));
                     };
-                    entry.body_md = body_md.clone();
+                    entry.body_md.clone_from(body_md);
                     entry.updated_at = Some(format_timestamp(ev.ts)?);
                 }
                 _ => {}
@@ -1387,6 +1387,11 @@ mod tests {
         updated_at: Option<String>,
     }
 
+    #[derive(Deserialize)]
+    struct CommentOperation {
+        comment_id: String,
+    }
+
     fn decode_comment_list(result: CallToolResult) -> Result<Vec<CommentResponse>> {
         let content = result
             .content
@@ -1410,10 +1415,6 @@ mod tests {
             RawContent::Text(block) => block.text,
             _ => return Err(anyhow!("expected text content")),
         };
-        #[derive(Deserialize)]
-        struct CommentOperation {
-            comment_id: String,
-        }
         let parsed: CommentOperation = serde_json::from_str(&text).context("must decode comment op")?;
         Ok(parsed.comment_id)
     }
