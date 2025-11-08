@@ -228,7 +228,8 @@ struct CommentOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::anyhow;
+    use crate::Command;
+    use anyhow::{Result, anyhow};
     use git_mile_core::event::EventKind;
     use std::collections::HashSet;
     use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -244,6 +245,7 @@ mod tests {
         load_calls: Mutex<Vec<TaskId>>,
         fail_on_load: Mutex<HashSet<TaskId>>,
         list: Mutex<Vec<TaskId>>,
+        list_calls: Mutex<u32>,
         next_oid: Mutex<u8>,
     }
 
@@ -268,6 +270,7 @@ mod tests {
         }
 
         fn list_tasks(&self) -> Result<Vec<TaskId>> {
+            *guard(&self.inner.list_calls) += 1;
             Ok(guard(&self.inner.list).clone())
         }
     }
@@ -279,6 +282,18 @@ mod tests {
 
         fn fail_on_load(&self, task: TaskId) {
             guard(&self.inner.fail_on_load).insert(task);
+        }
+
+        fn set_list(&self, ids: Vec<TaskId>) {
+            *guard(&self.inner.list) = ids;
+        }
+
+        fn list_calls(&self) -> u32 {
+            *guard(&self.inner.list_calls)
+        }
+
+        fn load_calls(&self) -> Vec<TaskId> {
+            guard(&self.inner.load_calls).clone()
         }
     }
 
@@ -429,6 +444,91 @@ mod tests {
             EventKind::CommentAdded { body_md, .. } => assert_eq!(body_md, "hello"),
             other => panic!("unexpected event kind: {other:?}"),
         }
+        Ok(())
+    }
+
+    #[test]
+    fn parse_task_ids_roundtrip() -> Result<()> {
+        let ids = vec![TaskId::new(), TaskId::new()];
+        let raw: Vec<_> = ids.iter().map(|id| id.to_string()).collect();
+        let parsed = parse_task_ids(raw)?;
+        assert_eq!(parsed, ids);
+        Ok(())
+    }
+
+    #[test]
+    fn parse_task_ids_rejects_invalid_value() {
+        let Err(err) = parse_task_ids(vec!["not-a-task-id".into()]) else {
+            panic!("expected invalid id error");
+        };
+        assert!(err.to_string().contains("Invalid task id"));
+    }
+
+    #[test]
+    fn run_new_dispatches_to_service() -> Result<()> {
+        let (service, store) = service_with_store();
+        run(
+            Command::New {
+                title: "via run".into(),
+                state: None,
+                labels: vec![],
+                assignees: vec![],
+                description: None,
+                parents: vec![],
+                actor_name: "run".into(),
+                actor_email: "run@example.invalid".into(),
+            },
+            &service,
+        )?;
+
+        let events = store.appended();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0].kind, EventKind::TaskCreated { .. }));
+        Ok(())
+    }
+
+    #[test]
+    fn run_comment_dispatches_to_service() -> Result<()> {
+        let (service, store) = service_with_store();
+        let task = TaskId::new();
+        run(
+            Command::Comment {
+                task: task.to_string(),
+                message: "from run".into(),
+                actor_name: "alice".into(),
+                actor_email: "alice@example.invalid".into(),
+            },
+            &service,
+        )?;
+
+        let events = store.appended();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0].kind, EventKind::CommentAdded { .. }));
+        Ok(())
+    }
+
+    #[test]
+    fn run_ls_lists_all_tasks() -> Result<()> {
+        let (service, store) = service_with_store();
+        store.set_list(vec![TaskId::new()]);
+        run(Command::Ls, &service)?;
+        assert_eq!(store.list_calls(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn run_show_materializes_snapshot() -> Result<()> {
+        let (service, store) = service_with_store();
+        let task = TaskId::new();
+        run(
+            Command::Show {
+                task: task.to_string(),
+            },
+            &service,
+        )?;
+
+        let calls = store.load_calls();
+        assert_eq!(calls, vec![task]);
         Ok(())
     }
 }

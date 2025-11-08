@@ -360,4 +360,45 @@ mod tests {
         assert!(!workflow.is_restricted());
         assert!(workflow.default_state().is_none());
     }
+
+    #[test]
+    fn display_label_prefers_label_and_defaults_to_unset() {
+        let workflow = WorkflowConfig::from_states_with_default(
+            vec![
+                WorkflowState {
+                    value: "state/todo".into(),
+                    label: Some("Todo".into()),
+                    kind: Some(StateKind::Todo),
+                },
+                WorkflowState {
+                    value: "state/custom".into(),
+                    label: None,
+                    kind: None,
+                },
+            ],
+            Some("state/todo"),
+        );
+
+        assert_eq!(workflow.display_label(Some("state/todo")), "Todo");
+        assert_eq!(workflow.display_label(Some("state/custom")), "state/custom");
+        assert_eq!(workflow.display_label(None), "未設定");
+    }
+
+    #[test]
+    fn state_hint_lists_labels_and_resolves_state_kind() {
+        let workflow = WorkflowConfig::from_states(vec![WorkflowState {
+            value: "state/in-progress".into(),
+            label: Some("Doing".into()),
+            kind: Some(StateKind::InProgress),
+        }]);
+
+        let hint = workflow.state_hint().expect("state hint");
+        assert_eq!(hint, "state/in-progress (Doing)");
+        assert_eq!(
+            workflow.resolve_state_kind(Some("state/in-progress")),
+            Some(StateKind::InProgress)
+        );
+        assert!(workflow.resolve_state_kind(Some("state/unknown")).is_none());
+        assert!(workflow.resolve_state_kind(None).is_none());
+    }
 }

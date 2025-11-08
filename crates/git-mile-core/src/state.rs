@@ -29,3 +29,31 @@ impl StateKind {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn as_str_matches_serde_representation() {
+        let cases = [
+            (StateKind::Done, "done"),
+            (StateKind::InProgress, "in_progress"),
+            (StateKind::Blocked, "blocked"),
+            (StateKind::Todo, "todo"),
+            (StateKind::Backlog, "backlog"),
+        ];
+
+        for (state, expected) in cases {
+            assert_eq!(state.as_str(), expected);
+
+            let serialized = serde_json::to_string(&state)
+                .unwrap_or_else(|err| panic!("must serialize state kind: {err}"));
+            assert_eq!(serialized, format!("\"{expected}\""));
+
+            let decoded: StateKind = serde_json::from_str(&format!("\"{expected}\""))
+                .unwrap_or_else(|err| panic!("must deserialize state kind: {err}"));
+            assert_eq!(decoded, state);
+        }
+    }
+}

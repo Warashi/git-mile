@@ -153,3 +153,65 @@ impl Event {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use time::Duration;
+
+    #[test]
+    fn event_new_populates_metadata() {
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+        let task_id = TaskId::new();
+        let event = Event::new(task_id, &actor, EventKind::TaskStateCleared);
+
+        assert_eq!(event.schema, "git-mile-event@1");
+        assert_eq!(event.actor.name, actor.name);
+        assert_eq!(event.actor.email, actor.email);
+        assert_eq!(event.task, task_id);
+        assert!(matches!(event.kind, EventKind::TaskStateCleared));
+        assert_ne!(event.id, EventId::default());
+
+        let now = OffsetDateTime::now_utc();
+        let earliest = now - Duration::seconds(5);
+        assert!(
+            (earliest..=now).contains(&event.ts),
+            "timestamp {event_ts:?} must be within recent window",
+            event_ts = event.ts
+        );
+    }
+
+    #[test]
+    fn task_created_defaults_roundtrip() {
+        let json = json!({
+            "type": "taskCreated",
+            "title": "Add coverage"
+        });
+        let event_kind: EventKind =
+            serde_json::from_value(json).unwrap_or_else(|err| panic!("must decode taskCreated: {err}"));
+
+        match event_kind {
+            EventKind::TaskCreated {
+                title,
+                labels,
+                assignees,
+                description,
+                state,
+                state_kind,
+            } => {
+                assert_eq!(title, "Add coverage");
+                assert!(labels.is_empty(), "labels must default to empty");
+                assert!(assignees.is_empty(), "assignees must default to empty");
+                assert!(
+                    description.is_none() && state.is_none() && state_kind.is_none(),
+                    "optional fields should default to None"
+                );
+            }
+            other => panic!("unexpected event kind: {other:?}"),
+        }
+    }
+}
