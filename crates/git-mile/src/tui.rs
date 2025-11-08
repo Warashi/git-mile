@@ -17,7 +17,7 @@ use anyhow::{Context, Result, anyhow};
 use arboard::Clipboard as ArboardClipboard;
 use base64::{Engine as _, engine::general_purpose::STANDARD as Base64Standard};
 use crossterm::{
-    event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind},
+    event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -834,6 +834,11 @@ impl StatePickerOption {
 }
 
 #[derive(Debug, Clone)]
+struct CommentViewerState {
+    task_id: TaskId,
+    scroll_offset: u16,
+}
+
 struct StatePickerState {
     task_id: TaskId,
     options: Vec<StatePickerOption>,
@@ -849,6 +854,8 @@ enum DetailFocus {
     TreeView,
     /// Focus on state picker popup.
     StatePicker,
+    /// Focus on comment viewer popup.
+    CommentViewer,
 }
 
 trait ClipboardSink {
@@ -942,6 +949,8 @@ struct Ui<S: TaskStore> {
     tree_state: TreeViewState,
     /// State picker popup state.
     state_picker: Option<StatePickerState>,
+    /// Comment viewer popup state.
+    comment_viewer: Option<CommentViewerState>,
     clipboard: Box<dyn ClipboardSink>,
 }
 
@@ -968,6 +977,7 @@ impl<S: TaskStore> Ui<S> {
             detail_focus: DetailFocus::None,
             tree_state: TreeViewState::new(),
             state_picker: None,
+            comment_viewer: None,
             clipboard,
         };
         ui.apply_default_filter();
@@ -999,6 +1009,7 @@ impl<S: TaskStore> Ui<S> {
         match self.detail_focus {
             DetailFocus::TreeView => self.draw_tree_view_popup(f),
             DetailFocus::StatePicker => self.draw_state_picker_popup(f),
+            DetailFocus::CommentViewer => self.draw_comment_viewer_popup(f),
             DetailFocus::None => {}
         }
     }
@@ -1460,6 +1471,71 @@ impl<S: TaskStore> Ui<S> {
         f.render_stateful_widget(list, inner, &mut list_state);
     }
 
+    fn draw_comment_viewer_popup(&self, f: &mut ratatui::Frame<'_>) {
+        let Some(viewer) = &self.comment_viewer else {
+            return;
+        };
+        let area = f.area();
+
+        // Calculate popup size (80% width, 80% height)
+        let mut popup_width = (area.width * 4) / 5;
+        popup_width = popup_width.max(40).min(area.width);
+        let mut popup_height = (area.height * 4) / 5;
+        popup_height = popup_height.max(10).min(area.height);
+        let popup_x = area.width.saturating_sub(popup_width) / 2;
+        let popup_y = area.height.saturating_sub(popup_height) / 2;
+        let popup_area = Rect {
+            x: popup_x,
+            y: popup_y,
+            width: popup_width,
+            height: popup_height,
+        };
+
+        let task_title = self
+            .app
+            .tasks
+            .iter()
+            .find(|view| view.snapshot.id == viewer.task_id)
+            .map_or("不明", |view| view.snapshot.title.as_str());
+
+        let block = Block::default()
+            .title(format!("コメント: {task_title}"))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan));
+        f.render_widget(Clear, popup_area);
+        f.render_widget(block.clone(), popup_area);
+        let inner = block.inner(popup_area);
+
+        // Render comments
+        if let Some(task) = self.app.tasks.iter().find(|view| view.snapshot.id == viewer.task_id) {
+            if task.comments.is_empty() {
+                let paragraph = Paragraph::new("コメントはまだありません。")
+                    .style(Style::default().fg(Color::DarkGray));
+                f.render_widget(paragraph, inner);
+            } else {
+                let mut lines = Vec::new();
+                for comment in &task.comments {
+                    let header = format!(
+                        "{} <{}> [{}]",
+                        comment.actor.name, comment.actor.email, comment.ts
+                    );
+                    lines.push(Line::from(Span::styled(
+                        header,
+                        Style::default().fg(Color::Yellow),
+                    )));
+                    for body_line in comment.body.lines() {
+                        lines.push(Line::from(body_line.to_owned()));
+                    }
+                    lines.push(Line::from(""));
+                }
+                let paragraph = Paragraph::new(lines)
+                    .wrap(Wrap { trim: false })
+                    .scroll((viewer.scroll_offset, 0));
+                f.render_widget(paragraph, inner);
+            }
+        }
+    }
+
     /// Helper to find node in current tree state (read-only).
     fn find_node_in_state(&self, task_id: TaskId) -> Option<&TreeNode> {
         for root in &self.tree_state.roots {
@@ -1556,6 +1632,10 @@ impl<S: TaskStore> Ui<S> {
                     self.open_state_picker();
                     Ok(None)
                 }
+                KeyCode::Char('v' | 'V') => {
+                    self.open_comment_viewer();
+                    Ok(None)
+                }
                 KeyCode::Char('f' | 'F') => Ok(Some(UiAction::EditFilter)),
                 _ => Ok(None),
             },
@@ -1601,6 +1681,31 @@ impl<S: TaskStore> Ui<S> {
                 }
                 KeyCode::Enter => {
                     self.apply_state_picker_selection();
+                    Ok(None)
+                }
+                _ => Ok(None),
+            },
+            DetailFocus::CommentViewer => match key.code {
+                KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
+                    self.close_comment_viewer();
+                    Ok(None)
+                }
+                KeyCode::Char('j' | 'J') => {
+                    self.comment_viewer_scroll_down(1);
+                    Ok(None)
+                }
+                KeyCode::Char('k' | 'K') => {
+                    self.comment_viewer_scroll_up(1);
+                    Ok(None)
+                }
+                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    // Half-page down (approximate with 10 lines)
+                    self.comment_viewer_scroll_down(10);
+                    Ok(None)
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    // Half-page up (approximate with 10 lines)
+                    self.comment_viewer_scroll_up(10);
                     Ok(None)
                 }
                 _ => Ok(None),
@@ -1721,6 +1826,36 @@ impl<S: TaskStore> Ui<S> {
     fn close_state_picker(&mut self) {
         self.state_picker = None;
         self.detail_focus = DetailFocus::None;
+    }
+
+    fn open_comment_viewer(&mut self) {
+        let Some(task) = self.app.selected_task() else {
+            self.error("コメントを表示するタスクが選択されていません");
+            return;
+        };
+
+        self.comment_viewer = Some(CommentViewerState {
+            task_id: task.snapshot.id,
+            scroll_offset: 0,
+        });
+        self.detail_focus = DetailFocus::CommentViewer;
+    }
+
+    fn close_comment_viewer(&mut self) {
+        self.comment_viewer = None;
+        self.detail_focus = DetailFocus::None;
+    }
+
+    fn comment_viewer_scroll_down(&mut self, lines: u16) {
+        if let Some(viewer) = &mut self.comment_viewer {
+            viewer.scroll_offset = viewer.scroll_offset.saturating_add(lines);
+        }
+    }
+
+    fn comment_viewer_scroll_up(&mut self, lines: u16) {
+        if let Some(viewer) = &mut self.comment_viewer {
+            viewer.scroll_offset = viewer.scroll_offset.saturating_sub(lines);
+        }
     }
 
     fn apply_state_picker_selection(&mut self) {
@@ -1991,11 +2126,12 @@ impl<S: TaskStore> Ui<S> {
     fn instructions(&self) -> String {
         match self.detail_focus {
             DetailFocus::None => {
-                let base = "j/k:移動 ↵:ツリー n:新規 s:子タスク e:編集 c:コメント r:再読込 p:親へ y:IDコピー t:状態 f:フィルタ q:終了";
+                let base = "j/k:移動 ↵:ツリー n:新規 s:子タスク e:編集 c:コメント v:コメント表示 r:再読込 p:親へ y:IDコピー t:状態 f:フィルタ q:終了";
                 format!("{} [{} <{}>]", base, self.actor.name, self.actor.email)
             }
             DetailFocus::TreeView => "j/k:移動 h:閉じる l:開く ↵:ジャンプ q/Esc:閉じる".to_string(),
             DetailFocus::StatePicker => "j/k:移動 ↵:決定 q/Esc:キャンセル".to_string(),
+            DetailFocus::CommentViewer => "j/k:スクロール Ctrl-d/Ctrl-u:半画面スクロール q/Esc:閉じる".to_string(),
         }
     }
 
