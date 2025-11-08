@@ -183,6 +183,9 @@ impl GitStore {
 mod tests {
     use super::*;
     use git_mile_core::event::{Actor, Event, EventKind};
+    use git_mile_core::StateKind;
+    use git2::Signature;
+    use serde_json::Value;
     use std::{fs, path::PathBuf, thread, time::Duration as StdDuration};
 
     #[test]
@@ -250,6 +253,97 @@ mod tests {
             })
             .collect();
         assert_eq!(titles, cached_titles);
+
+        fs::remove_dir_all(&base)?;
+        Ok(())
+    }
+
+    #[test]
+    fn append_event_serializes_state_kind_into_commit_body() -> Result<()> {
+        let base = temp_repo_path()?;
+        Repository::init(&base)?;
+
+        let store = GitStore::open(&base)?;
+        let task = TaskId::new();
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+
+        let event = Event::new(
+            task,
+            &actor,
+            EventKind::TaskStateSet {
+                state: "state/done".into(),
+                state_kind: Some(StateKind::Done),
+            },
+        );
+
+        let oid = store.append_event(&event)?;
+        let commit = store.repo.find_commit(oid)?;
+        let message = commit.message().context("Commit must have a message")?;
+        let (_, body) = message
+            .split_once("\n\n")
+            .context("Commit message must contain JSON body")?;
+        let json: Value = serde_json::from_str(body)?;
+        let serialized_kind = json
+            .get("kind")
+            .and_then(|kind| kind.get("state_kind"))
+            .and_then(Value::as_str)
+            .context("state_kind must be serialized as string")?;
+        assert_eq!(serialized_kind, "done");
+
+        fs::remove_dir_all(&base)?;
+        Ok(())
+    }
+
+    #[test]
+    fn load_events_accepts_commits_without_state_kind_field() -> Result<()> {
+        let base = temp_repo_path()?;
+        let repo = Repository::init(&base)?;
+
+        let store = GitStore::open(&base)?;
+        let task = TaskId::new();
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+
+        let legacy_event = Event::new(
+            task,
+            &actor,
+            EventKind::TaskStateSet {
+                state: "state/in-progress".into(),
+                state_kind: Some(StateKind::InProgress),
+            },
+        );
+        let mut legacy_value = serde_json::to_value(&legacy_event)?;
+        if let Some(kind) = legacy_value.get_mut("kind") {
+            if let Some(obj) = kind.as_object_mut() {
+                obj.remove("state_kind");
+            }
+        }
+        let body = serde_json::to_string_pretty(&legacy_value)?;
+        let refname = GitStore::refname(&task);
+        let msg = format!("git-mile-event: {}\n\n{}", legacy_event.id, body);
+        let sig = Signature::now(&actor.name, &actor.email)?;
+        let mut idx = repo.index()?;
+        idx.clear()?;
+        let tree = {
+            let tree_oid = idx.write_tree()?;
+            repo.find_tree(tree_oid)?
+        };
+        repo.commit(Some(&refname), &sig, &sig, &msg, &tree, &[])?;
+
+        let events = store.load_events(task)?;
+        assert_eq!(events.len(), 1);
+        match &events[0].kind {
+            EventKind::TaskStateSet { state, state_kind } => {
+                assert_eq!(state, "state/in-progress");
+                assert!(state_kind.is_none(), "state_kind defaults to None");
+            }
+            other => panic!("unexpected event kind: {other:?}"),
+        }
 
         fs::remove_dir_all(&base)?;
         Ok(())

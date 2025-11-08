@@ -884,6 +884,36 @@ mod tests {
     }
 
     #[test]
+    fn replay_handles_legacy_events_missing_state_kind_payload() {
+        let task = TaskId::new();
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+
+        let event = Event::new(
+            task,
+            &actor,
+            EventKind::TaskStateSet {
+                state: "state/in-progress".into(),
+                state_kind: Some(StateKind::InProgress),
+            },
+        );
+
+        let mut legacy_value = serde_json::to_value(&event).expect("serialize event");
+        if let Some(kind) = legacy_value.get_mut("kind") {
+            if let Some(obj) = kind.as_object_mut() {
+                obj.remove("state_kind");
+            }
+        }
+        let legacy: Event = serde_json::from_value(legacy_value).expect("deserialize legacy event");
+
+        let snapshot = TaskSnapshot::replay(&[legacy]);
+        assert_eq!(snapshot.state.as_deref(), Some("state/in-progress"));
+        assert_eq!(snapshot.state_kind, None);
+    }
+
+    #[test]
     fn task_filter_matches_state_and_labels() {
         let mut snapshot = blank_snapshot();
         snapshot.state = Some("state/todo".into());

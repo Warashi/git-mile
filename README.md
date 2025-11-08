@@ -26,6 +26,7 @@ The workspace consists of three crates:
 - **Sets** (labels, assignees, relations): Represented as ORSWOT (Observed-Remove Set Without Tombstones), allowing concurrent additions and removals to merge naturally
 - **Single values** (title, state, description): Stored as LWW (Last-Write-Wins) registers, converging based on event timestamps and UUIDv7 total ordering
 - **Snapshots**: Materialized views of CRDT state, computed via `TaskSnapshot::replay` or `TaskSnapshot::apply` for consistent reads
+- **State kinds**: Workflow states are classified as `todo`/`in_progress`/`blocked`/`done`/`backlog`, and the resolved kind is embedded into every `TaskCreated` and `TaskStateSet` event so downstream clients never need to infer it again (see `docs/state-kind-persistence.md` for schema and migration details)
 
 ## Installation
 
@@ -150,7 +151,7 @@ git-mile mcp
 - `update_comment`: Edit existing comment
 - `list_workflow_states`: Return allowed workflow states plus the current default
 
-`get_task` accepts a JSON payload like `{"task_id": "<UUIDv7>"}` and returns the serialized `TaskSnapshot` for that task, matching the data shown in the CLI/TUI views.
+`get_task` accepts a JSON payload like `{"task_id": "<UUIDv7>"}` and returns the serialized `TaskSnapshot` for that task, matching the data shown in the CLI/TUI views. Every snapshot now includes a `state_kind` field next to `state`; legacy tasks created before this release will show `null` until they are backfilled (see `docs/state-kind-persistence.md`).
 
 ## Configuration
 
@@ -173,6 +174,7 @@ git-mile mcp
 **Workflow states** (optional):
 - Define `.git-mile/config.toml` in the repository root to restrict valid states per project
 - Add `kind` (`todo`, `in_progress`, `blocked`, `done`, `backlog`) to classify each state so CLI/TUI can render kind markers and enable kind filters
+- The resolved `kind` is embedded into each `TaskCreated`/`TaskStateSet` event so downstream clients never need to guess it later
 - TUI/CLI/MCP will validate `state` values and show hints when this file lists allowed entries
 - Set `default_state` to automatically apply a state when new tasks omit it
 - When the file is missing, git-mile falls back to a built-in workflow (`state/todo`, `state/in-progress`, `state/done`). Set `states = []` if you prefer an unrestricted setup instead.
