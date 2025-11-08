@@ -2234,9 +2234,7 @@ fn new_task_editor_template(
     if let Some(hint) = state_hint {
         lines.push(format!("# state 候補: {hint}"));
     }
-    let state_line = default_state
-        .map(|value| format!("state: {value}"))
-        .unwrap_or_else(|| "state: ".to_string());
+    let state_line = default_state.map_or_else(|| "state: ".to_string(), |value| format!("state: {value}"));
     lines.extend([
         state_line,
         "labels: ".to_string(),

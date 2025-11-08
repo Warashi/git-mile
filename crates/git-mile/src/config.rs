@@ -85,7 +85,8 @@ impl Default for WorkflowConfig {
 
 impl WorkflowConfig {
     /// Configuration without workflow restrictions (used mainly in tests).
-    pub fn unrestricted() -> Self {
+    #[cfg(test)]
+    pub const fn unrestricted() -> Self {
         Self {
             states: Vec::new(),
             default_state: None,
@@ -354,10 +355,9 @@ mod tests {
     }
 
     #[test]
-    fn unrestricted_workflow_has_no_states_or_default() -> Result<()> {
+    fn unrestricted_workflow_has_no_states_or_default() {
         let workflow = WorkflowConfig::unrestricted();
         assert!(!workflow.is_restricted());
         assert!(workflow.default_state().is_none());
-        Ok(())
     }
 }
