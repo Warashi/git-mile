@@ -8,6 +8,7 @@ default:
 
 fmt:
     cargo fmt
+    tombi fmt
 
 alias format := fmt
 

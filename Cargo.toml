@@ -1,27 +1,31 @@
 [workspace]
-members = ["crates/git-mile-core", "crates/git-mile-store-git", "crates/git-mile"]
 resolver = "3"
+members = [
+  "crates/git-mile",
+  "crates/git-mile-core",
+  "crates/git-mile-store-git"
+]
 
 [workspace.package]
 edition = "2024"
-license = "MIT"
 rust-version = "1.90"
 description = "Task tracking stored as Git commits under refs/git-mile/tasks/*"
-repository = "https://github.com/Warashi/git-mile"
 readme = "README.md"
-keywords = ["git", "task-management", "cli"]
+repository = "https://github.com/Warashi/git-mile"
+license = "MIT"
+keywords = ["cli", "git", "task-management"]
 categories = ["command-line-utilities", "development-tools"]
-
-[workspace.lints.rust]
-unsafe_code = "forbid"
-rust-2018-idioms = "deny"
-missing_docs = "warn"
 
 [workspace.lints.clippy]
 all = "deny"
-pedantic = "deny"
-nursery = "deny"
 cargo = "deny"
-expect_used = "deny"
-unwrap_used = "deny"
 dbg_macro = "deny"
+expect_used = "deny"
+nursery = "deny"
+pedantic = "deny"
+unwrap_used = "deny"
+
+[workspace.lints.rust]
+missing_docs = "warn"
+rust-2018-idioms = "deny"
+unsafe_code = "forbid"
