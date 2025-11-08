@@ -1081,8 +1081,8 @@ impl<S: TaskStore> Ui<S> {
             }
             constraints.push(Constraint::Min(5)); // Main details
             if has_children {
-                #[allow(clippy::cast_possible_truncation)]
-                let height = (children.len() as u16).min(10) + 2;
+                let child_rows = u16::try_from(children.len()).unwrap_or(u16::MAX);
+                let height = child_rows.min(10) + 2;
                 constraints.push(Constraint::Length(height)); // Subtasks
             }
 
@@ -1397,8 +1397,8 @@ impl<S: TaskStore> Ui<S> {
             lines.push(Line::from(Span::styled(line_text, style)));
         }
 
-        #[allow(clippy::cast_possible_truncation)]
-        let paragraph = Paragraph::new(lines).scroll((self.tree_scroll_offset() as u16, 0));
+        let scroll_top = self.tree_scroll_offset(area.height);
+        let paragraph = Paragraph::new(lines).scroll((scroll_top, 0));
         f.render_widget(paragraph, area);
     }
 
@@ -1564,10 +1564,26 @@ impl<S: TaskStore> Ui<S> {
     }
 
     /// Calculate scroll offset to keep selected item visible.
-    #[allow(clippy::unused_self, clippy::missing_const_for_fn)]
-    fn tree_scroll_offset(&self) -> usize {
-        // TODO: Implement scroll logic based on area height
-        0
+    fn tree_scroll_offset(&self, viewport_height: u16) -> u16 {
+        if viewport_height == 0 {
+            return 0;
+        }
+        let total_rows = self.tree_state.visible_nodes.len();
+        let visible_capacity = usize::from(viewport_height);
+        if total_rows <= visible_capacity {
+            return 0;
+        }
+
+        let selected = self.tree_state.selected;
+        let half_page = usize::from(viewport_height) / 2;
+        let mut desired = selected.saturating_sub(half_page);
+        let max_offset = total_rows.saturating_sub(visible_capacity);
+        if desired > max_offset {
+            desired = max_offset;
+        }
+
+        let capped = desired.min(u16::MAX as usize);
+        u16::try_from(capped).unwrap_or(u16::MAX)
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<Option<UiAction>> {
@@ -1578,143 +1594,158 @@ impl<S: TaskStore> Ui<S> {
         self.handle_browse_key(key)
     }
 
-    #[allow(clippy::too_many_lines)]
     fn handle_browse_key(&mut self, key: KeyEvent) -> Result<Option<UiAction>> {
         match self.detail_focus {
-            DetailFocus::None => match key.code {
-                KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
-                    self.should_quit = true;
+            DetailFocus::None => self.handle_task_list_key(key),
+            DetailFocus::TreeView => Ok(self.handle_tree_view_key(key)),
+            DetailFocus::StatePicker => Ok(self.handle_state_picker_key(key)),
+            DetailFocus::CommentViewer => Ok(self.handle_comment_viewer_key(key)),
+        }
+    }
+
+    fn handle_task_list_key(&mut self, key: KeyEvent) -> Result<Option<UiAction>> {
+        match key.code {
+            KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
+                self.should_quit = true;
+                Ok(None)
+            }
+            KeyCode::Down | KeyCode::Char('j' | 'J') => {
+                self.app.select_next();
+                Ok(None)
+            }
+            KeyCode::Up | KeyCode::Char('k' | 'K') => {
+                self.app.select_prev();
+                Ok(None)
+            }
+            KeyCode::Enter => {
+                self.open_tree_view();
+                Ok(None)
+            }
+            KeyCode::Char('p' | 'P') => {
+                self.jump_to_parent();
+                Ok(None)
+            }
+            KeyCode::Char('r' | 'R') => {
+                self.app.refresh_tasks()?;
+                self.info("タスクを再読込しました");
+                Ok(None)
+            }
+            KeyCode::Char('c' | 'C') => self.app.selected_task_id().map_or_else(
+                || {
+                    self.error("コメント対象のタスクが選択されていません");
                     Ok(None)
-                }
-                KeyCode::Down | KeyCode::Char('j' | 'J') => {
-                    self.app.select_next();
+                },
+                |task| Ok(Some(UiAction::AddComment { task })),
+            ),
+            KeyCode::Char('e' | 'E') => self.app.selected_task_id().map_or_else(
+                || {
+                    self.error("編集対象のタスクが選択されていません");
                     Ok(None)
-                }
-                KeyCode::Up | KeyCode::Char('k' | 'K') => {
-                    self.app.select_prev();
+                },
+                |task| Ok(Some(UiAction::EditTask { task })),
+            ),
+            KeyCode::Char('n' | 'N') => Ok(Some(UiAction::CreateTask)),
+            KeyCode::Char('s' | 'S') => self.app.selected_task_id().map_or_else(
+                || {
+                    self.error("子タスクを作成する親タスクが選択されていません");
                     Ok(None)
-                }
-                KeyCode::Enter => {
-                    self.open_tree_view();
-                    Ok(None)
-                }
-                KeyCode::Char('p' | 'P') => {
-                    self.jump_to_parent();
-                    Ok(None)
-                }
-                KeyCode::Char('r' | 'R') => {
-                    self.app.refresh_tasks()?;
-                    self.info("タスクを再読込しました");
-                    Ok(None)
-                }
-                KeyCode::Char('c' | 'C') => self.app.selected_task_id().map_or_else(
-                    || {
-                        self.error("コメント対象のタスクが選択されていません");
-                        Ok(None)
-                    },
-                    |task| Ok(Some(UiAction::AddComment { task })),
-                ),
-                KeyCode::Char('e' | 'E') => self.app.selected_task_id().map_or_else(
-                    || {
-                        self.error("編集対象のタスクが選択されていません");
-                        Ok(None)
-                    },
-                    |task| Ok(Some(UiAction::EditTask { task })),
-                ),
-                KeyCode::Char('n' | 'N') => Ok(Some(UiAction::CreateTask)),
-                KeyCode::Char('s' | 'S') => self.app.selected_task_id().map_or_else(
-                    || {
-                        self.error("子タスクを作成する親タスクが選択されていません");
-                        Ok(None)
-                    },
-                    |parent| Ok(Some(UiAction::CreateSubtask { parent })),
-                ),
-                KeyCode::Char('y' | 'Y') => {
-                    self.copy_selected_task_id();
-                    Ok(None)
-                }
-                KeyCode::Char('t' | 'T') => {
-                    self.open_state_picker();
-                    Ok(None)
-                }
-                KeyCode::Char('v' | 'V') => {
-                    self.open_comment_viewer();
-                    Ok(None)
-                }
-                KeyCode::Char('f' | 'F') => Ok(Some(UiAction::EditFilter)),
-                _ => Ok(None),
-            },
-            DetailFocus::TreeView => match key.code {
-                KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
-                    self.detail_focus = DetailFocus::None;
-                    Ok(None)
-                }
-                KeyCode::Down | KeyCode::Char('j' | 'J') => {
-                    self.tree_view_down();
-                    Ok(None)
-                }
-                KeyCode::Up | KeyCode::Char('k' | 'K') => {
-                    self.tree_view_up();
-                    Ok(None)
-                }
-                KeyCode::Char('h' | 'H') => {
-                    self.tree_view_collapse();
-                    Ok(None)
-                }
-                KeyCode::Char('l' | 'L') => {
-                    self.tree_view_expand();
-                    Ok(None)
-                }
-                KeyCode::Enter => {
-                    self.tree_view_jump();
-                    Ok(None)
-                }
-                _ => Ok(None),
-            },
-            DetailFocus::StatePicker => match key.code {
-                KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
-                    self.close_state_picker();
-                    Ok(None)
-                }
-                KeyCode::Down | KeyCode::Char('j' | 'J') => {
-                    self.state_picker_down();
-                    Ok(None)
-                }
-                KeyCode::Up | KeyCode::Char('k' | 'K') => {
-                    self.state_picker_up();
-                    Ok(None)
-                }
-                KeyCode::Enter => {
-                    self.apply_state_picker_selection();
-                    Ok(None)
-                }
-                _ => Ok(None),
-            },
-            DetailFocus::CommentViewer => match key.code {
-                KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
-                    self.close_comment_viewer();
-                    Ok(None)
-                }
-                KeyCode::Char('j' | 'J') => {
-                    self.comment_viewer_scroll_down(1);
-                    Ok(None)
-                }
-                KeyCode::Char('k' | 'K') => {
-                    self.comment_viewer_scroll_up(1);
-                    Ok(None)
-                }
-                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    // Half-page down (approximate with 10 lines)
-                    self.comment_viewer_scroll_down(10);
-                    Ok(None)
-                }
-                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    // Half-page up (approximate with 10 lines)
-                    self.comment_viewer_scroll_up(10);
-                    Ok(None)
-                }
-                _ => Ok(None),
-            },
+                },
+                |parent| Ok(Some(UiAction::CreateSubtask { parent })),
+            ),
+            KeyCode::Char('y' | 'Y') => {
+                self.copy_selected_task_id();
+                Ok(None)
+            }
+            KeyCode::Char('t' | 'T') => {
+                self.open_state_picker();
+                Ok(None)
+            }
+            KeyCode::Char('v' | 'V') => {
+                self.open_comment_viewer();
+                Ok(None)
+            }
+            KeyCode::Char('f' | 'F') => Ok(Some(UiAction::EditFilter)),
+            _ => Ok(None),
+        }
+    }
+
+    fn handle_tree_view_key(&mut self, key: KeyEvent) -> Option<UiAction> {
+        match key.code {
+            KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
+                self.detail_focus = DetailFocus::None;
+                None
+            }
+            KeyCode::Down | KeyCode::Char('j' | 'J') => {
+                self.tree_view_down();
+                None
+            }
+            KeyCode::Up | KeyCode::Char('k' | 'K') => {
+                self.tree_view_up();
+                None
+            }
+            KeyCode::Char('h' | 'H') => {
+                self.tree_view_collapse();
+                None
+            }
+            KeyCode::Char('l' | 'L') => {
+                self.tree_view_expand();
+                None
+            }
+            KeyCode::Enter => {
+                self.tree_view_jump();
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn handle_state_picker_key(&mut self, key: KeyEvent) -> Option<UiAction> {
+        match key.code {
+            KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
+                self.close_state_picker();
+                None
+            }
+            KeyCode::Down | KeyCode::Char('j' | 'J') => {
+                self.state_picker_down();
+                None
+            }
+            KeyCode::Up | KeyCode::Char('k' | 'K') => {
+                self.state_picker_up();
+                None
+            }
+            KeyCode::Enter => {
+                self.apply_state_picker_selection();
+                None
+            }
+            _ => None,
+        }
+    }
+
+    const fn handle_comment_viewer_key(&mut self, key: KeyEvent) -> Option<UiAction> {
+        match key.code {
+            KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
+                self.close_comment_viewer();
+                None
+            }
+            KeyCode::Char('j' | 'J') => {
+                self.comment_viewer_scroll_down(1);
+                None
+            }
+            KeyCode::Char('k' | 'K') => {
+                self.comment_viewer_scroll_up(1);
+                None
+            }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Half-page down (approximate with 10 lines)
+                self.comment_viewer_scroll_down(10);
+                None
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Half-page up (approximate with 10 lines)
+                self.comment_viewer_scroll_up(10);
+                None
+            }
+            _ => None,
         }
     }
 
@@ -1818,8 +1849,7 @@ impl<S: TaskStore> Ui<S> {
         }
     }
 
-    #[allow(clippy::missing_const_for_fn)]
-    fn state_picker_up(&mut self) {
+    const fn state_picker_up(&mut self) {
         if let Some(picker) = &mut self.state_picker {
             if picker.options.is_empty() {
                 return;
@@ -1952,15 +1982,13 @@ impl<S: TaskStore> Ui<S> {
         self.detail_focus = DetailFocus::TreeView;
     }
 
-    #[allow(clippy::missing_const_for_fn)]
-    fn tree_view_down(&mut self) {
+    const fn tree_view_down(&mut self) {
         if self.tree_state.selected + 1 < self.tree_state.visible_nodes.len() {
             self.tree_state.selected += 1;
         }
     }
 
-    #[allow(clippy::missing_const_for_fn)]
-    fn tree_view_up(&mut self) {
+    const fn tree_view_up(&mut self) {
         if self.tree_state.selected > 0 {
             self.tree_state.selected -= 1;
         }
@@ -2863,8 +2891,6 @@ impl TaskStore for GitStore {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
-
     use super::*;
     use crate::config::StateKind;
     use anyhow::{Result, anyhow};
@@ -2872,9 +2898,29 @@ mod tests {
     use ratatui::layout::{Constraint, Direction, Layout, Rect};
     use std::cell::RefCell;
     use std::collections::{BTreeSet, HashMap};
+    use std::fmt::Display;
     use std::rc::Rc;
+    use std::result::Result as StdResult;
     use std::str::FromStr;
     use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+
+    fn expect_ok<T, E: Display>(result: StdResult<T, E>, ctx: &str) -> T {
+        match result {
+            Ok(value) => value,
+            Err(err) => panic!("{ctx}: {err}"),
+        }
+    }
+
+    fn expect_err<T, E: Display>(result: StdResult<T, E>, ctx: &str) -> E {
+        match result {
+            Ok(_) => panic!("{ctx}"),
+            Err(err) => err,
+        }
+    }
+
+    fn expect_some<T>(value: Option<T>, ctx: &str) -> T {
+        value.map_or_else(|| panic!("{ctx}"), |inner| inner)
+    }
 
     struct MockStore {
         tasks: RefCell<Vec<TaskId>>,
@@ -2965,11 +3011,17 @@ mod tests {
     }
 
     fn ts(secs: i64) -> OffsetDateTime {
-        OffsetDateTime::from_unix_timestamp(secs).expect("must create timestamp from unix seconds")
+        expect_ok(
+            OffsetDateTime::from_unix_timestamp(secs),
+            "must create timestamp from unix seconds",
+        )
     }
 
     fn fixed_task_id(n: u8) -> TaskId {
-        TaskId::from_str(&format!("00000000-0000-0000-0000-0000000000{n:02}")).expect("must parse task id")
+        expect_ok(
+            TaskId::from_str(&format!("00000000-0000-0000-0000-0000000000{n:02}")),
+            "must parse task id",
+        )
     }
 
     fn created(task: TaskId, secs: i64, title: &str) -> Event {
@@ -3248,7 +3300,7 @@ mod tests {
         ]);
         let app = App::new(store, WorkflowConfig::unrestricted())?;
 
-        let root_view = app.get_root(leaf).expect("must locate a root despite cycle");
+        let root_view = expect_some(app.get_root(leaf), "must locate a root despite cycle");
         assert_eq!(root_view.snapshot.id, root);
         Ok(())
     }
@@ -3413,7 +3465,7 @@ mod tests {
 
         let recorded = writes.borrow().last().cloned();
         assert_eq!(recorded, Some(task.to_string()));
-        let message = ui.message.expect("info message must be set");
+        let message = expect_some(ui.message.take(), "info message must be set");
         assert!(matches!(message.level, MessageLevel::Info));
         assert!(message.text.contains("コピー"));
         Ok(())
@@ -3428,7 +3480,7 @@ mod tests {
 
         ui.copy_selected_task_id();
 
-        let message = ui.message.expect("error message must be set");
+        let message = expect_some(ui.message.take(), "error message must be set");
         assert!(matches!(message.level, MessageLevel::Error));
         assert!(
             message.text.contains("broken clipboard"),
@@ -3446,7 +3498,7 @@ mod tests {
 
         ui.copy_selected_task_id();
 
-        let message = ui.message.expect("error message must be set");
+        let message = expect_some(ui.message.take(), "error message must be set");
         assert!(matches!(message.level, MessageLevel::Error));
         assert!(message.text.contains("コピー対象"));
         Ok(())
@@ -3491,13 +3543,12 @@ mod tests {
 
         let mut app = App::new(store, WorkflowConfig::unrestricted())?;
         app.selected = 1;
-        let target = app.selected_task_id().expect("selected task id");
+        let target = expect_some(app.selected_task_id(), "selected task id");
         app.add_comment(target, "hello".into(), &actor())?;
 
         assert_eq!(app.selected_task_id(), Some(target));
         assert_eq!(
-            app.selected_task()
-                .unwrap()
+            expect_some(app.selected_task(), "selected task")
                 .comments
                 .last()
                 .map(|c| c.body.as_str()),
@@ -3526,7 +3577,7 @@ mod tests {
         assert_eq!(app.tasks.len(), 1);
         assert_eq!(app.selected_task_id(), Some(id));
 
-        let snap = &app.selected_task().unwrap().snapshot;
+        let snap = &expect_some(app.selected_task(), "selected task").snapshot;
         assert_eq!(snap.title, "Title");
         assert_eq!(snap.state.as_deref(), Some("todo"));
         assert_eq!(snap.description, "Write documentation");
@@ -3550,7 +3601,7 @@ mod tests {
             parent: None,
         };
 
-        let err = app.create_task(data, &actor()).unwrap_err();
+        let err = expect_err(app.create_task(data, &actor()), "create_task should fail");
         assert!(err.to_string().contains("state 'state/done'"));
         Ok(())
     }
@@ -3574,7 +3625,7 @@ mod tests {
         };
 
         app.create_task(data, &actor())?;
-        let snap = &app.selected_task().unwrap().snapshot;
+        let snap = &expect_some(app.selected_task(), "selected task").snapshot;
         assert_eq!(snap.state.as_deref(), Some("state/todo"));
         Ok(())
     }
@@ -3603,8 +3654,8 @@ assignees: alice, bob
 ---
 This is description.
 ";
-        let parsed = parse_new_task_editor_output(raw).expect("parse succeeds");
-        let data = parsed.expect("should create task");
+        let parsed = expect_ok(parse_new_task_editor_output(raw), "parse succeeds");
+        let data = expect_some(parsed, "should create task");
         assert_eq!(data.title, "Sample Task");
         assert_eq!(data.state.as_deref(), Some("state/todo"));
         assert_eq!(data.labels, vec!["type/docs".to_string(), "area/cli".to_string()]);
@@ -3623,7 +3674,7 @@ assignees:
 ---
 # no description
 ";
-        let parsed = parse_new_task_editor_output(raw).expect("parse succeeds");
+        let parsed = expect_ok(parse_new_task_editor_output(raw), "parse succeeds");
         assert!(parsed.is_none());
     }
 
@@ -3636,7 +3687,7 @@ labels: foo
 assignees:
 ---
 ";
-        let err = parse_new_task_editor_output(raw).expect_err("should error");
+        let err = expect_err(parse_new_task_editor_output(raw), "should error");
         assert_eq!(err, "タイトルを入力してください");
     }
 
@@ -3663,7 +3714,7 @@ updated_since: 2025-01-01T00:00:00Z
 updated_until: 2025-01-02T00:00:00Z
 "
         );
-        let filter = parse_filter_editor_output(&raw).expect("parse succeeds");
+        let filter = expect_ok(parse_filter_editor_output(&raw), "parse succeeds");
         assert!(filter.states.contains("state/todo"));
         assert!(filter.labels.contains("type/bug"));
         assert!(filter.assignees.contains("alice"));
@@ -3671,16 +3722,19 @@ updated_until: 2025-01-02T00:00:00Z
         assert!(filter.children.contains(&child));
         assert_eq!(filter.text.as_deref(), Some("panic"));
         assert!(filter.state_kinds.exclude.contains(&StateKind::Done));
-        let updated = filter.updated.expect("updated filter");
-        let expected_since = OffsetDateTime::parse("2025-01-01T00:00:00Z", &Rfc3339).expect("ts");
-        let expected_until = OffsetDateTime::parse("2025-01-02T00:00:00Z", &Rfc3339).expect("ts");
+        let updated = expect_some(filter.updated, "updated filter");
+        let expected_since = expect_ok(OffsetDateTime::parse("2025-01-01T00:00:00Z", &Rfc3339), "ts");
+        let expected_until = expect_ok(OffsetDateTime::parse("2025-01-02T00:00:00Z", &Rfc3339), "ts");
         assert_eq!(updated.since, Some(expected_since));
         assert_eq!(updated.until, Some(expected_until));
     }
 
     #[test]
     fn filter_editor_output_rejects_invalid_timestamp() {
-        let err = parse_filter_editor_output("updated_since: invalid").expect_err("should error");
+        let err = expect_err(
+            parse_filter_editor_output("updated_since: invalid"),
+            "should error",
+        );
         assert!(err.contains("時刻"));
     }
 
@@ -3704,7 +3758,7 @@ updated_until: 2025-01-02T00:00:00Z
 
     #[test]
     fn parse_state_kind_filter_handles_include_and_exclude() {
-        let filter = parse_state_kind_filter("in_progress, !done").expect("parse succeeds");
+        let filter = expect_ok(parse_state_kind_filter("in_progress, !done"), "parse succeeds");
         assert!(filter.include.contains(&StateKind::InProgress));
         assert!(filter.exclude.contains(&StateKind::Done));
     }
@@ -3775,11 +3829,10 @@ updated_until: 2025-01-02T00:00:00Z
         )?;
         assert!(updated);
 
-        let view = app
-            .tasks
-            .iter()
-            .find(|view| view.snapshot.id == task)
-            .expect("task should exist");
+        let view = expect_some(
+            app.tasks.iter().find(|view| view.snapshot.id == task),
+            "task should exist",
+        );
         assert_eq!(view.snapshot.title, "Updated");
         assert_eq!(view.snapshot.state, None);
         let labels: Vec<&str> = view.snapshot.labels.iter().map(String::as_str).collect();
@@ -3789,7 +3842,7 @@ updated_until: 2025-01-02T00:00:00Z
         assert_eq!(view.snapshot.description, "new description");
 
         let events = app.store.events.borrow();
-        let stored = events.get(&task).expect("events for task");
+        let stored = expect_some(events.get(&task), "events for task");
         assert_eq!(stored.len(), 8);
         assert!(
             stored
@@ -3849,7 +3902,7 @@ updated_until: 2025-01-02T00:00:00Z
         let mut app = App::new(store, WorkflowConfig::unrestricted())?;
         let snapshot = {
             let events = app.store.events.borrow();
-            let stored = events.get(&task).expect("events for task");
+            let stored = expect_some(events.get(&task), "events for task");
             TaskSnapshot::replay(stored)
         };
 
@@ -3872,7 +3925,7 @@ updated_until: 2025-01-02T00:00:00Z
         assert!(!updated);
 
         let events = app.store.events.borrow();
-        let stored = events.get(&task).expect("events for task");
+        let stored = expect_some(events.get(&task), "events for task");
         assert_eq!(stored.len(), 1);
         Ok(())
     }
@@ -3902,15 +3955,14 @@ updated_until: 2025-01-02T00:00:00Z
         let changed = app.set_task_state(task, Some("state/done".into()), &actor())?;
         assert!(changed);
 
-        let view = app
-            .tasks
-            .iter()
-            .find(|view| view.snapshot.id == task)
-            .expect("task should exist");
+        let view = expect_some(
+            app.tasks.iter().find(|view| view.snapshot.id == task),
+            "task should exist",
+        );
         assert_eq!(view.snapshot.state.as_deref(), Some("state/done"));
 
         let events = app.store.events.borrow();
-        let stored = events.get(&task).expect("events for task");
+        let stored = expect_some(events.get(&task), "events for task");
         assert_eq!(stored.len(), 2);
         assert!(
             stored
@@ -3943,7 +3995,7 @@ updated_until: 2025-01-02T00:00:00Z
         assert!(!changed);
 
         let events = app.store.events.borrow();
-        let stored = events.get(&task).expect("events for task");
+        let stored = expect_some(events.get(&task), "events for task");
         assert_eq!(stored.len(), 1);
         Ok(())
     }
@@ -3974,7 +4026,7 @@ updated_until: 2025-01-02T00:00:00Z
         ui.open_state_picker();
 
         assert_eq!(ui.detail_focus, DetailFocus::StatePicker);
-        let picker = ui.state_picker.as_ref().expect("state picker");
+        let picker = expect_some(ui.state_picker.as_ref(), "state picker");
         assert_eq!(
             picker.options[picker.selected].value.as_deref(),
             Some("state/done")
@@ -4009,12 +4061,10 @@ updated_until: 2025-01-02T00:00:00Z
         ui.state_picker_down();
         ui.apply_state_picker_selection();
 
-        let view = ui
-            .app
-            .tasks
-            .iter()
-            .find(|view| view.snapshot.id == task)
-            .expect("task exists");
+        let view = expect_some(
+            ui.app.tasks.iter().find(|view| view.snapshot.id == task),
+            "task exists",
+        );
         assert_eq!(view.snapshot.state.as_deref(), Some("state/done"));
         assert!(ui.state_picker.is_none());
         assert_eq!(ui.detail_focus, DetailFocus::None);
