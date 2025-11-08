@@ -3,7 +3,7 @@
 use crate::config::WorkflowConfig;
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::TaskId;
-use git_mile_core::{StateKind, TaskFilter, TaskSnapshot};
+use git_mile_core::{OrderedEvents, StateKind, TaskFilter, TaskSnapshot};
 use git_mile_store_git::GitStore;
 use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::tool::{ToolCallContext, ToolRouter};
@@ -17,7 +17,10 @@ use rmcp::{ErrorData as McpError, tool, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::sync::Arc;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use tokio::sync::Mutex;
 
 /// Parameters for creating a new task.
@@ -152,6 +155,13 @@ pub struct GetTaskParams {
     pub task_id: String,
 }
 
+/// Parameters for listing comments on a task.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ListCommentsParams {
+    /// Task ID whose comments should be returned.
+    pub task_id: String,
+}
+
 /// Parameters for listing subtasks of a parent task.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ListSubtasksParams {
@@ -196,6 +206,17 @@ struct WorkflowStatesResponse {
     states: Vec<WorkflowStateEntry>,
 }
 
+/// Comment entry returned by the MCP tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TaskCommentEntry {
+    comment_id: String,
+    actor: Actor,
+    body_md: String,
+    created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_at: Option<String>,
+}
+
 impl ListTasksParams {
     fn into_filter(self) -> TaskFilter {
         TaskFilter {
@@ -219,6 +240,11 @@ fn normalize_text(input: Option<String>) -> Option<String> {
             Some(trimmed.to_owned())
         }
     })
+}
+
+fn format_timestamp(ts: OffsetDateTime) -> Result<String, McpError> {
+    ts.format(&Rfc3339)
+        .map_err(|e| McpError::internal_error(e.to_string(), None))
 }
 
 fn compare_snapshots(a: &TaskSnapshot, b: &TaskSnapshot) -> Ordering {
@@ -336,6 +362,73 @@ impl GitMileServer {
 
         let snapshot = TaskSnapshot::replay(&events);
         let json_str = serde_json::to_string_pretty(&snapshot)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json_str)]))
+    }
+
+    /// List comments recorded on a task.
+    #[tool(description = "List all comments on a task in chronological order")]
+    async fn list_comments(
+        &self,
+        Parameters(params): Parameters<ListCommentsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use git_mile_core::id::EventId;
+
+        let task_id_raw = params.task_id.clone();
+        let task: TaskId = task_id_raw
+            .parse()
+            .map_err(|e| McpError::invalid_params(format!("Invalid task ID: {e}"), None))?;
+
+        let store = self.store.lock().await;
+        let events = store.load_events(task).map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("Task not found") {
+                McpError::invalid_params(format!("Task not found: {task_id_raw}"), None)
+            } else {
+                McpError::internal_error(msg, None)
+            }
+        })?;
+        drop(store);
+
+        let ordered = OrderedEvents::from(events.as_slice());
+        let mut comments = Vec::new();
+        let mut index: HashMap<EventId, usize> = HashMap::new();
+
+        for ev in ordered.iter() {
+            match &ev.kind {
+                EventKind::CommentAdded { comment_id, body_md } => {
+                    let entry = TaskCommentEntry {
+                        comment_id: comment_id.to_string(),
+                        actor: ev.actor.clone(),
+                        body_md: body_md.clone(),
+                        created_at: format_timestamp(ev.ts)?,
+                        updated_at: None,
+                    };
+                    index.insert(*comment_id, comments.len());
+                    comments.push(entry);
+                }
+                EventKind::CommentUpdated { comment_id, body_md } => {
+                    let Some(&position) = index.get(comment_id) else {
+                        return Err(McpError::internal_error(
+                            format!("Comment {comment_id} was updated before it was added"),
+                            None,
+                        ));
+                    };
+                    let Some(entry) = comments.get_mut(position) else {
+                        return Err(McpError::internal_error(
+                            format!("Comment map out of sync for {comment_id}"),
+                            None,
+                        ));
+                    };
+                    entry.body_md = body_md.clone();
+                    entry.updated_at = Some(format_timestamp(ev.ts)?);
+                }
+                _ => {}
+            }
+        }
+
+        let json_str = serde_json::to_string_pretty(&comments)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         Ok(CallToolResult::success(vec![Content::text(json_str)]))
@@ -847,6 +940,7 @@ mod tests {
     };
     use git2::Repository;
     use rmcp::model::{ErrorCode, RawContent};
+    use serde::Deserialize;
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -1182,6 +1276,146 @@ mod tests {
         assert!(err.message.contains("Parent task not found"));
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_comments_returns_comment_history() -> Result<()> {
+        let repo = tempdir()?;
+        Repository::init(repo.path())?;
+        let server = GitMileServer::new(GitStore::open(repo.path())?, WorkflowConfig::default());
+
+        let task_snapshot = decode_task_result(
+            server
+                .create_task(Parameters(create_task_params("Commented task", vec![])))
+                .await?,
+        )?;
+        let task_id = task_snapshot.id.to_string();
+
+        server
+            .add_comment(Parameters(AddCommentParams {
+                task_id: task_id.clone(),
+                body_md: "first comment".into(),
+                actor_name: "alice".into(),
+                actor_email: "alice@example.invalid".into(),
+            }))
+            .await?;
+        server
+            .add_comment(Parameters(AddCommentParams {
+                task_id: task_id.clone(),
+                body_md: "second comment".into(),
+                actor_name: "bob".into(),
+                actor_email: "bob@example.invalid".into(),
+            }))
+            .await?;
+
+        let comments = decode_comment_list(
+            server
+                .list_comments(Parameters(ListCommentsParams {
+                    task_id: task_id.clone(),
+                }))
+                .await?,
+        )?;
+
+        assert_eq!(comments.len(), 2);
+        assert_eq!(comments[0].body_md, "first comment");
+        assert_eq!(comments[0].actor.name, "alice");
+        assert_eq!(comments[1].body_md, "second comment");
+        assert_eq!(comments[1].actor.name, "bob");
+        assert!(comments.iter().all(|c| !c.comment_id.is_empty()));
+        assert!(comments.iter().all(|c| !c.created_at.is_empty()));
+        assert!(comments.iter().all(|c| c.updated_at.is_none()));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_comments_reflects_updates() -> Result<()> {
+        let repo = tempdir()?;
+        Repository::init(repo.path())?;
+        let server = GitMileServer::new(GitStore::open(repo.path())?, WorkflowConfig::default());
+
+        let task_snapshot = decode_task_result(
+            server
+                .create_task(Parameters(create_task_params("Task with edits", vec![])))
+                .await?,
+        )?;
+        let task_id = task_snapshot.id.to_string();
+
+        let comment_id = decode_comment_operation_id(
+            server
+                .add_comment(Parameters(AddCommentParams {
+                    task_id: task_id.clone(),
+                    body_md: "initial".into(),
+                    actor_name: "alice".into(),
+                    actor_email: "alice@example.invalid".into(),
+                }))
+                .await?,
+        )?;
+
+        server
+            .update_comment(Parameters(UpdateCommentParams {
+                task_id: task_id.clone(),
+                comment_id,
+                body_md: "edited body".into(),
+                actor_name: "carol".into(),
+                actor_email: "carol@example.invalid".into(),
+            }))
+            .await?;
+
+        let comments = decode_comment_list(
+            server
+                .list_comments(Parameters(ListCommentsParams { task_id }))
+                .await?,
+        )?;
+
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].body_md, "edited body");
+        assert!(
+            comments[0].updated_at.is_some(),
+            "updated comments must include updated_at"
+        );
+
+        Ok(())
+    }
+
+    #[derive(Deserialize)]
+    struct CommentResponse {
+        comment_id: String,
+        actor: Actor,
+        body_md: String,
+        created_at: String,
+        updated_at: Option<String>,
+    }
+
+    fn decode_comment_list(result: CallToolResult) -> Result<Vec<CommentResponse>> {
+        let content = result
+            .content
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("tool response should include content"))?;
+        let text = match content.raw {
+            RawContent::Text(block) => block.text,
+            _ => return Err(anyhow!("expected text content")),
+        };
+        serde_json::from_str(&text).context("must decode comment entries")
+    }
+
+    fn decode_comment_operation_id(result: CallToolResult) -> Result<String> {
+        let content = result
+            .content
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("tool response should include content"))?;
+        let text = match content.raw {
+            RawContent::Text(block) => block.text,
+            _ => return Err(anyhow!("expected text content")),
+        };
+        #[derive(Deserialize)]
+        struct CommentOperation {
+            comment_id: String,
+        }
+        let parsed: CommentOperation = serde_json::from_str(&text).context("must decode comment op")?;
+        Ok(parsed.comment_id)
     }
 
     fn decode_task_list(result: CallToolResult) -> Result<Vec<TaskSnapshot>> {
