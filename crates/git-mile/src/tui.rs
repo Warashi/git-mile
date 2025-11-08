@@ -750,6 +750,15 @@ impl TreeViewState {
         }
     }
 
+    /// Expand ancestors so the given task is visible.
+    fn expand_to_task(&mut self, task_id: TaskId) {
+        for root in &mut self.roots {
+            if Self::expand_path_to_task(root, task_id) {
+                break;
+            }
+        }
+    }
+
     /// Recursively collect visible nodes into a vector.
     fn collect_visible_nodes_into(node: &TreeNode, depth: usize, visible_nodes: &mut Vec<(usize, TaskId)>) {
         visible_nodes.push((depth, node.task_id));
@@ -758,6 +767,20 @@ impl TreeViewState {
                 Self::collect_visible_nodes_into(child, depth + 1, visible_nodes);
             }
         }
+    }
+
+    /// Expand nodes along the path to the target task.
+    fn expand_path_to_task(node: &mut TreeNode, task_id: TaskId) -> bool {
+        if node.task_id == task_id {
+            return true;
+        }
+        for child in &mut node.children {
+            if Self::expand_path_to_task(child, task_id) {
+                node.expanded = true;
+                return true;
+            }
+        }
+        false
     }
 
     /// Get currently selected task ID.
@@ -1773,6 +1796,7 @@ impl<S: TaskStore> Ui<S> {
 
         // Initialize tree state
         self.tree_state.roots = vec![tree];
+        self.tree_state.expand_to_task(current_id);
         self.tree_state.rebuild_visible_nodes();
 
         // Find and select current task in tree
@@ -3194,6 +3218,42 @@ mod tests {
             .map(|(_, task_id)| *task_id)
             .collect();
         assert_eq!(visible, vec![parent, child]);
+        Ok(())
+    }
+
+    #[test]
+    fn tree_view_expands_path_to_selected_grandchild() -> Result<()> {
+        let parent = TaskId::new();
+        let child = TaskId::new();
+        let grandchild = TaskId::new();
+
+        let store = MockStore::new()
+            .with_task(parent, vec![created(parent, 0, "Parent")])
+            .with_task(
+                child,
+                vec![created(child, 10, "Child"), child_link(11, parent, child)],
+            )
+            .with_task(
+                grandchild,
+                vec![
+                    created(grandchild, 20, "Grandchild"),
+                    child_link(21, child, grandchild),
+                ],
+            );
+        let mut app = App::new(store, WorkflowConfig::unrestricted())?;
+        app.jump_to_task(grandchild);
+        let mut ui = ui_with_clipboard(app, Box::new(NoopClipboard));
+
+        ui.open_tree_view();
+
+        let visible: Vec<TaskId> = ui
+            .tree_state
+            .visible_nodes
+            .iter()
+            .map(|(_, task_id)| *task_id)
+            .collect();
+        assert_eq!(visible, vec![parent, child, grandchild]);
+        assert_eq!(ui.tree_state.selected_task_id(), Some(grandchild));
         Ok(())
     }
 
