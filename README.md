@@ -173,6 +173,7 @@ git-mile mcp
 - Define `.git-mile/config.toml` in the repository root to restrict valid states per project
 - Add `kind` (`todo`, `in_progress`, `blocked`, `done`, `backlog`) to classify each state so CLI/TUI can render kind markers and enable kind filters
 - TUI/CLI/MCP will validate `state` values and show hints when this file lists allowed entries
+- Set `default_state` to automatically apply a state when new tasks omit it
 
 ```toml
 [workflow]
@@ -181,6 +182,7 @@ states = [
   { value = "state/in-progress", label = "In Progress", kind = "in_progress" },
   { value = "state/done", label = "Done", kind = "done" }
 ]
+default_state = "state/todo"
 ```
 
 ## Development

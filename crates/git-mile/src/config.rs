@@ -48,7 +48,8 @@ impl ProjectConfig {
     }
 
     fn validate(&self) -> Result<()> {
-        self.workflow.ensure_unique_states()
+        self.workflow.ensure_unique_states()?;
+        self.workflow.ensure_valid_default()
     }
 }
 
@@ -69,13 +70,27 @@ fn repo_workdir(repo: &Repository) -> Result<PathBuf> {
 pub struct WorkflowConfig {
     #[serde(default)]
     states: Vec<WorkflowState>,
+    #[serde(default)]
+    default_state: Option<String>,
 }
 
 impl WorkflowConfig {
     /// Construct a workflow configuration from explicit states.
     #[cfg(test)]
     pub const fn from_states(states: Vec<WorkflowState>) -> Self {
-        Self { states }
+        Self {
+            states,
+            default_state: None,
+        }
+    }
+
+    /// Construct workflow configuration with explicit default state.
+    #[cfg(test)]
+    pub fn from_states_with_default(states: Vec<WorkflowState>, default_state: Option<&str>) -> Self {
+        Self {
+            states,
+            default_state: default_state.map(str::to_owned),
+        }
     }
 
     /// Returns true when states are restricted to a configured set.
@@ -86,6 +101,11 @@ impl WorkflowConfig {
     /// Iterate over allowed workflow states (if any).
     pub(crate) fn states(&self) -> &[WorkflowState] {
         &self.states
+    }
+
+    /// Retrieve configured default state (if any).
+    pub fn default_state(&self) -> Option<&str> {
+        self.default_state.as_deref()
     }
 
     /// Find a workflow state by its value.
@@ -139,6 +159,19 @@ impl WorkflowConfig {
             if !seen.insert(state.value()) {
                 bail!("duplicate workflow state detected: {}", state.value());
             }
+        }
+        Ok(())
+    }
+
+    fn ensure_valid_default(&self) -> Result<()> {
+        let Some(default) = self.default_state() else {
+            return Ok(());
+        };
+        if default.trim().is_empty() {
+            bail!("default workflow state must not be empty");
+        }
+        if self.is_restricted() && self.find_state(default).is_none() {
+            bail!("default workflow state '{default}' is not defined in workflow configuration");
         }
         Ok(())
     }
@@ -215,7 +248,7 @@ mod tests {
         let mut file = fs::File::create(cfg_dir.join(CONFIG_FILE))?;
         writeln!(
             file,
-            "[workflow]\nstates = [\n  {{ value = \"state/todo\", label = \"To Do\" }},\n  {{ value = \"state/done\" }}\n]"
+            "[workflow]\nstates = [\n  {{ value = \"state/todo\", label = \"To Do\" }},\n  {{ value = \"state/done\" }}\n]\ndefault_state = \"state/todo\""
         )?;
 
         let cfg = ProjectConfig::from_workdir(dir.path())?;
@@ -223,6 +256,7 @@ mod tests {
         assert_eq!(cfg.workflow.states().len(), 2);
         cfg.workflow.validate_state(Some("state/todo"))?;
         assert!(cfg.workflow.validate_state(Some("state/unknown")).is_err());
+        assert_eq!(cfg.workflow.default_state(), Some("state/todo"));
         Ok(())
     }
 
@@ -241,6 +275,42 @@ mod tests {
             panic!("duplicate workflow state should error");
         };
         assert!(err.to_string().contains("duplicate workflow state"));
+        Ok(())
+    }
+
+    #[test]
+    fn default_state_must_be_defined_when_restricted() -> Result<()> {
+        let dir = tempdir()?;
+        let cfg_dir = dir.path().join(CONFIG_DIR);
+        fs::create_dir_all(&cfg_dir)?;
+        let mut file = fs::File::create(cfg_dir.join(CONFIG_FILE))?;
+        writeln!(
+            file,
+            "[workflow]\nstates = [\n  {{ value = \"state/todo\" }}\n]\ndefault_state = \"state/done\""
+        )?;
+
+        let Err(err) = ProjectConfig::from_workdir(dir.path()) else {
+            panic!("unknown default state should error");
+        };
+        assert!(err.to_string().contains("default workflow state 'state/done'"));
+        Ok(())
+    }
+
+    #[test]
+    fn default_state_must_not_be_empty() -> Result<()> {
+        let dir = tempdir()?;
+        let cfg_dir = dir.path().join(CONFIG_DIR);
+        fs::create_dir_all(&cfg_dir)?;
+        let mut file = fs::File::create(cfg_dir.join(CONFIG_FILE))?;
+        writeln!(file, "[workflow]\ndefault_state = \"\"")?;
+
+        let Err(err) = ProjectConfig::from_workdir(dir.path()) else {
+            panic!("empty default state should error");
+        };
+        assert!(
+            err.to_string()
+                .contains("default workflow state must not be empty")
+        );
         Ok(())
     }
 }

@@ -49,13 +49,17 @@ impl<S: TaskRepository> TaskService<S> {
     fn create_with_parents(&self, input: CreateTaskInput) -> Result<CreateTaskOutput> {
         let CreateTaskInput {
             title,
-            state,
+            mut state,
             labels,
             assignees,
             description,
             parents,
             actor,
         } = input;
+
+        if state.is_none() {
+            state = self.workflow.default_state().map(str::to_owned);
+        }
 
         self.workflow.validate_state(state.as_deref())?;
         let state_kind = self.workflow.resolve_state_kind(state.as_deref());
@@ -354,6 +358,38 @@ mod tests {
         };
 
         assert!(err.to_string().contains("state 'state/done'"));
+    }
+
+    #[test]
+    fn create_task_applies_default_state_when_missing() -> Result<()> {
+        let store = MockStore::default();
+        let workflow = WorkflowConfig::from_states_with_default(
+            vec![WorkflowState::new("state/ready")],
+            Some("state/ready"),
+        );
+        let service = TaskService::new(store.clone(), workflow);
+
+        let output = service.create_with_parents(CreateTaskInput {
+            title: "task".into(),
+            state: None,
+            labels: vec![],
+            assignees: vec![],
+            description: None,
+            parents: vec![],
+            actor: sample_actor(),
+        })?;
+
+        let events = store.appended();
+        assert_eq!(events.len(), 1);
+        match &events[0].kind {
+            EventKind::TaskCreated { state, .. } => {
+                assert_eq!(state.as_deref(), Some("state/ready"));
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        assert_eq!(output.parent_links.len(), 0);
+        Ok(())
     }
 
     #[test]

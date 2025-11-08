@@ -412,7 +412,10 @@ impl<S: TaskStore> App<S> {
     }
 
     /// Create a fresh task and refresh the view, returning the new identifier.
-    pub fn create_task(&mut self, data: NewTaskData, actor: &Actor) -> Result<TaskId> {
+    pub fn create_task(&mut self, mut data: NewTaskData, actor: &Actor) -> Result<TaskId> {
+        if data.state.is_none() {
+            data.state = self.workflow.default_state().map(str::to_owned);
+        }
         self.workflow.validate_state(data.state.as_deref())?;
         let state_kind = self.workflow.resolve_state_kind(data.state.as_deref());
 
@@ -2075,14 +2078,16 @@ fn handle_ui_action<S: TaskStore>(
         }
         UiAction::CreateTask => {
             let hint = ui.app.workflow().state_hint();
-            let template = new_task_editor_template(None, hint.as_deref());
+            let default_state = ui.app.workflow().default_state();
+            let template = new_task_editor_template(None, hint.as_deref(), default_state);
             let raw = with_terminal_suspended(terminal, || launch_editor(&template))?;
             ui.apply_new_task_input(&raw)?;
         }
         UiAction::CreateSubtask { parent } => {
             let parent_view = ui.app.tasks.iter().find(|view| view.snapshot.id == parent);
             let hint = ui.app.workflow().state_hint();
-            let template = new_task_editor_template(parent_view, hint.as_deref());
+            let default_state = ui.app.workflow().default_state();
+            let template = new_task_editor_template(parent_view, hint.as_deref(), default_state);
             let raw = with_terminal_suspended(terminal, || launch_editor(&template))?;
             ui.apply_new_subtask_input(parent, &raw)?;
         }
@@ -2204,7 +2209,11 @@ fn edit_task_editor_template(task: &TaskView, state_hint: Option<&str>) -> Strin
     lines.join("\n")
 }
 
-fn new_task_editor_template(parent: Option<&TaskView>, state_hint: Option<&str>) -> String {
+fn new_task_editor_template(
+    parent: Option<&TaskView>,
+    state_hint: Option<&str>,
+    default_state: Option<&str>,
+) -> String {
     let header = parent.map_or_else(
         || "# 新規タスクを作成します。".to_owned(),
         |p| {
@@ -2225,8 +2234,11 @@ fn new_task_editor_template(parent: Option<&TaskView>, state_hint: Option<&str>)
     if let Some(hint) = state_hint {
         lines.push(format!("# state 候補: {hint}"));
     }
+    let state_line = default_state
+        .map(|value| format!("state: {value}"))
+        .unwrap_or_else(|| "state: ".to_string());
     lines.extend([
-        "state: ".to_string(),
+        state_line,
         "labels: ".to_string(),
         "assignees: ".to_string(),
         "---".to_string(),
@@ -3385,6 +3397,30 @@ mod tests {
     }
 
     #[test]
+    fn create_task_applies_default_state() -> Result<()> {
+        let store = MockStore::new();
+        let workflow = WorkflowConfig::from_states_with_default(
+            vec![WorkflowState::new("state/todo")],
+            Some("state/todo"),
+        );
+        let mut app = App::new(store, workflow)?;
+
+        let data = NewTaskData {
+            title: "Title".into(),
+            state: None,
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            description: None,
+            parent: None,
+        };
+
+        app.create_task(data, &actor())?;
+        let snap = &app.selected_task().unwrap().snapshot;
+        assert_eq!(snap.state.as_deref(), Some("state/todo"));
+        Ok(())
+    }
+
+    #[test]
     fn comment_editor_output_strips_comments_and_trims() {
         let input = "# comment\nline1\n\nline2  \n# ignored";
         let parsed = parse_comment_editor_output(input);
@@ -3443,6 +3479,12 @@ assignees:
 ";
         let err = parse_new_task_editor_output(raw).expect_err("should error");
         assert_eq!(err, "タイトルを入力してください");
+    }
+
+    #[test]
+    fn new_task_editor_template_prefills_default_state() {
+        let template = new_task_editor_template(None, None, Some("state/todo"));
+        assert!(template.contains("state: state/todo"));
     }
 
     #[test]

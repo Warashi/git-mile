@@ -5,3 +5,4 @@ states = [
   { value = "state/in-progress", label = "In Progress", kind = "in_progress" },
   { value = "state/done", label = "Done", kind = "done" }
 ]
+default_state = "state/todo"

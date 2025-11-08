@@ -24,7 +24,7 @@ use tokio::sync::Mutex;
 pub struct CreateTaskParams {
     /// Human-readable title for the task.
     pub title: String,
-    /// Optional workflow state label.
+    /// Optional workflow state label. Falls back to `workflow.default_state` when omitted.
     #[serde(default)]
     pub state: Option<String>,
     /// Labels to attach to the task.
@@ -233,27 +233,42 @@ impl GitMileServer {
         &self,
         Parameters(params): Parameters<CreateTaskParams>,
     ) -> Result<CallToolResult, McpError> {
+        let CreateTaskParams {
+            title,
+            mut state,
+            labels,
+            assignees,
+            description,
+            parents,
+            actor_name,
+            actor_email,
+        } = params;
+
+        if state.is_none() {
+            state = self.workflow.default_state().map(str::to_owned);
+        }
+
         self.workflow
-            .validate_state(params.state.as_deref())
+            .validate_state(state.as_deref())
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-        let state_kind = self.workflow.resolve_state_kind(params.state.as_deref());
+        let state_kind = self.workflow.resolve_state_kind(state.as_deref());
 
         let store = self.store.lock().await;
         let task = TaskId::new();
         let actor = Actor {
-            name: params.actor_name,
-            email: params.actor_email,
+            name: actor_name,
+            email: actor_email,
         };
 
         let event = Event::new(
             task,
             &actor,
             EventKind::TaskCreated {
-                title: params.title,
-                labels: params.labels,
-                assignees: params.assignees,
-                description: params.description,
-                state: params.state,
+                title,
+                labels,
+                assignees,
+                description,
+                state,
                 state_kind,
             },
         );
@@ -263,7 +278,7 @@ impl GitMileServer {
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         // Create ChildLinked events for each parent
-        for parent_str in params.parents {
+        for parent_str in parents {
             let parent: TaskId = parent_str
                 .parse()
                 .map_err(|e| McpError::invalid_params(format!("Invalid parent task ID: {e}"), None))?;
@@ -637,6 +652,7 @@ impl ServerHandler for GitMileServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::WorkflowState;
     use anyhow::Result;
     use git_mile_core::{
         StateKind, TaskSnapshot,
@@ -698,6 +714,41 @@ mod tests {
         assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
         assert!(err.message.contains("Task not found"));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_task_uses_default_state() -> Result<()> {
+        let repo = tempdir()?;
+        Repository::init(repo.path())?;
+        let workflow = WorkflowConfig::from_states_with_default(
+            vec![WorkflowState::new("state/todo")],
+            Some("state/todo"),
+        );
+        let server = GitMileServer::new(GitStore::open(repo.path())?, workflow);
+
+        let result = server
+            .create_task(Parameters(CreateTaskParams {
+                title: "Demo".into(),
+                state: None,
+                labels: vec![],
+                assignees: vec![],
+                description: None,
+                parents: vec![],
+                actor_name: "tester".into(),
+                actor_email: "tester@example.invalid".into(),
+            }))
+            .await?;
+
+        let Some(content) = result.content.first() else {
+            panic!("tool response should include content");
+        };
+        let text = match &content.raw {
+            RawContent::Text(block) => block.text.clone(),
+            _ => panic!("expected text content"),
+        };
+        let snapshot: TaskSnapshot = serde_json::from_str(&text)?;
+        assert_eq!(snapshot.state.as_deref(), Some("state/todo"));
         Ok(())
     }
 
