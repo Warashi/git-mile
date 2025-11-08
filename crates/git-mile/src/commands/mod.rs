@@ -450,7 +450,7 @@ mod tests {
     #[test]
     fn parse_task_ids_roundtrip() -> Result<()> {
         let ids = vec![TaskId::new(), TaskId::new()];
-        let raw: Vec<_> = ids.iter().map(|id| id.to_string()).collect();
+        let raw: Vec<_> = ids.iter().map(ToString::to_string).collect();
         let parsed = parse_task_ids(raw)?;
         assert_eq!(parsed, ids);
         Ok(())

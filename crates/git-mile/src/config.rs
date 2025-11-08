@@ -392,7 +392,9 @@ mod tests {
             kind: Some(StateKind::InProgress),
         }]);
 
-        let hint = workflow.state_hint().expect("state hint");
+        let Some(hint) = workflow.state_hint() else {
+            panic!("state hint");
+        };
         assert_eq!(hint, "state/in-progress (Doing)");
         assert_eq!(
             workflow.resolve_state_kind(Some("state/in-progress")),

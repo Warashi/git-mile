@@ -900,13 +900,15 @@ mod tests {
             },
         );
 
-        let mut legacy_value = serde_json::to_value(&event).expect("serialize event");
-        if let Some(kind) = legacy_value.get_mut("kind") {
-            if let Some(obj) = kind.as_object_mut() {
-                obj.remove("state_kind");
-            }
+        let mut legacy_value = serde_json::to_value(&event)
+            .unwrap_or_else(|err| panic!("serialize event: {err}"));
+        if let Some(kind) = legacy_value.get_mut("kind")
+            && let Some(obj) = kind.as_object_mut()
+        {
+            obj.remove("state_kind");
         }
-        let legacy: Event = serde_json::from_value(legacy_value).expect("deserialize legacy event");
+        let legacy: Event = serde_json::from_value(legacy_value)
+            .unwrap_or_else(|err| panic!("deserialize legacy event: {err}"));
 
         let snapshot = TaskSnapshot::replay(&[legacy]);
         assert_eq!(snapshot.state.as_deref(), Some("state/in-progress"));

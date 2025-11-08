@@ -318,10 +318,10 @@ mod tests {
             },
         );
         let mut legacy_value = serde_json::to_value(&legacy_event)?;
-        if let Some(kind) = legacy_value.get_mut("kind") {
-            if let Some(obj) = kind.as_object_mut() {
-                obj.remove("state_kind");
-            }
+        if let Some(kind) = legacy_value.get_mut("kind")
+            && let Some(obj) = kind.as_object_mut()
+        {
+            obj.remove("state_kind");
         }
         let body = serde_json::to_string_pretty(&legacy_value)?;
         let refname = GitStore::refname(&task);
