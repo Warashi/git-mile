@@ -1,9 +1,9 @@
 //! MCP server implementation for git-mile.
 
 use crate::config::WorkflowConfig;
-use git_mile_core::TaskSnapshot;
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::TaskId;
+use git_mile_core::{StateKind, TaskSnapshot};
 use git_mile_store_git::GitStore;
 use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::tool::{ToolCallContext, ToolRouter};
@@ -151,6 +151,25 @@ pub struct GetTaskParams {
     pub task_id: String,
 }
 
+/// Workflow state entry returned by the MCP tool.
+#[derive(Debug, Serialize, Deserialize)]
+struct WorkflowStateEntry {
+    value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kind: Option<StateKind>,
+}
+
+/// Response body for workflow state listings.
+#[derive(Debug, Serialize, Deserialize)]
+struct WorkflowStatesResponse {
+    restricted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_state: Option<String>,
+    states: Vec<WorkflowStateEntry>,
+}
+
 /// MCP server for git-mile.
 #[derive(Clone)]
 pub struct GitMileServer {
@@ -190,6 +209,30 @@ impl GitMileServer {
         drop(store);
 
         let json_str = serde_json::to_string_pretty(&tasks)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json_str)]))
+    }
+
+    /// List workflow states configured for this repository.
+    #[tool(description = "List workflow states and default selection configured for this repository")]
+    async fn list_workflow_states(&self) -> Result<CallToolResult, McpError> {
+        let response = WorkflowStatesResponse {
+            restricted: self.workflow.is_restricted(),
+            default_state: self.workflow.default_state().map(str::to_owned),
+            states: self
+                .workflow
+                .states()
+                .iter()
+                .map(|state| WorkflowStateEntry {
+                    value: state.value().to_owned(),
+                    label: state.label().map(str::to_owned),
+                    kind: state.kind(),
+                })
+                .collect(),
+        };
+
+        let json_str = serde_json::to_string_pretty(&response)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         Ok(CallToolResult::success(vec![Content::text(json_str)]))
@@ -749,6 +792,34 @@ mod tests {
         };
         let snapshot: TaskSnapshot = serde_json::from_str(&text)?;
         assert_eq!(snapshot.state.as_deref(), Some("state/todo"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_workflow_states_reflects_workflow_config() -> Result<()> {
+        let repo = tempdir()?;
+        Repository::init(repo.path())?;
+        let workflow = WorkflowConfig::from_states_with_default(
+            vec![WorkflowState::new("state/todo"), WorkflowState::new("state/done")],
+            Some("state/todo"),
+        );
+        let server = GitMileServer::new(GitStore::open(repo.path())?, workflow);
+
+        let result = server.list_workflow_states().await?;
+        let Some(content) = result.content.first() else {
+            panic!("tool response should include content");
+        };
+        let text = match &content.raw {
+            RawContent::Text(block) => block.text.clone(),
+            _ => panic!("expected text content"),
+        };
+        let response: WorkflowStatesResponse = serde_json::from_str(&text)?;
+
+        assert!(response.restricted);
+        assert_eq!(response.default_state.as_deref(), Some("state/todo"));
+        assert_eq!(response.states.len(), 2);
+        assert_eq!(response.states[0].value, "state/todo");
+
         Ok(())
     }
 
