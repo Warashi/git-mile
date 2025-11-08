@@ -1846,24 +1846,18 @@ impl<S: TaskStore> Ui<S> {
         self.detail_focus = DetailFocus::CommentViewer;
     }
 
-    // `const fn` で &mut self を扱うには const_mut_refs が必要
-    #[allow(clippy::missing_const_for_fn)]
-    fn close_comment_viewer(&mut self) {
+    const fn close_comment_viewer(&mut self) {
         self.comment_viewer = None;
         self.detail_focus = DetailFocus::None;
     }
 
-    // `const fn` で &mut self を扱うには const_mut_refs が必要
-    #[allow(clippy::missing_const_for_fn)]
-    fn comment_viewer_scroll_down(&mut self, lines: u16) {
+    const fn comment_viewer_scroll_down(&mut self, lines: u16) {
         if let Some(viewer) = &mut self.comment_viewer {
             viewer.scroll_offset = viewer.scroll_offset.saturating_add(lines);
         }
     }
 
-    // `const fn` で &mut self を扱うには const_mut_refs が必要
-    #[allow(clippy::missing_const_for_fn)]
-    fn comment_viewer_scroll_up(&mut self, lines: u16) {
+    const fn comment_viewer_scroll_up(&mut self, lines: u16) {
         if let Some(viewer) = &mut self.comment_viewer {
             viewer.scroll_offset = viewer.scroll_offset.saturating_sub(lines);
         }
