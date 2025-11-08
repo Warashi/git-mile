@@ -103,11 +103,34 @@ git-mile show <task-id>
 
 ### `ls` - List Tasks
 
-Display all task IDs:
+Filter and display tasks using snapshot data. The default output is a compact table:
 
 ```bash
 git-mile ls
 ```
+
+Apply filters and switch to JSON output when integrating with other tools:
+
+```bash
+git-mile ls \
+  --state state/in_progress \
+  --label priority/high \
+  --assignee alice \
+  --text "refactor parser" \
+  --format json
+```
+
+**Filter options**:
+
+- `--state, -s <value>`: Match tasks whose workflow state equals the provided value. Repeat to match multiple states.
+- `--label, -l <value>`: Require tasks to include the given label. Repeat to require multiple labels (logical AND).
+- `--assignee, -a <value>`: Match tasks assigned to any of the provided actors.
+- `--text <substring>`: Case-insensitive substring search across title, description, state, labels, and assignees.
+
+**Format options**:
+
+- `--format table` (default): Prints a human-readable table showing ID, state, title, labels, assignees, and last update timestamp.
+- `--format json`: Emits an array of serialized `TaskSnapshot` objects for downstream scripting.
 
 ### `tui` - Interactive Terminal UI
 

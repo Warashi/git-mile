@@ -1,16 +1,16 @@
-use std::str::FromStr;
+use std::{cmp::Ordering, collections::BTreeSet, str::FromStr};
 
 use anyhow::{Context, Result};
-use git_mile_core::TaskSnapshot;
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::{EventId, TaskId};
+use git_mile_core::{TaskFilter, TaskSnapshot};
 use git_mile_store_git::GitStore;
 use git2::Oid;
 
-use crate::Command;
 use crate::config::WorkflowConfig;
 #[cfg(test)]
 use crate::config::WorkflowState;
+use crate::{Command, LsFormat};
 
 /// Minimal abstraction over the backing event store so command handlers can be unit-tested.
 pub trait TaskRepository {
@@ -42,6 +42,10 @@ pub struct TaskService<S> {
 impl<S> TaskService<S> {
     pub const fn new(store: S, workflow: WorkflowConfig) -> Self {
         Self { store, workflow }
+    }
+
+    pub const fn workflow(&self) -> &WorkflowConfig {
+        &self.workflow
     }
 }
 
@@ -121,6 +125,22 @@ impl<S: TaskRepository> TaskService<S> {
     fn list_tasks(&self) -> Result<Vec<TaskId>> {
         self.store.list_tasks()
     }
+
+    fn list_snapshots(&self, filter: &TaskFilter) -> Result<Vec<TaskSnapshot>> {
+        let mut snapshots = Vec::new();
+        for task_id in self.list_tasks()? {
+            let events = self.store.load_events(task_id)?;
+            snapshots.push(TaskSnapshot::replay(&events));
+        }
+        snapshots.sort_by(compare_snapshots);
+        if filter.is_empty() {
+            return Ok(snapshots);
+        }
+        Ok(snapshots
+            .into_iter()
+            .filter(|snapshot| filter.matches(snapshot))
+            .collect())
+    }
 }
 
 pub fn run<S: TaskRepository>(command: Command, service: &TaskService<S>) -> Result<()> {
@@ -174,15 +194,108 @@ pub fn run<S: TaskRepository>(command: Command, service: &TaskService<S>) -> Res
             let snapshot = service.materialize(task)?;
             println!("{}", serde_json::to_string_pretty(&snapshot)?);
         }
-        Command::Ls => {
-            for id in service.list_tasks()? {
-                println!("{id}");
+        Command::Ls {
+            states,
+            labels,
+            assignees,
+            text,
+            format,
+        } => {
+            let workflow = service.workflow();
+            for state in &states {
+                workflow.validate_state(Some(state))?;
+            }
+
+            let filter = build_filter(states, labels, assignees, text);
+            let filter_empty = filter.is_empty();
+            let tasks = service.list_snapshots(&filter)?;
+
+            if tasks.is_empty() {
+                if filter_empty {
+                    println!("No tasks found");
+                } else {
+                    println!("No tasks matched the provided filters");
+                }
+                return Ok(());
+            }
+
+            match format {
+                LsFormat::Table => render_task_table(&tasks, workflow),
+                LsFormat::Json => println!("{}", serde_json::to_string_pretty(&tasks)?),
             }
         }
         _ => unreachable!("Unhandled command routed to TaskService"),
     }
 
     Ok(())
+}
+
+fn build_filter(
+    states: Vec<String>,
+    labels: Vec<String>,
+    assignees: Vec<String>,
+    text: Option<String>,
+) -> TaskFilter {
+    TaskFilter {
+        states: states.into_iter().collect::<BTreeSet<_>>(),
+        labels: labels.into_iter().collect::<BTreeSet<_>>(),
+        assignees: assignees.into_iter().collect::<BTreeSet<_>>(),
+        text: text.and_then(|candidate| {
+            let trimmed = candidate.trim();
+            if trimmed.is_empty() {
+                None
+            } else if trimmed.len() == candidate.len() {
+                Some(candidate)
+            } else {
+                Some(trimmed.to_owned())
+            }
+        }),
+        ..TaskFilter::default()
+    }
+}
+
+fn render_task_table(tasks: &[TaskSnapshot], workflow: &WorkflowConfig) {
+    println!("ID | State | Title | Labels | Assignees | Updated");
+    println!("-- | ----- | ----- | ------ | --------- | -------");
+
+    for snapshot in tasks {
+        let state_display = snapshot.state.as_deref().map_or_else(
+            || workflow.display_label(None).to_string(),
+            |value| {
+                let label = workflow.display_label(Some(value));
+                if label == value {
+                    label.to_string()
+                } else {
+                    format!("{label} ({value})")
+                }
+            },
+        );
+        let labels = if snapshot.labels.is_empty() {
+            "-".to_owned()
+        } else {
+            snapshot.labels.iter().cloned().collect::<Vec<_>>().join(", ")
+        };
+        let assignees = if snapshot.assignees.is_empty() {
+            "-".to_owned()
+        } else {
+            snapshot.assignees.iter().cloned().collect::<Vec<_>>().join(", ")
+        };
+        let updated = snapshot.updated_rfc3339.as_deref().unwrap_or("-").to_string();
+
+        println!(
+            "{} | {} | {} | {} | {} | {}",
+            snapshot.id, state_display, snapshot.title, labels, assignees, updated
+        );
+    }
+}
+
+fn compare_snapshots(a: &TaskSnapshot, b: &TaskSnapshot) -> Ordering {
+    match (a.updated_at(), b.updated_at()) {
+        (Some(left), Some(right)) => right.cmp(&left),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => a.id.cmp(&b.id),
+    }
 }
 
 fn parse_task_ids(inputs: Vec<String>) -> Result<Vec<TaskId>> {
@@ -228,7 +341,7 @@ struct CommentOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Command;
+    use crate::{Command, LsFormat};
     use anyhow::{Result, anyhow};
     use git_mile_core::event::EventKind;
     use std::collections::HashSet;
@@ -510,9 +623,20 @@ mod tests {
     #[test]
     fn run_ls_lists_all_tasks() -> Result<()> {
         let (service, store) = service_with_store();
-        store.set_list(vec![TaskId::new()]);
-        run(Command::Ls, &service)?;
+        let task = TaskId::new();
+        store.set_list(vec![task]);
+        run(
+            Command::Ls {
+                states: vec![],
+                labels: vec![],
+                assignees: vec![],
+                text: None,
+                format: LsFormat::Table,
+            },
+            &service,
+        )?;
         assert_eq!(store.list_calls(), 1);
+        assert_eq!(store.load_calls(), vec![task]);
         Ok(())
     }
 

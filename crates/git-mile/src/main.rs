@@ -1,7 +1,7 @@
 //! CLI entry point for git-mile.
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
 
 use commands::TaskService;
@@ -70,14 +70,39 @@ enum Command {
         task: String,
     },
 
-    /// List task ids.
-    Ls,
+    /// List tasks with optional filters.
+    Ls {
+        /// Match specific workflow states.
+        #[arg(long = "state", short = 's')]
+        states: Vec<String>,
+        /// Require tasks to include these labels (logical AND).
+        #[arg(long = "label", short = 'l')]
+        labels: Vec<String>,
+        /// Match tasks assigned to any of these actors.
+        #[arg(long = "assignee", short = 'a')]
+        assignees: Vec<String>,
+        /// Case-insensitive substring matched against title/description/state/labels/assignees.
+        #[arg(long = "text")]
+        text: Option<String>,
+        /// Output format.
+        #[arg(long = "format", value_enum, default_value_t = LsFormat::Table)]
+        format: LsFormat,
+    },
 
     /// Launch interactive terminal UI.
     Tui,
 
     /// Start MCP server.
     Mcp,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+#[value(rename_all = "snake_case")]
+pub(crate) enum LsFormat {
+    /// Render a human-readable table.
+    Table,
+    /// Emit JSON array of task snapshots.
+    Json,
 }
 
 fn main() -> Result<()> {
@@ -192,6 +217,63 @@ mod tests {
                 assert_eq!(message, "Looks good");
             }
             _ => panic!("expected comment command"),
+        }
+    }
+
+    #[test]
+    fn parse_ls_command_with_defaults() {
+        let cli = Cli::parse_from(["git-mile", "ls"]);
+        match cli.cmd {
+            Command::Ls {
+                states,
+                labels,
+                assignees,
+                text,
+                format,
+            } => {
+                assert!(states.is_empty());
+                assert!(labels.is_empty());
+                assert!(assignees.is_empty());
+                assert!(text.is_none());
+                assert_eq!(format, LsFormat::Table);
+            }
+            _ => panic!("expected ls command"),
+        }
+    }
+
+    #[test]
+    fn parse_ls_command_with_filters() {
+        let cli = Cli::parse_from([
+            "git-mile",
+            "ls",
+            "--state",
+            "state/todo",
+            "--label",
+            "type/docs",
+            "--label",
+            "priority/high",
+            "--assignee",
+            "alice",
+            "--text",
+            "fix bug",
+            "--format",
+            "json",
+        ]);
+        match cli.cmd {
+            Command::Ls {
+                states,
+                labels,
+                assignees,
+                text,
+                format,
+            } => {
+                assert_eq!(states, vec!["state/todo"]);
+                assert_eq!(labels, vec!["type/docs", "priority/high"]);
+                assert_eq!(assignees, vec!["alice"]);
+                assert_eq!(text.as_deref(), Some("fix bug"));
+                assert_eq!(format, LsFormat::Json);
+            }
+            _ => panic!("expected ls command"),
         }
     }
 
