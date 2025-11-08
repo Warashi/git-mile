@@ -3561,6 +3561,19 @@ updated_until: 2025-01-02T00:00:00Z
     }
 
     #[test]
+    fn instructions_include_filter_shortcut() -> Result<()> {
+        let task = TaskId::new();
+        let store = MockStore::new().with_task(task, vec![created(task, 0, "Task")]);
+        let app = App::new(store, WorkflowConfig::unrestricted())?;
+        let ui = ui_with_clipboard(app, Box::new(NoopClipboard));
+        assert!(
+            ui.instructions().contains("f:フィルタ"),
+            "instructions must mention filter shortcut"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn parse_list_trims_entries() {
         assert_eq!(
             parse_list("one, two , , three"),

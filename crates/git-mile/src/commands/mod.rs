@@ -344,7 +344,7 @@ mod tests {
     use crate::{Command, LsFormat};
     use anyhow::{Result, anyhow};
     use git_mile_core::event::EventKind;
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
     #[derive(Clone, Default)]
@@ -359,12 +359,17 @@ mod tests {
         fail_on_load: Mutex<HashSet<TaskId>>,
         list: Mutex<Vec<TaskId>>,
         list_calls: Mutex<u32>,
+        events: Mutex<HashMap<TaskId, Vec<Event>>>,
         next_oid: Mutex<u8>,
     }
 
     impl TaskRepository for MockStore {
         fn append_event(&self, event: &Event) -> Result<Oid> {
             guard(&self.inner.appended).push(event.clone());
+            guard(&self.inner.events)
+                .entry(event.task)
+                .or_default()
+                .push(event.clone());
             let oid = {
                 let mut counter = guard(&self.inner.next_oid);
                 let oid = fake_oid(*counter);
@@ -379,7 +384,7 @@ mod tests {
             if guard(&self.inner.fail_on_load).contains(&task) {
                 return Err(anyhow!("missing task {task}"));
             }
-            Ok(Vec::new())
+            Ok(guard(&self.inner.events).get(&task).cloned().unwrap_or_default())
         }
 
         fn list_tasks(&self) -> Result<Vec<TaskId>> {
@@ -407,6 +412,10 @@ mod tests {
 
         fn load_calls(&self) -> Vec<TaskId> {
             guard(&self.inner.load_calls).clone()
+        }
+
+        fn set_events(&self, task: TaskId, events: Vec<Event>) {
+            guard(&self.inner.events).insert(task, events);
         }
     }
 
@@ -578,6 +587,23 @@ mod tests {
     }
 
     #[test]
+    fn build_filter_trims_text_input() {
+        let filter = build_filter(
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Some("  panic at the disco  ".into()),
+        );
+        assert_eq!(filter.text.as_deref(), Some("panic at the disco"));
+    }
+
+    #[test]
+    fn build_filter_discards_blank_text() {
+        let filter = build_filter(Vec::new(), Vec::new(), Vec::new(), Some("   ".into()));
+        assert!(filter.text.is_none());
+    }
+
+    #[test]
     fn run_new_dispatches_to_service() -> Result<()> {
         let (service, store) = service_with_store();
         run(
@@ -637,6 +663,51 @@ mod tests {
         )?;
         assert_eq!(store.list_calls(), 1);
         assert_eq!(store.load_calls(), vec![task]);
+        Ok(())
+    }
+
+    #[test]
+    fn list_snapshots_applies_filters() -> Result<()> {
+        let (service, store) = service_with_store();
+        let matching = TaskId::new();
+        let skipped = TaskId::new();
+        store.set_list(vec![matching, skipped]);
+
+        let actor = sample_actor();
+        let matching_event = Event::new(
+            matching,
+            &actor,
+            EventKind::TaskCreated {
+                title: "Docs".into(),
+                labels: vec!["label/docs".into()],
+                assignees: vec!["alice".into()],
+                description: None,
+                state: Some("state/todo".into()),
+                state_kind: None,
+            },
+        );
+        let skipped_event = Event::new(
+            skipped,
+            &actor,
+            EventKind::TaskCreated {
+                title: "Feature".into(),
+                labels: vec!["label/feature".into()],
+                assignees: vec!["bob".into()],
+                description: None,
+                state: Some("state/done".into()),
+                state_kind: None,
+            },
+        );
+        store.set_events(matching, vec![matching_event]);
+        store.set_events(skipped, vec![skipped_event]);
+
+        let mut filter = TaskFilter::default();
+        filter.states.insert("state/todo".into());
+        filter.labels.insert("label/docs".into());
+
+        let snapshots = service.list_snapshots(&filter)?;
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].id, matching);
         Ok(())
     }
 

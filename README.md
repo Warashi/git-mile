@@ -127,6 +127,8 @@ git-mile ls \
 - `--assignee, -a <value>`: Match tasks assigned to any of the provided actors.
 - `--text <substring>`: Case-insensitive substring search across title, description, state, labels, and assignees.
 
+These switches populate the same `TaskFilter` that powers the TUI and MCP server, so filters behave consistently across every surface.
+
 **Format options**:
 
 - `--format table` (default): Prints a human-readable table showing ID, state, title, labels, assignees, and last update timestamp.
@@ -147,6 +149,7 @@ git-mile tui
 - `n`: Create new task
 - `s`: Create subtask of current task
 - `c`: Add comment to current task
+- `f`: Open the TaskFilter editor to refine visible tasks
 - `r`: Refresh view
 - `p`: Jump to parent task
 - `q`: Quit
@@ -156,6 +159,13 @@ git-mile tui
 - **Top-right panel**: Task details with breadcrumb navigation to parents
 - **Middle-right panel**: Subtasks list
 - **Bottom-right panel**: Comments history
+
+**TaskFilter Editor**:
+- Press `f` to open an editor pre-populated with the current filter. Blank fields are ignored when applying changes.
+- `states`, `labels`, `assignees`, `parents`, and `children` accept comma-separated lists. Parent/child fields expect UUIDv7 task IDs.
+- `state_kinds` lets you target semantic groups such as `todo`, `in_progress`, `blocked`, `done`, or `backlog`. Prefix a kind with `!` (for example `!done`) to exclude it.
+- `updated_since` / `updated_until` accept RFC3339 timestamps (e.g., `2025-01-01T09:00:00+09:00`) to create date windows.
+- The editor also includes a free-form `text` field for case-insensitive substring searches across titles, descriptions, states, labels, and assignees.
 
 ### `mcp` - Model Context Protocol Server
 
@@ -173,6 +183,19 @@ git-mile mcp
 - `add_comment`: Add comment to task
 - `update_comment`: Edit existing comment
 - `list_workflow_states`: Return allowed workflow states plus the current default
+
+`list_tasks` accepts an optional JSON payload matching the CLI filter flags. For example:
+
+```json
+{
+  "states": ["state/todo"],
+  "labels": ["label/docs"],
+  "assignees": ["alice"],
+  "text": "migration"
+}
+```
+
+When omitted, all tasks are returned. The server applies the same `TaskFilter` logic used by the CLI/TUI, so the results match what you see locally.
 
 `get_task` accepts a JSON payload like `{"task_id": "<UUIDv7>"}` and returns the serialized `TaskSnapshot` for that task, matching the data shown in the CLI/TUI views. Every snapshot now includes a `state_kind` field next to `state`; legacy tasks created before this release will show `null` until they are backfilled (see `docs/state-kind-persistence.md`).
 

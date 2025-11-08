@@ -159,6 +159,7 @@ pub struct ListSubtasksParams {
 }
 
 /// Parameters for listing tasks with optional filters.
+/// Mirrors the CLI/TUI `TaskFilter` fields that are currently exposed via the MCP surface.
 #[derive(Debug, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ListTasksParams {
     /// Limit results to tasks in any of these workflow states.
