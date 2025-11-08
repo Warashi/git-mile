@@ -305,55 +305,11 @@ impl<S: TaskStore> App<S> {
             return;
         }
 
-        let mut matches = BTreeSet::new();
-        for view in &self.tasks {
-            if self.filter.matches(&view.snapshot) {
-                matches.insert(view.snapshot.id);
-            }
-        }
-
-        if matches.is_empty() {
-            return;
-        }
-
-        let mut visible_ids = matches.clone();
-        self.include_ancestors(&mut visible_ids);
-        self.include_descendants_from(matches.iter().copied(), &mut visible_ids);
-
         for (idx, view) in self.tasks.iter().enumerate() {
-            if visible_ids.contains(&view.snapshot.id) {
+            if self.filter.matches(&view.snapshot) {
                 let pos = self.visible.len();
                 self.visible.push(idx);
                 self.visible_index.insert(view.snapshot.id, pos);
-            }
-        }
-    }
-
-    fn include_ancestors(&self, ids: &mut BTreeSet<TaskId>) {
-        let mut queue: VecDeque<TaskId> = ids.iter().copied().collect();
-        while let Some(current) = queue.pop_front() {
-            if let Some(parents) = self.parents_index.get(&current) {
-                for parent in parents {
-                    if ids.insert(*parent) {
-                        queue.push_back(*parent);
-                    }
-                }
-            }
-        }
-    }
-
-    fn include_descendants_from<I>(&self, seeds: I, acc: &mut BTreeSet<TaskId>)
-    where
-        I: IntoIterator<Item = TaskId>,
-    {
-        let mut queue: VecDeque<TaskId> = seeds.into_iter().collect();
-        while let Some(current) = queue.pop_front() {
-            if let Some(children) = self.children_index.get(&current) {
-                for child in children {
-                    if acc.insert(*child) {
-                        queue.push_back(*child);
-                    }
-                }
             }
         }
     }
@@ -3131,7 +3087,7 @@ mod tests {
     }
 
     #[test]
-    fn app_filter_includes_ancestors_and_descendants() -> Result<()> {
+    fn app_filter_only_shows_matching_tasks() -> Result<()> {
         let root = fixed_task_id(1);
         let child = fixed_task_id(2);
         let grandchild = fixed_task_id(3);
@@ -3160,12 +3116,12 @@ mod tests {
             .visible_tasks()
             .map(|view| view.snapshot.title.clone())
             .collect();
-        assert_eq!(titles, vec!["Grandchild", "Child", "Root"]);
+        assert_eq!(titles, vec!["Grandchild"]);
         Ok(())
     }
 
     #[test]
-    fn app_filter_matching_parent_shows_descendants() -> Result<()> {
+    fn app_filter_matching_parent_does_not_show_children() -> Result<()> {
         let root = fixed_task_id(1);
         let child = fixed_task_id(2);
 
@@ -3186,7 +3142,7 @@ mod tests {
             .visible_tasks()
             .map(|view| view.snapshot.title.clone())
             .collect();
-        assert_eq!(titles, vec!["Child", "Root"]);
+        assert_eq!(titles, vec!["Root"]);
         Ok(())
     }
 
