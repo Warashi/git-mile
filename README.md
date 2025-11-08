@@ -148,6 +148,7 @@ git-mile mcp
 - `update_task`: Modify task properties
 - `add_comment`: Add comment to task
 - `update_comment`: Edit existing comment
+- `list_workflow_states`: Return allowed workflow states plus the current default
 
 `get_task` accepts a JSON payload like `{"task_id": "<UUIDv7>"}` and returns the serialized `TaskSnapshot` for that task, matching the data shown in the CLI/TUI views.
 
