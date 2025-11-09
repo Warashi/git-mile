@@ -12,6 +12,8 @@ use rmcp::ServiceExt;
 mod commands;
 mod config;
 mod mcp;
+/// Helpers for computing task diffs shared by CLI/TUI/MCP.
+pub mod task_patch;
 pub mod task_writer;
 mod tui;
 

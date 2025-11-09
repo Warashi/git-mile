@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::thread;
 
 use anyhow::{Context, Error, Result};
@@ -10,10 +10,8 @@ use time::OffsetDateTime;
 use super::task_cache::TaskCache;
 use super::task_visibility::TaskVisibility;
 use crate::config::WorkflowConfig;
-use crate::task_writer::{
-    CommentRequest, CreateTaskRequest, DescriptionPatch, SetDiff, StatePatch, TaskStore as CoreTaskStore,
-    TaskUpdate, TaskWriter, diff_sets,
-};
+use crate::task_patch::{TaskEditData, TaskPatch};
+use crate::task_writer::{CommentRequest, CreateTaskRequest, TaskStore as CoreTaskStore, TaskWriter};
 
 /// Storage abstraction marker so the TUI logic can be unit-tested.
 pub(super) trait TaskStore: CoreTaskStore<Error = anyhow::Error> {}
@@ -299,7 +297,7 @@ impl<S: TaskStore> App<S> {
             snapshot_ref
         };
 
-        let patch = TaskPatch::from_snapshot(snapshot, data);
+        let patch = TaskPatch::from_snapshot(snapshot, data.into());
         if patch.is_empty() {
             return Ok(false);
         }
@@ -359,80 +357,14 @@ pub(super) struct NewTaskData {
     pub parent: Option<TaskId>,
 }
 
-#[derive(Debug, Default)]
-struct TaskPatch {
-    title: Option<String>,
-    state: Option<StatePatch>,
-    description: Option<DescriptionPatch>,
-    labels: SetDiff<String>,
-    assignees: SetDiff<String>,
-}
-
-impl TaskPatch {
-    fn from_snapshot(snapshot: &TaskSnapshot, data: NewTaskData) -> Self {
-        let NewTaskData {
-            title,
-            state,
-            labels,
-            assignees,
-            description,
-            parent: _,
-        } = data;
-
-        let mut patch = Self::default();
-
-        if title != snapshot.title {
-            patch.title = Some(title);
-        }
-
-        patch.state = match (snapshot.state.as_ref(), state) {
-            (Some(old), Some(new)) if *old != new => Some(StatePatch::Set { state: new }),
-            (None, Some(new)) => Some(StatePatch::Set { state: new }),
-            (Some(_), None) => Some(StatePatch::Clear),
-            _ => None,
-        };
-
-        let desired_labels: BTreeSet<String> = labels.into_iter().collect();
-        patch.labels = diff_sets(&snapshot.labels, &desired_labels);
-
-        let desired_assignees: BTreeSet<String> = assignees.into_iter().collect();
-        patch.assignees = diff_sets(&snapshot.assignees, &desired_assignees);
-
-        patch.description = description.map_or_else(
-            || (!snapshot.description.is_empty()).then_some(DescriptionPatch::Clear),
-            |text| {
-                if text.is_empty() {
-                    if snapshot.description.is_empty() {
-                        None
-                    } else {
-                        Some(DescriptionPatch::Clear)
-                    }
-                } else if text == snapshot.description {
-                    None
-                } else {
-                    Some(DescriptionPatch::Set { description: text })
-                }
-            },
-        );
-
-        patch
-    }
-
-    const fn is_empty(&self) -> bool {
-        self.title.is_none()
-            && self.state.is_none()
-            && self.description.is_none()
-            && self.labels.is_empty()
-            && self.assignees.is_empty()
-    }
-
-    fn into_task_update(self) -> TaskUpdate {
-        TaskUpdate {
-            title: self.title,
-            state: self.state,
-            description: self.description,
-            labels: self.labels,
-            assignees: self.assignees,
-        }
+impl From<NewTaskData> for TaskEditData {
+    fn from(data: NewTaskData) -> Self {
+        Self::new(
+            data.title,
+            data.state,
+            data.labels,
+            data.assignees,
+            data.description,
+        )
     }
 }
