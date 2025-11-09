@@ -19,6 +19,7 @@ use crate::config::WorkflowConfig;
 mod app;
 mod clipboard;
 mod editor;
+mod task_cache;
 mod terminal;
 mod ui;
 

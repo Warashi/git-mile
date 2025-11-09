@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::thread;
 
@@ -8,6 +7,7 @@ use git_mile_core::id::TaskId;
 use git_mile_core::{OrderedEvents, TaskFilter, TaskSnapshot};
 use time::OffsetDateTime;
 
+use super::task_cache::TaskCache;
 use crate::config::WorkflowConfig;
 use crate::task_writer::{
     CommentRequest, CreateTaskRequest, DescriptionPatch, SetDiff, StatePatch, TaskStore as CoreTaskStore,
@@ -219,40 +219,11 @@ impl<S: TaskStore> App<S> {
     fn refresh_tasks_with(&mut self, preferred: Option<TaskId>) -> Result<()> {
         let keep_id = preferred.or_else(|| self.selected_task().map(|view| view.snapshot.id));
 
-        let mut views = Vec::new();
-        let store = self.store();
-        for tid in store.list_tasks().map_err(Self::map_store_error)? {
-            let events = store.load_events(tid).map_err(Self::map_store_error)?;
-            views.push(TaskView::from_events(&events));
-        }
-        views.sort_by(|a, b| match (a.last_updated, b.last_updated) {
-            (Some(a_ts), Some(b_ts)) => b_ts.cmp(&a_ts),
-            (Some(_), None) => Ordering::Less,
-            (None, Some(_)) => Ordering::Greater,
-            (None, None) => a.snapshot.id.cmp(&b.snapshot.id),
-        });
-
-        let mut task_index = HashMap::new();
-        let mut parents_index = HashMap::new();
-        let mut children_index: HashMap<TaskId, Vec<TaskId>> = HashMap::new();
-
-        for (idx, view) in views.iter().enumerate() {
-            task_index.insert(view.snapshot.id, idx);
-        }
-
-        for view in &views {
-            let parents: Vec<TaskId> = view.snapshot.parents.iter().copied().collect();
-            for parent in &parents {
-                children_index.entry(*parent).or_default().push(view.snapshot.id);
-            }
-            children_index.entry(view.snapshot.id).or_default();
-            parents_index.insert(view.snapshot.id, parents);
-        }
-
-        self.tasks = views;
-        self.task_index = task_index;
-        self.parents_index = parents_index;
-        self.children_index = children_index;
+        let cache = TaskCache::load(self.store()).map_err(Self::map_store_error)?;
+        self.tasks = cache.tasks;
+        self.task_index = cache.task_index;
+        self.parents_index = cache.parents_index;
+        self.children_index = cache.children_index;
         self.rebuild_visibility();
         self.selected = self.resolve_selection(keep_id);
         Ok(())
