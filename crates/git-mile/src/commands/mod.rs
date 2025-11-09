@@ -3,8 +3,10 @@ use std::{cmp::Ordering, str::FromStr};
 use anyhow::{Context, Result, anyhow};
 use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
-use git_mile_core::{TaskFilter, TaskFilterBuilder, TaskSnapshot};
+use git_mile_core::{StateKind, TaskFilter, TaskFilterBuilder, TaskSnapshot, UpdatedFilter};
 use git2::Oid;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use crate::config::WorkflowConfig;
 #[cfg(test)]
@@ -177,6 +179,12 @@ pub fn run<S: TaskStore>(command: Command, service: &TaskService<S>) -> Result<(
             states,
             labels,
             assignees,
+            state_kinds,
+            exclude_state_kinds,
+            parents,
+            children,
+            updated_since,
+            updated_until,
             text,
             format,
         } => {
@@ -185,7 +193,18 @@ pub fn run<S: TaskStore>(command: Command, service: &TaskService<S>) -> Result<(
                 workflow.validate_state(Some(state))?;
             }
 
-            let filter = build_filter(states, labels, assignees, text);
+            let filter = build_filter(
+                states,
+                labels,
+                assignees,
+                state_kinds,
+                exclude_state_kinds,
+                parents,
+                children,
+                updated_since,
+                updated_until,
+                text,
+            )?;
             let filter_empty = filter.is_empty();
             let tasks = service.list_snapshots(&filter)?;
 
@@ -213,16 +232,39 @@ fn build_filter(
     states: Vec<String>,
     labels: Vec<String>,
     assignees: Vec<String>,
+    state_kinds: Vec<String>,
+    exclude_state_kinds: Vec<String>,
+    parents: Vec<String>,
+    children: Vec<String>,
+    updated_since: Option<String>,
+    updated_until: Option<String>,
     text: Option<String>,
-) -> TaskFilter {
+) -> Result<TaskFilter> {
+    let parent_ids = parse_task_ids(parents)?;
+    let child_ids = parse_task_ids(children)?;
+    let include_kinds = parse_state_kind_list(state_kinds)?;
+    let exclude_kinds = parse_state_kind_list(exclude_state_kinds)?;
+    let since = parse_optional_timestamp(updated_since, "updated-since")?;
+    let until = parse_optional_timestamp(updated_until, "updated-until")?;
+
     let mut builder = TaskFilterBuilder::new()
         .states(states)
         .labels(labels)
-        .assignees(assignees);
+        .assignees(assignees)
+        .parents(parent_ids)
+        .children(child_ids)
+        .include_state_kinds(include_kinds)
+        .exclude_state_kinds(exclude_kinds);
+
     if let Some(text) = text {
         builder = builder.text(text);
     }
-    builder.build()
+
+    if since.is_some() || until.is_some() {
+        builder = builder.updated(UpdatedFilter { since, until });
+    }
+
+    Ok(builder.build())
 }
 
 fn render_task_table(tasks: &[TaskSnapshot], workflow: &WorkflowConfig) {
@@ -275,6 +317,34 @@ fn parse_task_ids(inputs: Vec<String>) -> Result<Vec<TaskId>> {
 
 fn parse_task_id(raw: &str) -> Result<TaskId> {
     TaskId::from_str(raw).with_context(|| format!("Invalid task id: {raw}"))
+}
+
+fn parse_state_kind_list(inputs: Vec<String>) -> Result<Vec<StateKind>> {
+    inputs.into_iter().map(|value| parse_state_kind(&value)).collect()
+}
+
+fn parse_state_kind(raw: &str) -> Result<StateKind> {
+    let normalized = raw.trim().to_ascii_lowercase().replace(['-', ' '], "_");
+    match normalized.as_str() {
+        "todo" => Ok(StateKind::Todo),
+        "in_progress" | "inprogress" => Ok(StateKind::InProgress),
+        "blocked" => Ok(StateKind::Blocked),
+        "done" => Ok(StateKind::Done),
+        "backlog" => Ok(StateKind::Backlog),
+        other => Err(anyhow!("Invalid state kind: {other}")),
+    }
+}
+
+fn parse_optional_timestamp(value: Option<String>, field: &str) -> Result<Option<OffsetDateTime>> {
+    let Some(raw) = value else {
+        return Ok(None);
+    };
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    OffsetDateTime::parse(raw.trim(), &Rfc3339)
+        .map(Some)
+        .with_context(|| format!("Invalid {field} timestamp"))
 }
 
 struct CreateTaskInput {
@@ -574,15 +644,95 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
             Some("  panic at the disco  ".into()),
-        );
+        )
+        .expect("filter");
         assert_eq!(filter.text.as_deref(), Some("panic at the disco"));
     }
 
     #[test]
     fn build_filter_discards_blank_text() {
-        let filter = build_filter(Vec::new(), Vec::new(), Vec::new(), Some("   ".into()));
+        let filter = build_filter(
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            Some("   ".into()),
+        )
+        .expect("filter");
         assert!(filter.text.is_none());
+    }
+
+    #[test]
+    fn build_filter_applies_state_kinds_and_parents() -> Result<()> {
+        let parent = TaskId::new();
+        let child = TaskId::new();
+        let filter = build_filter(
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec!["todo".into()],
+            vec!["done".into()],
+            vec![parent.to_string()],
+            vec![child.to_string()],
+            Some("2024-01-01T00:00:00Z".into()),
+            None,
+            None,
+        )?;
+
+        assert!(filter.parents.contains(&parent));
+        assert!(filter.children.contains(&child));
+        assert!(filter.state_kinds.include.contains(&StateKind::Todo));
+        assert!(filter.state_kinds.exclude.contains(&StateKind::Done));
+        assert!(filter.updated.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn build_filter_rejects_invalid_state_kind() {
+        let err = build_filter(
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec!["unknown".into()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("Invalid state kind"));
+    }
+
+    #[test]
+    fn build_filter_rejects_invalid_timestamp() {
+        let err = build_filter(
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Some("not-a-timestamp".into()),
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("Invalid updated-since timestamp"));
     }
 
     #[test]
@@ -638,6 +788,12 @@ mod tests {
                 states: vec![],
                 labels: vec![],
                 assignees: vec![],
+                state_kinds: vec![],
+                exclude_state_kinds: vec![],
+                parents: vec![],
+                children: vec![],
+                updated_since: None,
+                updated_until: None,
                 text: None,
                 format: LsFormat::Table,
             },

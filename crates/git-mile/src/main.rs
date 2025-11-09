@@ -84,6 +84,24 @@ enum Command {
         /// Match tasks assigned to any of these actors.
         #[arg(long = "assignee", short = 'a')]
         assignees: Vec<String>,
+        /// Include only these workflow state kinds.
+        #[arg(long = "state-kind")]
+        state_kinds: Vec<String>,
+        /// Exclude these workflow state kinds.
+        #[arg(long = "exclude-state-kind")]
+        exclude_state_kinds: Vec<String>,
+        /// Require tasks to include any of these parents.
+        #[arg(long = "parent")]
+        parents: Vec<String>,
+        /// Require tasks to include any of these children.
+        #[arg(long = "child")]
+        children: Vec<String>,
+        /// Match tasks updated at or after this timestamp (RFC3339).
+        #[arg(long = "updated-since")]
+        updated_since: Option<String>,
+        /// Match tasks updated at or before this timestamp (RFC3339).
+        #[arg(long = "updated-until")]
+        updated_until: Option<String>,
         /// Case-insensitive substring matched against title/description/state/labels/assignees.
         #[arg(long = "text")]
         text: Option<String>,
@@ -231,12 +249,24 @@ mod tests {
                 states,
                 labels,
                 assignees,
+                state_kinds,
+                exclude_state_kinds,
+                parents,
+                children,
+                updated_since,
+                updated_until,
                 text,
                 format,
             } => {
                 assert!(states.is_empty());
                 assert!(labels.is_empty());
                 assert!(assignees.is_empty());
+                assert!(state_kinds.is_empty());
+                assert!(exclude_state_kinds.is_empty());
+                assert!(parents.is_empty());
+                assert!(children.is_empty());
+                assert!(updated_since.is_none());
+                assert!(updated_until.is_none());
                 assert!(text.is_none());
                 assert_eq!(format, LsFormat::Table);
             }
@@ -267,14 +297,65 @@ mod tests {
                 states,
                 labels,
                 assignees,
+                state_kinds,
+                exclude_state_kinds,
+                parents,
+                children,
+                updated_since,
+                updated_until,
                 text,
                 format,
             } => {
                 assert_eq!(states, vec!["state/todo"]);
                 assert_eq!(labels, vec!["type/docs", "priority/high"]);
                 assert_eq!(assignees, vec!["alice"]);
+                assert!(state_kinds.is_empty());
+                assert!(exclude_state_kinds.is_empty());
+                assert!(parents.is_empty());
+                assert!(children.is_empty());
+                assert!(updated_since.is_none());
+                assert!(updated_until.is_none());
                 assert_eq!(text.as_deref(), Some("fix bug"));
                 assert_eq!(format, LsFormat::Json);
+            }
+            _ => panic!("expected ls command"),
+        }
+    }
+
+    #[test]
+    fn parse_ls_command_with_extended_filters() {
+        let cli = Cli::parse_from([
+            "git-mile",
+            "ls",
+            "--state-kind",
+            "todo",
+            "--exclude-state-kind",
+            "done",
+            "--parent",
+            "00000000-0000-0000-0000-000000000001",
+            "--child",
+            "00000000-0000-0000-0000-000000000002",
+            "--updated-since",
+            "2024-01-01T00:00:00Z",
+            "--updated-until",
+            "2024-12-31T23:59:59Z",
+        ]);
+        match cli.cmd {
+            Command::Ls {
+                state_kinds,
+                exclude_state_kinds,
+                parents,
+                children,
+                updated_since,
+                updated_until,
+                ..
+            } => {
+                assert_eq!(state_kinds, vec!["todo"]);
+                assert_eq!(exclude_state_kinds, vec!["done"]);
+                assert_eq!(parents, vec!["00000000-0000-0000-0000-000000000001".to_string()]);
+                assert_eq!(children, vec!["00000000-0000-0000-0000-000000000002".to_string()]);
+                assert_eq!(updated_since.as_deref(), Some("2024-01-01T00:00:00Z"));
+                assert_eq!(updated_until.as_deref(), Some("2024-12-31T23:59:59Z"));
             }
             _ => panic!("expected ls command"),
         }

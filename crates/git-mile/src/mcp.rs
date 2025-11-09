@@ -7,7 +7,7 @@ use crate::task_writer::{
 };
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::TaskId;
-use git_mile_core::{OrderedEvents, StateKind, TaskFilter, TaskFilterBuilder, TaskSnapshot};
+use git_mile_core::{OrderedEvents, StateKind, TaskFilter, TaskFilterBuilder, TaskSnapshot, UpdatedFilter};
 use git_mile_store_git::GitStore;
 use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::tool::{ToolCallContext, ToolRouter};
@@ -22,6 +22,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -186,6 +187,24 @@ pub struct ListTasksParams {
     /// Match tasks that include any of these assignees.
     #[serde(default)]
     pub assignees: Vec<String>,
+    /// Include only these workflow state kinds.
+    #[serde(default)]
+    pub include_state_kinds: Vec<String>,
+    /// Exclude these workflow state kinds.
+    #[serde(default)]
+    pub exclude_state_kinds: Vec<String>,
+    /// Require tasks to include any of these parents.
+    #[serde(default)]
+    pub parents: Vec<String>,
+    /// Require tasks to include any of these children.
+    #[serde(default)]
+    pub children: Vec<String>,
+    /// Match tasks updated at or after this timestamp (RFC3339).
+    #[serde(default)]
+    pub updated_since: Option<String>,
+    /// Match tasks updated at or before this timestamp (RFC3339).
+    #[serde(default)]
+    pub updated_until: Option<String>,
     /// Case-insensitive substring search across title/description/state/labels/assignees.
     #[serde(default)]
     pub text: Option<String>,
@@ -222,16 +241,87 @@ struct TaskCommentEntry {
 }
 
 impl ListTasksParams {
-    fn into_filter(self) -> TaskFilter {
+    fn into_filter(self) -> Result<TaskFilter, McpError> {
+        let parents = parse_task_ids_for_filter(self.parents, "parent")?;
+        let children = parse_task_ids_for_filter(self.children, "child")?;
+        let include_kinds =
+            parse_state_kind_list_for_filter(self.include_state_kinds, "include_state_kinds")?;
+        let exclude_kinds =
+            parse_state_kind_list_for_filter(self.exclude_state_kinds, "exclude_state_kinds")?;
+        let since = parse_optional_timestamp_arg(self.updated_since, "updated_since")?;
+        let until = parse_optional_timestamp_arg(self.updated_until, "updated_until")?;
+
         let mut builder = TaskFilterBuilder::new()
             .states(self.states)
             .labels(self.labels)
-            .assignees(self.assignees);
+            .assignees(self.assignees)
+            .include_state_kinds(include_kinds)
+            .exclude_state_kinds(exclude_kinds)
+            .parents(parents)
+            .children(children);
+
         if let Some(text) = self.text {
             builder = builder.text(text);
         }
-        builder.build()
+
+        if since.is_some() || until.is_some() {
+            builder = builder.updated(UpdatedFilter { since, until });
+        }
+
+        Ok(builder.build())
     }
+}
+
+fn parse_task_ids_for_filter(ids: Vec<String>, context: &str) -> Result<Vec<TaskId>, McpError> {
+    ids.into_iter()
+        .map(|value| {
+            TaskId::from_str(value.trim())
+                .map_err(|err| McpError::invalid_params(format!("Invalid {context} id: {err}"), None))
+        })
+        .collect()
+}
+
+fn parse_optional_timestamp_arg(
+    value: Option<String>,
+    field: &str,
+) -> Result<Option<OffsetDateTime>, McpError> {
+    let Some(raw) = value else {
+        return Ok(None);
+    };
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    OffsetDateTime::parse(raw.trim(), &Rfc3339)
+        .map(Some)
+        .map_err(|err| McpError::invalid_params(format!("Invalid {field}: {err}"), None))
+}
+
+fn parse_state_kind_list_for_filter(
+    values: Vec<String>,
+    field: &str,
+) -> Result<Vec<StateKind>, McpError> {
+    values
+        .into_iter()
+        .map(|value| parse_state_kind_for_filter(&value, field))
+        .collect()
+}
+
+fn parse_state_kind_for_filter(value: &str, field: &str) -> Result<StateKind, McpError> {
+    let normalized = value.trim().to_ascii_lowercase().replace(['-', ' '], "_");
+    let kind = match normalized.as_str() {
+        "todo" => StateKind::Todo,
+        "in_progress" | "inprogress" => StateKind::InProgress,
+        "blocked" => StateKind::Blocked,
+        "done" => StateKind::Done,
+        "backlog" => StateKind::Backlog,
+        _ => {
+            return Err(McpError::invalid_params(
+                format!("Invalid {field}: {value}"),
+                None,
+            ))
+        }
+    };
+    Ok(kind)
 }
 
 fn format_timestamp(ts: OffsetDateTime) -> Result<String, McpError> {
@@ -310,7 +400,7 @@ impl GitMileServer {
         &self,
         Parameters(params): Parameters<ListTasksParams>,
     ) -> Result<CallToolResult, McpError> {
-        let filter = params.into_filter();
+        let filter = params.into_filter()?;
         let store = self.store.lock().await;
         let task_ids = store
             .list_tasks()
