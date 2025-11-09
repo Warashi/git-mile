@@ -12,6 +12,7 @@ use rmcp::ServiceExt;
 mod commands;
 mod config;
 mod mcp;
+pub mod task_writer;
 mod tui;
 
 /// Git-backed tasks without touching the working tree.
