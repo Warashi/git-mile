@@ -1,6 +1,7 @@
 //! MCP server implementation for git-mile.
 
 use crate::config::WorkflowConfig;
+use crate::task_cache::TaskCache;
 use crate::task_writer::{
     CommentRequest, CreateTaskRequest, DescriptionPatch, SetDiff, StatePatch, TaskUpdate, TaskWriteError,
     TaskWriter,
@@ -296,10 +297,7 @@ fn parse_optional_timestamp_arg(
         .map_err(|err| McpError::invalid_params(format!("Invalid {field}: {err}"), None))
 }
 
-fn parse_state_kind_list_for_filter(
-    values: Vec<String>,
-    field: &str,
-) -> Result<Vec<StateKind>, McpError> {
+fn parse_state_kind_list_for_filter(values: Vec<String>, field: &str) -> Result<Vec<StateKind>, McpError> {
     values
         .into_iter()
         .map(|value| parse_state_kind_for_filter(&value, field))
@@ -318,7 +316,7 @@ fn parse_state_kind_for_filter(value: &str, field: &str) -> Result<StateKind, Mc
             return Err(McpError::invalid_params(
                 format!("Invalid {field}: {value}"),
                 None,
-            ))
+            ));
         }
     };
     Ok(kind)
@@ -402,28 +400,13 @@ impl GitMileServer {
     ) -> Result<CallToolResult, McpError> {
         let filter = params.into_filter()?;
         let store = self.store.lock().await;
-        let task_ids = store
-            .list_tasks()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        let mut tasks = Vec::new();
-        for task_id in task_ids {
-            let events = store
-                .load_events(task_id)
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-            let snapshot = TaskSnapshot::replay(&events);
-            tasks.push(snapshot);
-        }
-
+        let cache = TaskCache::load(&*store).map_err(|e| McpError::internal_error(e.to_string(), None))?;
         drop(store);
 
         let tasks = if filter.is_empty() {
-            tasks
+            cache.snapshots().cloned().collect()
         } else {
-            tasks
-                .into_iter()
-                .filter(|snapshot| filter.matches(snapshot))
-                .collect()
+            cache.filtered_snapshots(&filter)
         };
 
         let json_str = serde_json::to_string_pretty(&tasks)

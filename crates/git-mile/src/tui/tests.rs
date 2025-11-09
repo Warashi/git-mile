@@ -1,10 +1,10 @@
 use super::app::*;
 use super::clipboard::*;
 use super::editor::*;
-use super::task_cache::TaskView;
 use super::ui::*;
 use super::*;
 use crate::config::{StateKind, WorkflowState};
+use crate::task_cache::TaskView;
 use crate::task_writer::TaskStore;
 use anyhow::{Result, anyhow};
 use git_mile_core::event::{Actor, Event, EventKind};

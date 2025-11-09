@@ -5,9 +5,9 @@ use git_mile_core::TaskSnapshot;
 use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
 
-use super::task_cache::{TaskCache, TaskView};
 use super::task_visibility::TaskVisibility;
 use crate::config::WorkflowConfig;
+use crate::task_cache::{TaskCache, TaskView};
 use crate::task_patch::{TaskEditData, TaskPatch};
 use crate::task_writer::{CommentRequest, CreateTaskRequest, TaskStore, TaskWriter};
 

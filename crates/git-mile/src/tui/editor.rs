@@ -9,7 +9,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use crate::config::StateKind;
 
 use super::app::NewTaskData;
-use super::task_cache::TaskView;
+use crate::task_cache::TaskView;
 
 pub(super) fn comment_editor_template(actor: &git_mile_core::event::Actor, task: TaskId) -> String {
     format!(

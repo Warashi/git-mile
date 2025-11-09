@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, str::FromStr};
+use std::str::FromStr;
 
 use anyhow::{Context, Result, anyhow};
 use git_mile_core::event::Actor;
@@ -11,6 +11,7 @@ use time::format_description::well_known::Rfc3339;
 use crate::config::WorkflowConfig;
 #[cfg(test)]
 use crate::config::WorkflowState;
+use crate::task_cache::TaskCache;
 use crate::task_writer::{CommentRequest, CreateTaskRequest, TaskStore, TaskWriter};
 use crate::{Command, LsFormat};
 
@@ -108,19 +109,12 @@ impl<S: TaskStore> TaskService<S> {
     }
 
     fn list_snapshots(&self, filter: &TaskFilter) -> Result<Vec<TaskSnapshot>> {
-        let mut snapshots = Vec::new();
-        for task_id in self.list_tasks()? {
-            let events = self.store().load_events(task_id).map_err(Into::into)?;
-            snapshots.push(TaskSnapshot::replay(&events));
-        }
-        snapshots.sort_by(compare_snapshots);
+        let cache = TaskCache::load(self.store()).map_err(Into::into)?;
         if filter.is_empty() {
-            return Ok(snapshots);
+            Ok(cache.snapshots().cloned().collect())
+        } else {
+            Ok(cache.filtered_snapshots(filter))
         }
-        Ok(snapshots
-            .into_iter()
-            .filter(|snapshot| filter.matches(snapshot))
-            .collect())
     }
 }
 
@@ -299,15 +293,6 @@ fn render_task_table(tasks: &[TaskSnapshot], workflow: &WorkflowConfig) {
             "{} | {} | {} | {} | {} | {}",
             snapshot.id, state_display, snapshot.title, labels, assignees, updated
         );
-    }
-}
-
-fn compare_snapshots(a: &TaskSnapshot, b: &TaskSnapshot) -> Ordering {
-    match (a.updated_at(), b.updated_at()) {
-        (Some(left), Some(right)) => right.cmp(&left),
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        (None, None) => a.id.cmp(&b.id),
     }
 }
 

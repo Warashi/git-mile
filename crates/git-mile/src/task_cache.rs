@@ -4,12 +4,12 @@ use std::collections::HashMap;
 use crate::task_writer::TaskStore;
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::TaskId;
-use git_mile_core::{OrderedEvents, TaskSnapshot};
+use git_mile_core::{OrderedEvents, TaskFilter, TaskSnapshot};
 use time::OffsetDateTime;
 
 /// Actor-written comment on a task.
 #[derive(Debug, Clone)]
-pub(super) struct TaskComment {
+pub struct TaskComment {
     /// Actor who authored the comment.
     pub actor: Actor,
     /// Comment body in Markdown.
@@ -18,9 +18,9 @@ pub(super) struct TaskComment {
     pub ts: OffsetDateTime,
 }
 
-/// Materialized view for TUI rendering.
+/// Materialized view combining snapshot + comments.
 #[derive(Debug, Clone)]
-pub(super) struct TaskView {
+pub struct TaskView {
     /// Current snapshot derived from the CRDT.
     pub snapshot: TaskSnapshot,
     /// Chronological comment history.
@@ -30,7 +30,7 @@ pub(super) struct TaskView {
 }
 
 impl TaskView {
-    pub(super) fn from_events(events: &[Event]) -> Self {
+    pub fn from_events(events: &[Event]) -> Self {
         let ordered = OrderedEvents::from(events);
         let snapshot = TaskSnapshot::replay_ordered(&ordered);
 
@@ -59,9 +59,9 @@ impl TaskView {
     }
 }
 
-/// Cached task snapshots and relation indexes used by the TUI.
+/// Cached task snapshots and relation indexes.
 #[derive(Debug, Default)]
-pub(super) struct TaskCache {
+pub struct TaskCache {
     pub tasks: Vec<TaskView>,
     pub task_index: HashMap<TaskId, usize>,
     pub parents_index: HashMap<TaskId, Vec<TaskId>>,
@@ -70,7 +70,7 @@ pub(super) struct TaskCache {
 
 impl TaskCache {
     /// Load every task snapshot from the store and build indexes.
-    pub(super) fn load<S>(store: &S) -> Result<Self, S::Error>
+    pub fn load<S>(store: &S) -> Result<Self, S::Error>
     where
         S: TaskStore,
     {
@@ -123,12 +123,27 @@ impl TaskCache {
             self.parents_index.insert(view.snapshot.id, parents);
         }
     }
+
+    /// Iterate over cached snapshots in last-updated order.
+    pub fn snapshots(&self) -> impl Iterator<Item = &TaskSnapshot> {
+        self.tasks.iter().map(|view| &view.snapshot)
+    }
+
+    /// Return snapshots filtered by the provided filter.
+    pub fn filtered_snapshots(&self, filter: &TaskFilter) -> Vec<TaskSnapshot> {
+        self.tasks
+            .iter()
+            .filter(|view| filter.matches(&view.snapshot))
+            .map(|view| view.snapshot.clone())
+            .collect()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::task_writer::TaskStore as CoreTaskStore;
+    use git_mile_core::TaskFilter;
     use git_mile_core::event::{Actor, Event, EventKind};
     use git_mile_core::id::TaskId;
     use git2::Oid;
@@ -219,7 +234,7 @@ mod tests {
             .with_task(third, vec![created(third, 20, "third")]);
 
         let cache = TaskCache::load(&store).unwrap_or_else(|err| panic!("must load cache: {err}"));
-        let ids: Vec<TaskId> = cache.tasks.iter().map(|view| view.snapshot.id).collect();
+        let ids: Vec<TaskId> = cache.snapshots().map(|view| view.id).collect();
         assert_eq!(ids, vec![second, third, first]);
     }
 
@@ -250,5 +265,23 @@ mod tests {
             Some(&[child][..])
         );
         assert!(cache.children_index.contains_key(&child));
+    }
+
+    #[test]
+    fn filtered_snapshots_apply_task_filter() {
+        let todo = fixed_task_id(30);
+        let done = fixed_task_id(31);
+
+        let store = MockStore::default()
+            .with_task(todo, vec![created(todo, 5, "todo task")])
+            .with_task(done, vec![created(done, 10, "done task")]);
+
+        let mut filter = TaskFilter::default();
+        filter.states.insert("state/done".into());
+
+        let cache = TaskCache::load(&store).expect("cache");
+        let filtered = cache.filtered_snapshots(&filter);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, done);
     }
 }

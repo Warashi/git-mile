@@ -20,6 +20,8 @@ use ratatui::{
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::config::{StateKind, WorkflowState};
+use crate::task_cache::TaskView;
+use crate::task_writer::TaskStore;
 
 use super::app::App;
 use super::clipboard::{ClipboardSink, default_clipboard};
@@ -28,9 +30,7 @@ use super::editor::{
     parse_comment_editor_output, parse_filter_editor_output, parse_new_task_editor_output,
     summarize_task_filter,
 };
-use super::task_cache::TaskView;
 use super::terminal::{launch_editor, with_terminal_suspended};
-use crate::task_writer::TaskStore;
 
 /// Tree node for hierarchical task display.
 #[derive(Debug, Clone)]
