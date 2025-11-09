@@ -277,7 +277,7 @@ mod tests {
             .with_task(done, vec![created(done, 10, "done task")]);
 
         let mut filter = TaskFilter::default();
-        filter.states.insert("state/done".into());
+        filter.text = Some("done".into());
 
         let cache = TaskCache::load(&store).expect("cache");
         let filtered = cache.filtered_snapshots(&filter);
