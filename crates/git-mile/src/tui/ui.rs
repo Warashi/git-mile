@@ -21,14 +21,16 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::config::{StateKind, WorkflowState};
 
-use super::app::{App, TaskStore, TaskView};
+use super::app::App;
 use super::clipboard::{ClipboardSink, default_clipboard};
 use super::editor::{
     comment_editor_template, edit_task_editor_template, filter_editor_template, new_task_editor_template,
     parse_comment_editor_output, parse_filter_editor_output, parse_new_task_editor_output,
     summarize_task_filter,
 };
+use super::task_cache::TaskView;
 use super::terminal::{launch_editor, with_terminal_suspended};
+use crate::task_writer::TaskStore;
 
 /// Tree node for hierarchical task display.
 #[derive(Debug, Clone)]

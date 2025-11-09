@@ -1,6 +1,7 @@
 use super::app::*;
 use super::clipboard::*;
 use super::editor::*;
+use super::task_cache::TaskView;
 use super::ui::*;
 use super::*;
 use crate::config::{StateKind, WorkflowState};

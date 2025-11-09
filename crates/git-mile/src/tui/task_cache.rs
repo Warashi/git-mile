@@ -1,8 +1,63 @@
-use git_mile_core::id::TaskId;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use super::app::{TaskStore, TaskView};
+use crate::task_writer::TaskStore;
+use git_mile_core::event::{Actor, Event, EventKind};
+use git_mile_core::id::TaskId;
+use git_mile_core::{OrderedEvents, TaskSnapshot};
+use time::OffsetDateTime;
+
+/// Actor-written comment on a task.
+#[derive(Debug, Clone)]
+pub(super) struct TaskComment {
+    /// Actor who authored the comment.
+    pub actor: Actor,
+    /// Comment body in Markdown.
+    pub body: String,
+    /// Event timestamp in UTC.
+    pub ts: OffsetDateTime,
+}
+
+/// Materialized view for TUI rendering.
+#[derive(Debug, Clone)]
+pub(super) struct TaskView {
+    /// Current snapshot derived from the CRDT.
+    pub snapshot: TaskSnapshot,
+    /// Chronological comment history.
+    pub comments: Vec<TaskComment>,
+    /// Timestamp of the most recent event.
+    pub last_updated: Option<OffsetDateTime>,
+}
+
+impl TaskView {
+    pub(super) fn from_events(events: &[Event]) -> Self {
+        let ordered = OrderedEvents::from(events);
+        let snapshot = TaskSnapshot::replay_ordered(&ordered);
+
+        let comments = ordered
+            .iter()
+            .filter_map(|ev| {
+                if let EventKind::CommentAdded { body_md, .. } = &ev.kind {
+                    Some(TaskComment {
+                        actor: ev.actor.clone(),
+                        body: body_md.clone(),
+                        ts: ev.ts,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let last_updated = ordered.latest().map(|ev| ev.ts);
+
+        Self {
+            snapshot,
+            comments,
+            last_updated,
+        }
+    }
+}
 
 /// Cached task snapshots and relation indexes used by the TUI.
 #[derive(Debug, Default)]
@@ -15,7 +70,10 @@ pub(super) struct TaskCache {
 
 impl TaskCache {
     /// Load every task snapshot from the store and build indexes.
-    pub(super) fn load<S: TaskStore>(store: &S) -> Result<Self, S::Error> {
+    pub(super) fn load<S>(store: &S) -> Result<Self, S::Error>
+    where
+        S: TaskStore,
+    {
         let mut views = Vec::new();
 
         for task_id in store.list_tasks()? {

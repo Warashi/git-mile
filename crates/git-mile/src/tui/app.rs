@@ -2,73 +2,15 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::thread;
 
 use anyhow::{Context, Error, Result};
-use git_mile_core::event::{Actor, Event, EventKind};
+use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
-use git_mile_core::{OrderedEvents, TaskFilter, TaskSnapshot};
-use time::OffsetDateTime;
+use git_mile_core::{TaskFilter, TaskSnapshot};
 
-use super::task_cache::TaskCache;
+use super::task_cache::{TaskCache, TaskView};
 use super::task_visibility::TaskVisibility;
 use crate::config::WorkflowConfig;
 use crate::task_patch::{TaskEditData, TaskPatch};
-use crate::task_writer::{CommentRequest, CreateTaskRequest, TaskStore as CoreTaskStore, TaskWriter};
-
-/// Storage abstraction marker so the TUI logic can be unit-tested.
-pub(super) trait TaskStore: CoreTaskStore<Error = anyhow::Error> {}
-
-impl<T> TaskStore for T where T: CoreTaskStore<Error = anyhow::Error> {}
-
-/// Actor-written comment on a task.
-#[derive(Debug, Clone)]
-pub(super) struct TaskComment {
-    /// Actor who authored the comment.
-    pub actor: Actor,
-    /// Comment body in Markdown.
-    pub body: String,
-    /// Event timestamp in UTC.
-    pub ts: OffsetDateTime,
-}
-
-/// Materialized view for TUI rendering.
-#[derive(Debug, Clone)]
-pub(super) struct TaskView {
-    /// Current snapshot derived from the CRDT.
-    pub snapshot: TaskSnapshot,
-    /// Chronological comment history.
-    pub comments: Vec<TaskComment>,
-    /// Timestamp of the most recent event.
-    pub last_updated: Option<OffsetDateTime>,
-}
-
-impl TaskView {
-    pub(super) fn from_events(events: &[Event]) -> Self {
-        let ordered = OrderedEvents::from(events);
-        let snapshot = TaskSnapshot::replay_ordered(&ordered);
-
-        let comments = ordered
-            .iter()
-            .filter_map(|ev| {
-                if let EventKind::CommentAdded { body_md, .. } = &ev.kind {
-                    Some(TaskComment {
-                        actor: ev.actor.clone(),
-                        body: body_md.clone(),
-                        ts: ev.ts,
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        let last_updated = ordered.latest().map(|ev| ev.ts);
-
-        Self {
-            snapshot,
-            comments,
-            last_updated,
-        }
-    }
-}
+use crate::task_writer::{CommentRequest, CreateTaskRequest, TaskStore, TaskWriter};
 
 /// Application state shared between the TUI event loop and rendering.
 pub(super) struct App<S: TaskStore> {
