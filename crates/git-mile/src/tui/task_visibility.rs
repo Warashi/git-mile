@@ -72,6 +72,13 @@ impl TaskVisibility {
         &self.visible
     }
 
+    pub(super) fn visible_tasks<'a>(
+        &'a self,
+        tasks: &'a [TaskView],
+    ) -> impl Iterator<Item = &'a TaskView> + 'a {
+        self.visible.iter().filter_map(move |&idx| tasks.get(idx))
+    }
+
     pub(super) fn contains(&self, task_id: TaskId) -> bool {
         self.visible_index.contains_key(&task_id)
     }
@@ -195,5 +202,48 @@ mod tests {
         assert_eq!(visibility.selected_task_id(&tasks), Some(tasks[1].snapshot.id));
         visibility.jump_to_task(TaskId::new());
         assert_eq!(visibility.selected_task_id(&tasks), Some(tasks[1].snapshot.id));
+    }
+
+    #[test]
+    fn filter_only_keeps_matching_tasks() {
+        let tasks = vec![
+            view("00000000-0000-0000-0000-000000000040", "Root"),
+            view("00000000-0000-0000-0000-000000000041", "Child"),
+            view("00000000-0000-0000-0000-000000000042", "Grandchild"),
+        ];
+
+        let mut visibility = TaskVisibility::default();
+        visibility.set_filter(TaskFilter {
+            text: Some("Grand".into()),
+            ..TaskFilter::default()
+        });
+        visibility.rebuild(&tasks, None);
+
+        let titles: Vec<&str> = visibility
+            .visible_tasks(&tasks)
+            .map(|view| view.snapshot.title.as_str())
+            .collect();
+        assert_eq!(titles, vec!["Grandchild"]);
+    }
+
+    #[test]
+    fn filter_matches_parent_without_including_children() {
+        let tasks = vec![
+            view("00000000-0000-0000-0000-000000000050", "Root"),
+            view("00000000-0000-0000-0000-000000000051", "Child"),
+        ];
+
+        let mut visibility = TaskVisibility::default();
+        visibility.set_filter(TaskFilter {
+            text: Some("Root".into()),
+            ..TaskFilter::default()
+        });
+        visibility.rebuild(&tasks, None);
+
+        let titles: Vec<&str> = visibility
+            .visible_tasks(&tasks)
+            .map(|view| view.snapshot.title.as_str())
+            .collect();
+        assert_eq!(titles, vec!["Root"]);
     }
 }

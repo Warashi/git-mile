@@ -5,7 +5,7 @@ use super::task_cache::TaskView;
 use super::ui::*;
 use super::*;
 use crate::config::{StateKind, WorkflowState};
-use crate::task_writer::{TaskStore as CoreTaskStore, diff_sets};
+use crate::task_writer::{TaskStore, diff_sets};
 use anyhow::{Result, anyhow};
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::{EventId, TaskId};
@@ -37,6 +37,31 @@ fn expect_err<T, E: Display>(result: StdResult<T, E>, ctx: &str) -> E {
 
 fn expect_some<T>(value: Option<T>, ctx: &str) -> T {
     value.map_or_else(|| panic!("{ctx}"), |inner| inner)
+}
+
+fn app_selected_task<'a, S: TaskStore>(app: &'a App<S>) -> Option<&'a TaskView> {
+    app.visibility().selected_task(&app.tasks)
+}
+
+fn app_selected_task_id<S: TaskStore>(app: &App<S>) -> Option<TaskId> {
+    app.visibility().selected_task_id(&app.tasks)
+}
+
+fn app_select_next<S: TaskStore>(app: &mut App<S>) {
+    app.visibility_mut().select_next();
+}
+
+fn app_selection_index<S: TaskStore>(app: &App<S>) -> usize {
+    app.visibility().selected_index()
+}
+
+fn apply_app_filter<S: TaskStore>(app: &mut App<S>, filter: TaskFilter) {
+    let keep_id = app.visibility().selected_task_id(&app.tasks);
+    {
+        let visibility = app.visibility_mut();
+        visibility.set_filter(filter);
+    }
+    app.rebuild_visibility(keep_id);
 }
 
 struct MockStore {
@@ -95,7 +120,7 @@ fn truncate_with_ellipsis_keeps_grapheme_clusters_intact() {
     assert_eq!(truncate_with_ellipsis(title, 4), "a\u{0301}...");
 }
 
-impl CoreTaskStore for MockStore {
+impl TaskStore for MockStore {
     type Error = anyhow::Error;
 
     fn list_tasks(&self) -> Result<Vec<TaskId>, Self::Error> {
@@ -440,66 +465,6 @@ fn app_get_root_handles_cyclic_parent_graph() -> Result<()> {
 }
 
 #[test]
-fn app_filter_only_shows_matching_tasks() -> Result<()> {
-    let root = fixed_task_id(1);
-    let child = fixed_task_id(2);
-    let grandchild = fixed_task_id(3);
-
-    let store = MockStore::new()
-        .with_task(root, vec![created(root, 0, "Root")])
-        .with_task(
-            child,
-            vec![created(child, 10, "Child"), child_link(11, root, child)],
-        )
-        .with_task(
-            grandchild,
-            vec![
-                created(grandchild, 20, "Grandchild"),
-                child_link(21, child, grandchild),
-            ],
-        );
-    let mut app = App::new(store, WorkflowConfig::unrestricted())?;
-    let filter = TaskFilter {
-        text: Some("Grand".into()),
-        ..TaskFilter::default()
-    };
-    app.set_filter(filter);
-
-    let titles: Vec<String> = app
-        .visible_tasks()
-        .map(|view| view.snapshot.title.clone())
-        .collect();
-    assert_eq!(titles, vec!["Grandchild"]);
-    Ok(())
-}
-
-#[test]
-fn app_filter_matching_parent_does_not_show_children() -> Result<()> {
-    let root = fixed_task_id(1);
-    let child = fixed_task_id(2);
-
-    let store = MockStore::new()
-        .with_task(root, vec![created(root, 0, "Root")])
-        .with_task(
-            child,
-            vec![created(child, 10, "Child"), child_link(11, root, child)],
-        );
-    let mut app = App::new(store, WorkflowConfig::unrestricted())?;
-    let filter = TaskFilter {
-        text: Some("Root".into()),
-        ..TaskFilter::default()
-    };
-    app.set_filter(filter);
-
-    let titles: Vec<String> = app
-        .visible_tasks()
-        .map(|view| view.snapshot.title.clone())
-        .collect();
-    assert_eq!(titles, vec!["Root"]);
-    Ok(())
-}
-
-#[test]
 fn tree_view_includes_parent_and_child() -> Result<()> {
     let parent = TaskId::new();
     let child = TaskId::new();
@@ -570,7 +535,7 @@ fn tree_view_expands_path_to_selected_grandchild() -> Result<()> {
             ],
         );
     let mut app = App::new(store, WorkflowConfig::unrestricted())?;
-    app.jump_to_task(grandchild);
+    app.visibility_mut().jump_to_task(grandchild);
     let mut ui = ui_with_clipboard(app, Box::new(NoopClipboard));
 
     ui.open_tree_view();
@@ -676,20 +641,20 @@ fn add_comment_keeps_selection_and_updates_comments() -> Result<()> {
         );
 
     let mut app = App::new(store, WorkflowConfig::unrestricted())?;
-    app.select_next();
-    let target = expect_some(app.selected_task_id(), "selected task id");
+    app_select_next(&mut app);
+    let target = expect_some(app_selected_task_id(&app), "selected task id");
     app.add_comment(target, "hello".into(), &actor())?;
 
-    assert_eq!(app.selected_task_id(), Some(target));
+    assert_eq!(app_selected_task_id(&app), Some(target));
     assert_eq!(
-        expect_some(app.selected_task(), "selected task")
+        expect_some(app_selected_task(&app), "selected task")
             .comments
             .last()
             .map(|c| c.body.as_str()),
         Some("hello")
     );
     // Commented task should move to the top.
-    assert_eq!(app.selection_index(), 0);
+    assert_eq!(app_selection_index(&app), 0);
     Ok(())
 }
 
@@ -709,9 +674,9 @@ fn create_task_registers_and_selects_new_entry() -> Result<()> {
 
     let id = app.create_task(data, &actor())?;
     assert_eq!(app.tasks.len(), 1);
-    assert_eq!(app.selected_task_id(), Some(id));
+    assert_eq!(app_selected_task_id(&app), Some(id));
 
-    let snap = &expect_some(app.selected_task(), "selected task").snapshot;
+    let snap = &expect_some(app_selected_task(&app), "selected task").snapshot;
     assert_eq!(snap.title, "Title");
     assert_eq!(snap.state.as_deref(), Some("todo"));
     assert_eq!(snap.description, "Write documentation");
@@ -757,7 +722,7 @@ fn create_task_applies_default_state() -> Result<()> {
     };
 
     app.create_task(data, &actor())?;
-    let snap = &expect_some(app.selected_task(), "selected task").snapshot;
+    let snap = &expect_some(app_selected_task(&app), "selected task").snapshot;
     assert_eq!(snap.state.as_deref(), Some("state/todo"));
     Ok(())
 }
@@ -1154,7 +1119,7 @@ fn open_state_picker_prefills_current_state() -> Result<()> {
     let store = MockStore::new().with_task(task, vec![created]);
     let app = App::new(store, workflow)?;
     let mut ui = ui_with_clipboard(app, Box::new(NoopClipboard));
-    ui.app.set_filter(TaskFilter::default());
+    apply_app_filter(&mut ui.app, TaskFilter::default());
     ui.open_state_picker();
 
     assert_eq!(ui.detail_focus, DetailFocus::StatePicker);

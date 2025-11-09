@@ -1,10 +1,9 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::thread;
 
 use anyhow::{Context, Error, Result};
+use git_mile_core::TaskSnapshot;
 use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
-use git_mile_core::{TaskFilter, TaskSnapshot};
 
 use super::task_cache::{TaskCache, TaskView};
 use super::task_visibility::TaskVisibility;
@@ -54,36 +53,16 @@ impl<S: TaskStore> App<S> {
         self.writer.store()
     }
 
-    pub(super) fn filter(&self) -> &TaskFilter {
-        self.visibility.filter()
+    pub(super) const fn visibility(&self) -> &TaskVisibility {
+        &self.visibility
     }
 
-    pub(super) fn set_filter(&mut self, filter: TaskFilter) {
-        if self.visibility.filter() == &filter {
-            return;
-        }
-        let keep_id = self.selected_task_id();
-        self.visibility.set_filter(filter);
-        self.visibility.rebuild(&self.tasks, keep_id);
+    pub(super) fn visibility_mut(&mut self) -> &mut TaskVisibility {
+        &mut self.visibility
     }
 
-    pub(super) fn has_visible_tasks(&self) -> bool {
-        self.visibility.has_visible_tasks()
-    }
-
-    pub(super) fn visible_tasks(&self) -> impl Iterator<Item = &TaskView> + '_ {
-        self.visibility
-            .visible_indexes()
-            .iter()
-            .filter_map(|&idx| self.tasks.get(idx))
-    }
-
-    pub(super) fn is_visible(&self, task_id: TaskId) -> bool {
-        self.visibility.contains(task_id)
-    }
-
-    pub(super) fn selection_index(&self) -> usize {
-        self.visibility.selected_index()
+    pub(super) fn rebuild_visibility(&mut self, preferred: Option<TaskId>) {
+        self.visibility.rebuild(&self.tasks, preferred);
     }
 
     /// Get parent tasks of the given task.
@@ -112,11 +91,6 @@ impl<S: TaskStore> App<S> {
                     .filter_map(|child_id| self.task_index.get(child_id).and_then(|&idx| self.tasks.get(idx)))
             })
             .collect()
-    }
-
-    /// Jump to a specific task by ID.
-    pub(super) fn jump_to_task(&mut self, task_id: TaskId) {
-        self.visibility.jump_to_task(task_id);
     }
 
     /// Get root (topmost parent) task of the given task.
@@ -150,7 +124,7 @@ impl<S: TaskStore> App<S> {
     }
 
     fn refresh_tasks_with(&mut self, preferred: Option<TaskId>) -> Result<()> {
-        let keep_id = preferred.or_else(|| self.selected_task().map(|view| view.snapshot.id));
+        let keep_id = preferred.or_else(|| self.visibility.selected_task_id(&self.tasks));
 
         let cache = TaskCache::load(self.store()).map_err(Self::map_store_error)?;
         self.tasks = cache.tasks;
@@ -159,33 +133,6 @@ impl<S: TaskStore> App<S> {
         self.children_index = cache.children_index;
         self.visibility.rebuild(&self.tasks, keep_id);
         Ok(())
-    }
-
-    /// Selected task (if any).
-    pub(super) fn selected_task(&self) -> Option<&TaskView> {
-        self.visibility.selected_task(&self.tasks)
-    }
-
-    /// Identifier of the selected task (if any).
-    pub(super) fn selected_task_id(&self) -> Option<TaskId> {
-        self.visibility.selected_task_id(&self.tasks)
-    }
-
-    #[inline]
-    fn runtime_touch() {
-        let _ = thread::current().id();
-    }
-
-    /// Move selection to the next task.
-    pub(super) fn select_next(&mut self) {
-        Self::runtime_touch();
-        self.visibility.select_next();
-    }
-
-    /// Move selection to the previous task.
-    pub(super) fn select_prev(&mut self) {
-        Self::runtime_touch();
-        self.visibility.select_prev();
     }
 
     /// Append a comment to the given task and refresh the view.

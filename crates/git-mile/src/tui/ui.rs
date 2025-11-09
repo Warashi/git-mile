@@ -252,11 +252,31 @@ impl<S: TaskStore> Ui<S> {
     }
 
     fn apply_default_filter(&mut self) {
-        if self.app.filter().is_empty() {
+        if self.app.visibility().filter().is_empty() {
             let mut filter = TaskFilter::default();
             filter.state_kinds.exclude.insert(StateKind::Done);
-            self.app.set_filter(filter);
+            self.update_filter(filter);
         }
+    }
+
+    fn update_filter(&mut self, filter: TaskFilter) {
+        if self.app.visibility().filter() == &filter {
+            return;
+        }
+        let keep_id = self.app.visibility().selected_task_id(&self.app.tasks);
+        {
+            let visibility = self.app.visibility_mut();
+            visibility.set_filter(filter);
+        }
+        self.app.rebuild_visibility(keep_id);
+    }
+
+    fn selected_task(&self) -> Option<&TaskView> {
+        self.app.visibility().selected_task(&self.app.tasks)
+    }
+
+    fn selected_task_id(&self) -> Option<TaskId> {
+        self.app.visibility().selected_task_id(&self.app.tasks)
     }
 
     pub(super) fn draw(&self, f: &mut Frame<'_>) {
@@ -299,10 +319,11 @@ impl<S: TaskStore> Ui<S> {
     }
 
     fn draw_task_list(&self, f: &mut ratatui::Frame<'_>, area: Rect) {
-        let items = if self.app.has_visible_tasks() {
+        let visibility = self.app.visibility();
+        let items = if visibility.has_visible_tasks() {
             let workflow = self.app.workflow();
-            self.app
-                .visible_tasks()
+            visibility
+                .visible_tasks(&self.app.tasks)
                 .map(|view| {
                     let title = Span::styled(
                         &view.snapshot.title,
@@ -316,7 +337,7 @@ impl<S: TaskStore> Ui<S> {
                 })
                 .collect()
         } else {
-            let message = if self.app.filter().is_empty() {
+            let message = if visibility.filter().is_empty() {
                 "タスクがありません"
             } else {
                 "フィルタに一致するタスクがありません"
@@ -329,14 +350,14 @@ impl<S: TaskStore> Ui<S> {
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
             .highlight_symbol("▶ ");
         let mut state = ListState::default();
-        if self.app.has_visible_tasks() {
-            state.select(Some(self.app.selection_index()));
+        if visibility.has_visible_tasks() {
+            state.select(Some(visibility.selected_index()));
         }
         f.render_stateful_widget(list, area, &mut state);
     }
 
     fn draw_task_details(&self, f: &mut ratatui::Frame<'_>, area: Rect) {
-        if let Some(task) = self.app.selected_task() {
+        if let Some(task) = self.selected_task() {
             // Split into breadcrumb area, main details, and subtasks
             let has_parents = !task.snapshot.parents.is_empty();
             let children = self.app.get_children(task.snapshot.id);
@@ -524,7 +545,7 @@ impl<S: TaskStore> Ui<S> {
         let inner = block.inner(area);
         f.render_widget(block, area);
 
-        if let Some(task) = self.app.selected_task() {
+        if let Some(task) = self.selected_task() {
             if task.comments.is_empty() {
                 let paragraph =
                     Paragraph::new("コメントはまだありません。").style(Style::default().fg(Color::DarkGray));
@@ -877,11 +898,11 @@ impl<S: TaskStore> Ui<S> {
                 Ok(None)
             }
             KeyCode::Down | KeyCode::Char('j' | 'J') => {
-                self.app.select_next();
+                self.app.visibility_mut().select_next();
                 Ok(None)
             }
             KeyCode::Up | KeyCode::Char('k' | 'K') => {
-                self.app.select_prev();
+                self.app.visibility_mut().select_prev();
                 Ok(None)
             }
             KeyCode::Enter => {
@@ -897,14 +918,14 @@ impl<S: TaskStore> Ui<S> {
                 self.info("タスクを再読込しました");
                 Ok(None)
             }
-            KeyCode::Char('c' | 'C') => self.app.selected_task_id().map_or_else(
+            KeyCode::Char('c' | 'C') => self.selected_task_id().map_or_else(
                 || {
                     self.error("コメント対象のタスクが選択されていません");
                     Ok(None)
                 },
                 |task| Ok(Some(UiAction::AddComment { task })),
             ),
-            KeyCode::Char('e' | 'E') => self.app.selected_task_id().map_or_else(
+            KeyCode::Char('e' | 'E') => self.selected_task_id().map_or_else(
                 || {
                     self.error("編集対象のタスクが選択されていません");
                     Ok(None)
@@ -912,7 +933,7 @@ impl<S: TaskStore> Ui<S> {
                 |task| Ok(Some(UiAction::EditTask { task })),
             ),
             KeyCode::Char('n' | 'N') => Ok(Some(UiAction::CreateTask)),
-            KeyCode::Char('s' | 'S') => self.app.selected_task_id().map_or_else(
+            KeyCode::Char('s' | 'S') => self.selected_task_id().map_or_else(
                 || {
                     self.error("子タスクを作成する親タスクが選択されていません");
                     Ok(None)
@@ -1017,14 +1038,14 @@ impl<S: TaskStore> Ui<S> {
     }
 
     fn jump_to_parent(&mut self) {
-        if let Some(task) = self.app.selected_task() {
+        if let Some(task) = self.selected_task() {
             let parent_id = self
                 .app
                 .get_parents(task.snapshot.id)
                 .first()
                 .map(|parent| parent.snapshot.id);
             if let Some(parent_id) = parent_id {
-                self.app.jump_to_task(parent_id);
+                self.app.visibility_mut().jump_to_task(parent_id);
                 let parent_title = self
                     .app
                     .tasks
@@ -1039,7 +1060,7 @@ impl<S: TaskStore> Ui<S> {
     }
 
     pub(super) fn copy_selected_task_id(&mut self) {
-        let Some(task) = self.app.selected_task() else {
+        let Some(task) = self.selected_task() else {
             self.error("コピー対象のタスクが選択されていません");
             return;
         };
@@ -1053,7 +1074,7 @@ impl<S: TaskStore> Ui<S> {
     }
 
     pub(super) fn open_state_picker(&mut self) {
-        let Some(task) = self.app.selected_task() else {
+        let Some(task) = self.selected_task() else {
             self.error("ステータスを変更するタスクが選択されていません");
             return;
         };
@@ -1131,7 +1152,7 @@ impl<S: TaskStore> Ui<S> {
     }
 
     fn open_comment_viewer(&mut self) {
-        let Some(task) = self.app.selected_task() else {
+        let Some(task) = self.selected_task() else {
             self.error("コメントを表示するタスクが選択されていません");
             return;
         };
@@ -1184,7 +1205,7 @@ impl<S: TaskStore> Ui<S> {
     fn build_tree_from_root(&self, root_id: TaskId) -> Option<TreeNode> {
         let root_view = self.app.tasks.iter().find(|t| t.snapshot.id == root_id)?;
 
-        if !self.app.is_visible(root_id) {
+        if !self.app.visibility().contains(root_id) {
             return None;
         }
 
@@ -1200,7 +1221,7 @@ impl<S: TaskStore> Ui<S> {
         let children = self.app.get_children(parent_id);
         children
             .iter()
-            .filter(|child| self.app.is_visible(child.snapshot.id))
+            .filter(|child| self.app.visibility().contains(child.snapshot.id))
             .map(|child| TreeNode {
                 task_id: child.snapshot.id,
                 children: self.build_children_nodes(child.snapshot.id),
@@ -1210,7 +1231,7 @@ impl<S: TaskStore> Ui<S> {
     }
 
     pub(super) fn open_tree_view(&mut self) {
-        let Some(current_task) = self.app.selected_task() else {
+        let Some(current_task) = self.selected_task() else {
             self.error("タスクが選択されていません");
             return;
         };
@@ -1322,13 +1343,13 @@ impl<S: TaskStore> Ui<S> {
         };
 
         // Jump to selected task
-        self.app.jump_to_task(task_id);
+        self.app.visibility_mut().jump_to_task(task_id);
 
         // Close tree view
         self.detail_focus = DetailFocus::None;
 
         // Get task title for message
-        if let Some(task) = self.app.selected_task() {
+        if let Some(task) = self.selected_task() {
             self.info(format!("タスクへジャンプ: {}", task.snapshot.title));
         }
     }
@@ -1399,12 +1420,12 @@ impl<S: TaskStore> Ui<S> {
     fn apply_filter_editor_output(&mut self, raw: &str) {
         match parse_filter_editor_output(raw) {
             Ok(filter) => {
-                if &filter == self.app.filter() {
+                if &filter == self.app.visibility().filter() {
                     self.info("フィルタに変更はありません");
                 } else {
-                    self.app.set_filter(filter.clone());
+                    self.update_filter(filter.clone());
                     let summary = summarize_task_filter(&filter);
-                    if self.app.has_visible_tasks() {
+                    if self.app.visibility().has_visible_tasks() {
                         self.info(format!("フィルタを更新しました: {summary}"));
                     } else {
                         self.info(format!("フィルタを更新しました（該当なし）: {summary}"));
@@ -1438,7 +1459,7 @@ impl<S: TaskStore> Ui<S> {
     }
 
     fn filter_summary_text(&self) -> String {
-        summarize_task_filter(self.app.filter())
+        summarize_task_filter(self.app.visibility().filter())
     }
 
     fn status_text(&self) -> Cow<'_, str> {
@@ -1512,7 +1533,7 @@ pub(super) fn handle_ui_action<S: TaskStore>(
             ui.apply_new_subtask_input(parent, &raw)?;
         }
         UiAction::EditFilter => {
-            let template = filter_editor_template(ui.app.filter());
+            let template = filter_editor_template(ui.app.visibility().filter());
             let raw = with_terminal_suspended(terminal, || launch_editor(&template))?;
             ui.apply_filter_editor_output(&raw);
         }
