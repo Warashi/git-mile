@@ -110,7 +110,8 @@ mod tests {
     }
 
     fn fixed_task_id(n: u8) -> TaskId {
-        TaskId::from_str(&format!("00000000-0000-0000-0000-0000000000{n:02}")).unwrap()
+        TaskId::from_str(&format!("00000000-0000-0000-0000-0000000000{n:02}"))
+            .unwrap_or_else(|err| panic!("must parse task id: {err}"))
     }
 
     fn actor() -> Actor {
@@ -121,7 +122,8 @@ mod tests {
     }
 
     fn ts(secs: i64) -> OffsetDateTime {
-        OffsetDateTime::from_unix_timestamp(secs).unwrap()
+        OffsetDateTime::from_unix_timestamp(secs)
+            .unwrap_or_else(|err| panic!("must convert unix timestamp: {err}"))
     }
 
     fn created(task: TaskId, secs: i64, title: &str) -> Event {
@@ -158,7 +160,7 @@ mod tests {
             .with_task(second, vec![created(second, 30, "second")])
             .with_task(third, vec![created(third, 20, "third")]);
 
-        let cache = TaskCache::load(&store).expect("must load cache");
+        let cache = TaskCache::load(&store).unwrap_or_else(|err| panic!("must load cache: {err}"));
         let ids: Vec<TaskId> = cache.tasks.iter().map(|view| view.snapshot.id).collect();
         assert_eq!(ids, vec![second, third, first]);
     }
@@ -179,7 +181,7 @@ mod tests {
             .with_task(parent, parent_events)
             .with_task(child, child_events);
 
-        let cache = TaskCache::load(&store).expect("must load cache");
+        let cache = TaskCache::load(&store).unwrap_or_else(|err| panic!("must load cache: {err}"));
 
         assert_eq!(
             cache.parents_index.get(&child).map(Vec::as_slice),
@@ -189,6 +191,6 @@ mod tests {
             cache.children_index.get(&parent).map(Vec::as_slice),
             Some(&[child][..])
         );
-        assert!(cache.children_index.get(&child).is_some());
+        assert!(cache.children_index.contains_key(&child));
     }
 }
