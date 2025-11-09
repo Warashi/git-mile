@@ -108,6 +108,11 @@ impl<S: TaskStore> App<S> {
         Ok(app)
     }
 
+    #[allow(clippy::useless_conversion)]
+    fn map_store_error(err: S::Error) -> Error {
+        err.into()
+    }
+
     pub(super) const fn workflow(&self) -> &WorkflowConfig {
         &self.workflow
     }
@@ -215,9 +220,9 @@ impl<S: TaskStore> App<S> {
         let keep_id = preferred.or_else(|| self.selected_task().map(|view| view.snapshot.id));
 
         let mut views = Vec::new();
-        let store = self.writer.store();
-        for tid in store.list_tasks().map_err(Error::from)? {
-            let events = store.load_events(tid).map_err(Error::from)?;
+        let store = self.store();
+        for tid in store.list_tasks().map_err(Self::map_store_error)? {
+            let events = store.load_events(tid).map_err(Self::map_store_error)?;
             views.push(TaskView::from_events(&events));
         }
         views.sort_by(|a, b| match (a.last_updated, b.last_updated) {
@@ -374,7 +379,7 @@ impl<S: TaskStore> App<S> {
                 .writer
                 .store()
                 .load_events(task)
-                .map_err(Error::from)
+                .map_err(Self::map_store_error)
                 .context("タスクの読み込みに失敗しました")?;
             let snapshot = TaskSnapshot::replay(&events);
             let snapshot_ref: &TaskSnapshot = loaded_snapshot.insert(snapshot);
@@ -411,7 +416,7 @@ impl<S: TaskStore> App<S> {
                 .writer
                 .store()
                 .load_events(task)
-                .map_err(Error::from)
+                .map_err(Self::map_store_error)
                 .context("タスクの読み込みに失敗しました")?;
             let snapshot = TaskSnapshot::replay(&events);
             let snapshot_ref: &TaskSnapshot = loaded_snapshot.insert(snapshot);
@@ -500,7 +505,7 @@ impl TaskPatch {
         patch
     }
 
-    fn is_empty(&self) -> bool {
+    const fn is_empty(&self) -> bool {
         self.title.is_none()
             && self.state.is_none()
             && self.description.is_none()

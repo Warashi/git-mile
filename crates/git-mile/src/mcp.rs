@@ -551,8 +551,7 @@ impl GitMileServer {
 
         let parents = Self::parse_task_ids(parents, "parent task ID")?;
         let task = {
-            let store = self.store.lock().await;
-            let writer = TaskWriter::new(&*store, self.workflow.clone());
+            let writer = TaskWriter::new(self.store.lock().await, self.workflow.clone());
             let request = CreateTaskRequest {
                 title,
                 state,
@@ -606,23 +605,27 @@ impl GitMileServer {
         let task: TaskId = task_id
             .parse()
             .map_err(|e| McpError::invalid_params(format!("Invalid task ID: {e}"), None))?;
-        let mut update = TaskUpdate::default();
-        update.title = title;
-        update.description = description.map(|body| DescriptionPatch::Set { description: body });
-        update.state = if let Some(value) = state {
-            Some(StatePatch::Set { state: value })
-        } else if clear_state {
-            Some(StatePatch::Clear)
-        } else {
-            None
-        };
-        update.labels = SetDiff {
-            added: add_labels,
-            removed: remove_labels,
-        };
-        update.assignees = SetDiff {
-            added: add_assignees,
-            removed: remove_assignees,
+        let update = TaskUpdate {
+            title,
+            description: description.map(|body| DescriptionPatch::Set { description: body }),
+            state: state.map_or_else(
+                || {
+                    if clear_state {
+                        Some(StatePatch::Clear)
+                    } else {
+                        None
+                    }
+                },
+                |value| Some(StatePatch::Set { state: value }),
+            ),
+            labels: SetDiff {
+                added: add_labels,
+                removed: remove_labels,
+            },
+            assignees: SetDiff {
+                added: add_assignees,
+                removed: remove_assignees,
+            },
         };
 
         let actor = Actor {
@@ -634,8 +637,7 @@ impl GitMileServer {
         let unlink_parent_ids = Self::parse_task_ids(unlink_parents, "parent task ID")?;
 
         {
-            let store = self.store.lock().await;
-            let writer = TaskWriter::new(&*store, self.workflow.clone());
+            let writer = TaskWriter::new(self.store.lock().await, self.workflow.clone());
 
             writer
                 .update_task(task, update, &actor)
@@ -750,27 +752,21 @@ impl GitMileServer {
             .parse()
             .map_err(|e| McpError::invalid_params(format!("Invalid task ID: {e}"), None))?;
 
-        let comment_id = {
-            let store = self.store.lock().await;
-            let writer = TaskWriter::new(&*store, self.workflow.clone());
-            let result = writer
-                .add_comment(
-                    task,
-                    CommentRequest {
-                        body_md,
-                        actor: Actor {
-                            name: actor_name,
-                            email: actor_email,
-                        },
+        let comment_id = TaskWriter::new(self.store.lock().await, self.workflow.clone())
+            .add_comment(
+                task,
+                CommentRequest {
+                    body_md,
+                    actor: Actor {
+                        name: actor_name,
+                        email: actor_email,
                     },
-                )
-                .map_err(Self::map_task_write_error)?;
-
-            result
-                .comment_id
-                .map(|id| id.to_string())
-                .ok_or_else(|| McpError::internal_error("TaskWriter returned no comment ID", None))
-        }?;
+                },
+            )
+            .map_err(Self::map_task_write_error)?
+            .comment_id
+            .map(|id| id.to_string())
+            .ok_or_else(|| McpError::internal_error("TaskWriter returned no comment ID", None))?;
 
         let response = serde_json::json!({
             "task_id": task.to_string(),

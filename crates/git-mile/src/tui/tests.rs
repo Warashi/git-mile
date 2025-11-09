@@ -124,7 +124,10 @@ impl CoreTaskStore for MockStore {
 fn fake_oid(counter: u8) -> Oid {
     let mut bytes = [0u8; 20];
     bytes[19] = counter;
-    Oid::from_bytes(&bytes).unwrap()
+    match Oid::from_bytes(&bytes) {
+        Ok(oid) => oid,
+        Err(err) => panic!("failed to construct fake oid: {err}"),
+    }
 }
 
 fn actor() -> Actor {

@@ -18,7 +18,7 @@ pub struct TaskService<S> {
 }
 
 impl<S> TaskService<S> {
-    pub fn new(store: S, workflow: WorkflowConfig) -> Self
+    pub const fn new(store: S, workflow: WorkflowConfig) -> Self
     where
         S: TaskStore,
     {
@@ -31,7 +31,7 @@ impl<S> TaskService<S> {
         self.writer.workflow()
     }
 
-    fn store(&self) -> &S {
+    const fn store(&self) -> &S {
         self.writer.store()
     }
 }
@@ -97,18 +97,18 @@ impl<S: TaskStore> TaskService<S> {
     }
 
     fn materialize(&self, task: TaskId) -> Result<TaskSnapshot> {
-        let events = self.store().load_events(task).map_err(|err| err.into())?;
+        let events = self.store().load_events(task).map_err(Into::into)?;
         Ok(TaskSnapshot::replay(&events))
     }
 
     fn list_tasks(&self) -> Result<Vec<TaskId>> {
-        self.store().list_tasks().map_err(|err| err.into())
+        self.store().list_tasks().map_err(Into::into)
     }
 
     fn list_snapshots(&self, filter: &TaskFilter) -> Result<Vec<TaskSnapshot>> {
         let mut snapshots = Vec::new();
         for task_id in self.list_tasks()? {
-            let events = self.store().load_events(task_id).map_err(|err| err.into())?;
+            let events = self.store().load_events(task_id).map_err(Into::into)?;
             snapshots.push(TaskSnapshot::replay(&events));
         }
         snapshots.sort_by(compare_snapshots);

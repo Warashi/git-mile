@@ -6,6 +6,7 @@ use git_mile_core::id::{EventId, TaskId};
 use git_mile_store_git::GitStore;
 use git2::Oid;
 use std::collections::BTreeSet;
+use tokio::sync::MutexGuard;
 
 use crate::config::WorkflowConfig;
 
@@ -15,12 +16,21 @@ pub trait TaskStore {
     type Error: Into<Error>;
 
     /// Append a single event for the target task.
+    ///
+    /// # Errors
+    /// Returns a store-specific error when persisting the event fails.
     fn append_event(&self, event: &Event) -> Result<Oid, Self::Error>;
 
     /// Load every event for the given task.
+    ///
+    /// # Errors
+    /// Returns a store-specific error when the task cannot be read.
     fn load_events(&self, task: TaskId) -> Result<Vec<Event>, Self::Error>;
 
     /// Enumerate all known task identifiers.
+    ///
+    /// # Errors
+    /// Returns a store-specific error when listing fails.
     fn list_tasks(&self) -> Result<Vec<TaskId>, Self::Error>;
 }
 
@@ -80,6 +90,9 @@ where
     S: TaskStore,
 {
     /// Create a new task with optional parents.
+    ///
+    /// # Errors
+    /// Returns [`TaskWriteError`] when validation fails or the store cannot persist events.
     pub fn create_task(&self, request: CreateTaskRequest) -> Result<CreateTaskResult, TaskWriteError> {
         let CreateTaskRequest {
             title,
@@ -148,6 +161,9 @@ where
     }
 
     /// Apply a patch to an existing task.
+    ///
+    /// # Errors
+    /// Returns [`TaskWriteError`] when the task is missing, validation fails, or storage errors occur.
     pub fn update_task(
         &self,
         task: TaskId,
@@ -266,16 +282,18 @@ where
     }
 
     /// Only mutate the workflow state of a task.
+    ///
+    /// # Errors
+    /// Returns [`TaskWriteError`] when the task is missing, the new state is invalid, or storage fails.
     pub fn set_state(
         &self,
         task: TaskId,
         state: Option<String>,
         actor: &Actor,
     ) -> Result<TaskWriteResult, TaskWriteError> {
-        let state_patch = match state {
-            Some(value) => Some(StatePatch::Set { state: value }),
-            None => Some(StatePatch::Clear),
-        };
+        let state_patch = state.map_or(Some(StatePatch::Clear), |value| {
+            Some(StatePatch::Set { state: value })
+        });
         let patch = TaskUpdate {
             state: state_patch,
             ..TaskUpdate::default()
@@ -284,6 +302,9 @@ where
     }
 
     /// Append a Markdown comment to the task.
+    ///
+    /// # Errors
+    /// Returns [`TaskWriteError`] when the task is missing or events cannot be persisted.
     pub fn add_comment(
         &self,
         task: TaskId,
@@ -304,6 +325,9 @@ where
     }
 
     /// Link new parents to the task.
+    ///
+    /// # Errors
+    /// Returns [`TaskWriteError`] when either task is missing or persistence fails.
     pub fn link_parents(
         &self,
         task: TaskId,
@@ -353,6 +377,9 @@ where
     }
 
     /// Remove existing parent links from the task.
+    ///
+    /// # Errors
+    /// Returns [`TaskWriteError`] when the task is missing or persistence fails.
     pub fn unlink_parents(
         &self,
         task: TaskId,
@@ -425,7 +452,7 @@ pub struct CommentRequest {
 }
 
 /// Aggregate task update payload.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TaskUpdate {
     /// Overwrite the task title.
     pub title: Option<String>,
@@ -439,22 +466,10 @@ pub struct TaskUpdate {
     pub assignees: SetDiff<String>,
 }
 
-impl Default for TaskUpdate {
-    fn default() -> Self {
-        Self {
-            title: None,
-            state: None,
-            description: None,
-            labels: SetDiff::default(),
-            assignees: SetDiff::default(),
-        }
-    }
-}
-
 impl TaskUpdate {
     /// Returns true when the update would not emit any events.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.title.is_none()
             && self.state.is_none()
             && self.description.is_none()
@@ -499,12 +514,13 @@ pub struct SetDiff<T> {
 impl<T> SetDiff<T> {
     /// Returns true when both added/removed are empty.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.added.is_empty() && self.removed.is_empty()
     }
 }
 
 /// Compute differences between two sets.
+#[must_use]
 pub fn diff_sets<T: Ord + Clone>(current: &BTreeSet<T>, desired: &BTreeSet<T>) -> SetDiff<T> {
     SetDiff {
         added: desired.difference(current).cloned().collect(),
@@ -567,19 +583,19 @@ impl TaskStore for GitStore {
     type Error = Error;
 
     fn append_event(&self, event: &Event) -> Result<Oid, Self::Error> {
-        GitStore::append_event(self, event)
+        Self::append_event(self, event)
     }
 
     fn load_events(&self, task: TaskId) -> Result<Vec<Event>, Self::Error> {
-        GitStore::load_events(self, task)
+        Self::load_events(self, task)
     }
 
     fn list_tasks(&self) -> Result<Vec<TaskId>, Self::Error> {
-        GitStore::list_tasks(self)
+        Self::list_tasks(self)
     }
 }
 
-impl<'a, S> TaskStore for &'a S
+impl<S> TaskStore for &S
 where
     S: TaskStore + ?Sized,
 {
@@ -595,5 +611,21 @@ where
 
     fn list_tasks(&self) -> Result<Vec<TaskId>, Self::Error> {
         (*self).list_tasks()
+    }
+}
+
+impl TaskStore for MutexGuard<'_, GitStore> {
+    type Error = Error;
+
+    fn append_event(&self, event: &Event) -> Result<Oid, Self::Error> {
+        GitStore::append_event(self, event)
+    }
+
+    fn load_events(&self, task: TaskId) -> Result<Vec<Event>, Self::Error> {
+        GitStore::load_events(self, task)
+    }
+
+    fn list_tasks(&self) -> Result<Vec<TaskId>, Self::Error> {
+        GitStore::list_tasks(self)
     }
 }
