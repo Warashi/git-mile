@@ -1,9 +1,9 @@
-use std::{cmp::Ordering, collections::BTreeSet, str::FromStr};
+use std::{cmp::Ordering, str::FromStr};
 
 use anyhow::{Context, Result, anyhow};
 use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
-use git_mile_core::{TaskFilter, TaskSnapshot};
+use git_mile_core::{TaskFilter, TaskFilterBuilder, TaskSnapshot};
 use git2::Oid;
 
 use crate::config::WorkflowConfig;
@@ -215,22 +215,14 @@ fn build_filter(
     assignees: Vec<String>,
     text: Option<String>,
 ) -> TaskFilter {
-    TaskFilter {
-        states: states.into_iter().collect::<BTreeSet<_>>(),
-        labels: labels.into_iter().collect::<BTreeSet<_>>(),
-        assignees: assignees.into_iter().collect::<BTreeSet<_>>(),
-        text: text.and_then(|candidate| {
-            let trimmed = candidate.trim();
-            if trimmed.is_empty() {
-                None
-            } else if trimmed.len() == candidate.len() {
-                Some(candidate)
-            } else {
-                Some(trimmed.to_owned())
-            }
-        }),
-        ..TaskFilter::default()
+    let mut builder = TaskFilterBuilder::new()
+        .states(states)
+        .labels(labels)
+        .assignees(assignees);
+    if let Some(text) = text {
+        builder = builder.text(text);
     }
+    builder.build()
 }
 
 fn render_task_table(tasks: &[TaskSnapshot], workflow: &WorkflowConfig) {

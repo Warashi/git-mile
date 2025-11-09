@@ -7,7 +7,7 @@ use crate::task_writer::{
 };
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::TaskId;
-use git_mile_core::{OrderedEvents, StateKind, TaskFilter, TaskSnapshot};
+use git_mile_core::{OrderedEvents, StateKind, TaskFilter, TaskFilterBuilder, TaskSnapshot};
 use git_mile_store_git::GitStore;
 use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::tool::{ToolCallContext, ToolRouter};
@@ -223,27 +223,15 @@ struct TaskCommentEntry {
 
 impl ListTasksParams {
     fn into_filter(self) -> TaskFilter {
-        TaskFilter {
-            states: self.states.into_iter().collect(),
-            labels: self.labels.into_iter().collect(),
-            assignees: self.assignees.into_iter().collect(),
-            text: normalize_text(self.text),
-            ..TaskFilter::default()
+        let mut builder = TaskFilterBuilder::new()
+            .states(self.states)
+            .labels(self.labels)
+            .assignees(self.assignees);
+        if let Some(text) = self.text {
+            builder = builder.text(text);
         }
+        builder.build()
     }
-}
-
-fn normalize_text(input: Option<String>) -> Option<String> {
-    input.and_then(|candidate| {
-        let trimmed = candidate.trim();
-        if trimmed.is_empty() {
-            None
-        } else if trimmed.len() == candidate.len() {
-            Some(candidate)
-        } else {
-            Some(trimmed.to_owned())
-        }
-    })
 }
 
 fn format_timestamp(ts: OffsetDateTime) -> Result<String, McpError> {
