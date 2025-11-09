@@ -198,6 +198,155 @@ pub struct TaskFilter {
     pub updated: Option<UpdatedFilter>,
 }
 
+/// Builder that normalizes inputs while constructing [`TaskFilter`] values.
+#[derive(Debug, Clone, Default)]
+pub struct TaskFilterBuilder {
+    filter: TaskFilter,
+}
+
+#[allow(clippy::missing_const_for_fn)]
+impl TaskFilterBuilder {
+    /// Create an empty builder.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Start from an existing filter.
+    #[must_use]
+    pub fn from_filter(filter: TaskFilter) -> Self {
+        Self { filter }
+    }
+
+    /// Add one workflow state requirement.
+    #[must_use]
+    pub fn state(mut self, state: impl Into<String>) -> Self {
+        self.filter.states.insert(state.into());
+        self
+    }
+
+    /// Add many workflow states.
+    #[must_use]
+    pub fn states<I, S>(mut self, states: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.filter.states.extend(states.into_iter().map(Into::into));
+        self
+    }
+
+    /// Include the provided state kinds.
+    #[must_use]
+    pub fn include_state_kinds<I>(mut self, kinds: I) -> Self
+    where
+        I: IntoIterator<Item = StateKind>,
+    {
+        self.filter.state_kinds.include.extend(kinds);
+        self
+    }
+
+    /// Exclude the provided state kinds.
+    #[must_use]
+    pub fn exclude_state_kinds<I>(mut self, kinds: I) -> Self
+    where
+        I: IntoIterator<Item = StateKind>,
+    {
+        self.filter.state_kinds.exclude.extend(kinds);
+        self
+    }
+
+    /// Add required labels (logical AND).
+    #[must_use]
+    pub fn labels<I, S>(mut self, labels: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.filter.labels.extend(labels.into_iter().map(Into::into));
+        self
+    }
+
+    /// Add assignee filters (logical OR).
+    #[must_use]
+    pub fn assignees<I, S>(mut self, assignees: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.filter
+            .assignees
+            .extend(assignees.into_iter().map(Into::into));
+        self
+    }
+
+    /// Add required parent task identifiers.
+    #[must_use]
+    pub fn parents<I>(mut self, parents: I) -> Self
+    where
+        I: IntoIterator<Item = TaskId>,
+    {
+        self.filter.parents.extend(parents);
+        self
+    }
+
+    /// Add required child task identifiers.
+    #[must_use]
+    pub fn children<I>(mut self, children: I) -> Self
+    where
+        I: IntoIterator<Item = TaskId>,
+    {
+        self.filter.children.extend(children);
+        self
+    }
+
+    /// Set the full-text needle (whitespace-trimmed, lowercased).
+    #[must_use]
+    pub fn text(mut self, text: impl Into<String>) -> Self {
+        let owned = text.into();
+        self.filter.text = Self::normalize_text(&owned);
+        self
+    }
+
+    /// Clear the full-text filter.
+    #[must_use]
+    pub fn clear_text(mut self) -> Self {
+        self.filter.text = None;
+        self
+    }
+
+    /// Configure the updated timestamp filter.
+    #[must_use]
+    pub fn updated(mut self, updated: UpdatedFilter) -> Self {
+        self.filter.updated = Some(updated);
+        self
+    }
+
+    /// Remove the updated timestamp filter.
+    #[must_use]
+    pub fn clear_updated(mut self) -> Self {
+        self.filter.updated = None;
+        self
+    }
+
+    /// Return the composed filter.
+    #[must_use]
+    pub fn build(self) -> TaskFilter {
+        self.filter
+    }
+
+    /// Normalize raw text into a canonical form.
+    #[must_use]
+    pub fn normalize_text(text: &str) -> Option<String> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_ascii_lowercase())
+        }
+    }
+}
+
 impl TaskFilter {
     /// Check whether the provided snapshot satisfies this filter.
     #[must_use]
@@ -573,6 +722,30 @@ mod tests {
 
     fn fixed_event_id(seed: u128) -> EventId {
         EventId(Uuid::from_u128(seed))
+    }
+
+    #[test]
+    fn filter_builder_normalizes_text_input() {
+        let filter = TaskFilterBuilder::new().text("  MIXed Case Query ").build();
+        assert_eq!(filter.text.as_deref(), Some("mixed case query"));
+
+        let empty = TaskFilterBuilder::new().text("   ").build();
+        assert!(empty.text.is_none());
+    }
+
+    #[test]
+    fn filter_builder_deduplicates_values() {
+        let filter = TaskFilterBuilder::new()
+            .states(["state/todo", "state/todo", "state/done"])
+            .labels(["type/bug", "type/bug", "type/feat"])
+            .assignees(["alice", "bob", "alice"])
+            .build();
+
+        assert_eq!(filter.states.len(), 2);
+        assert_eq!(filter.labels.len(), 2);
+        assert_eq!(filter.assignees.len(), 2);
+        assert!(filter.states.contains("state/todo"));
+        assert!(filter.labels.contains("type/bug"));
     }
 
     #[test]
