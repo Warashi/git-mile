@@ -675,7 +675,7 @@ fn add_comment_keeps_selection_and_updates_comments() -> Result<()> {
         );
 
     let mut app = App::new(store, WorkflowConfig::unrestricted())?;
-    app.selected = 1;
+    app.select_next();
     let target = expect_some(app.selected_task_id(), "selected task id");
     app.add_comment(target, "hello".into(), &actor())?;
 
@@ -688,7 +688,7 @@ fn add_comment_keeps_selection_and_updates_comments() -> Result<()> {
         Some("hello")
     );
     // Commented task should move to the top.
-    assert_eq!(app.selected, 0);
+    assert_eq!(app.selection_index(), 0);
     Ok(())
 }
 

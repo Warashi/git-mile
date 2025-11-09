@@ -8,6 +8,7 @@ use git_mile_core::{OrderedEvents, TaskFilter, TaskSnapshot};
 use time::OffsetDateTime;
 
 use super::task_cache::TaskCache;
+use super::task_visibility::TaskVisibility;
 use crate::config::WorkflowConfig;
 use crate::task_writer::{
     CommentRequest, CreateTaskRequest, DescriptionPatch, SetDiff, StatePatch, TaskStore as CoreTaskStore,
@@ -77,15 +78,10 @@ pub(super) struct App<S: TaskStore> {
     workflow: WorkflowConfig,
     /// Cached task list sorted by最終更新順。フィルタ適用前の全体集合。
     pub tasks: Vec<TaskView>,
-    /// 表示対象タスクのインデックス（`tasks` への参照）。
-    visible: Vec<usize>,
-    /// 現在の選択位置（`visible` のインデックス）。
-    pub selected: usize,
+    visibility: TaskVisibility,
     task_index: HashMap<TaskId, usize>,
     parents_index: HashMap<TaskId, Vec<TaskId>>,
     children_index: HashMap<TaskId, Vec<TaskId>>,
-    visible_index: HashMap<TaskId, usize>,
-    filter: TaskFilter,
 }
 
 impl<S: TaskStore> App<S> {
@@ -96,13 +92,10 @@ impl<S: TaskStore> App<S> {
             writer,
             workflow,
             tasks: Vec::new(),
-            visible: Vec::new(),
-            selected: 0,
+            visibility: TaskVisibility::default(),
             task_index: HashMap::new(),
             parents_index: HashMap::new(),
             children_index: HashMap::new(),
-            visible_index: HashMap::new(),
-            filter: TaskFilter::default(),
         };
         app.refresh_tasks()?;
         Ok(app)
@@ -121,34 +114,36 @@ impl<S: TaskStore> App<S> {
         self.writer.store()
     }
 
-    pub(super) const fn filter(&self) -> &TaskFilter {
-        &self.filter
+    pub(super) fn filter(&self) -> &TaskFilter {
+        self.visibility.filter()
     }
 
     pub(super) fn set_filter(&mut self, filter: TaskFilter) {
-        if self.filter == filter {
+        if self.visibility.filter() == &filter {
             return;
         }
         let keep_id = self.selected_task_id();
-        self.filter = filter;
-        self.rebuild_visibility();
-        self.selected = self.resolve_selection(keep_id);
+        self.visibility.set_filter(filter);
+        self.visibility.rebuild(&self.tasks, keep_id);
     }
 
-    pub(super) const fn has_visible_tasks(&self) -> bool {
-        !self.visible.is_empty()
+    pub(super) fn has_visible_tasks(&self) -> bool {
+        self.visibility.has_visible_tasks()
     }
 
     pub(super) fn visible_tasks(&self) -> impl Iterator<Item = &TaskView> + '_ {
-        self.visible.iter().filter_map(|&idx| self.tasks.get(idx))
-    }
-
-    fn visible_index_of(&self, task_id: TaskId) -> Option<usize> {
-        self.visible_index.get(&task_id).copied()
+        self.visibility
+            .visible_indexes()
+            .iter()
+            .filter_map(|&idx| self.tasks.get(idx))
     }
 
     pub(super) fn is_visible(&self, task_id: TaskId) -> bool {
-        self.visible_index.contains_key(&task_id)
+        self.visibility.contains(task_id)
+    }
+
+    pub(super) fn selection_index(&self) -> usize {
+        self.visibility.selected_index()
     }
 
     /// Get parent tasks of the given task.
@@ -181,9 +176,7 @@ impl<S: TaskStore> App<S> {
 
     /// Jump to a specific task by ID.
     pub(super) fn jump_to_task(&mut self, task_id: TaskId) {
-        if let Some(index) = self.visible_index_of(task_id) {
-            self.selected = index;
-        }
+        self.visibility.jump_to_task(task_id);
     }
 
     /// Get root (topmost parent) task of the given task.
@@ -224,59 +217,18 @@ impl<S: TaskStore> App<S> {
         self.task_index = cache.task_index;
         self.parents_index = cache.parents_index;
         self.children_index = cache.children_index;
-        self.rebuild_visibility();
-        self.selected = self.resolve_selection(keep_id);
+        self.visibility.rebuild(&self.tasks, keep_id);
         Ok(())
-    }
-
-    fn resolve_selection(&self, preferred: Option<TaskId>) -> usize {
-        if self.visible.is_empty() {
-            return 0;
-        }
-        if let Some(id) = preferred
-            && let Some(index) = self.visible_index_of(id)
-        {
-            return index;
-        }
-        self.selected.min(self.visible.len() - 1)
-    }
-
-    fn rebuild_visibility(&mut self) {
-        self.visible.clear();
-        self.visible_index.clear();
-
-        if self.tasks.is_empty() {
-            return;
-        }
-
-        if self.filter.is_empty() {
-            for (idx, view) in self.tasks.iter().enumerate() {
-                let pos = self.visible.len();
-                self.visible.push(idx);
-                self.visible_index.insert(view.snapshot.id, pos);
-            }
-            return;
-        }
-
-        for (idx, view) in self.tasks.iter().enumerate() {
-            if self.filter.matches(&view.snapshot) {
-                let pos = self.visible.len();
-                self.visible.push(idx);
-                self.visible_index.insert(view.snapshot.id, pos);
-            }
-        }
     }
 
     /// Selected task (if any).
     pub(super) fn selected_task(&self) -> Option<&TaskView> {
-        self.visible
-            .get(self.selected)
-            .and_then(|&idx| self.tasks.get(idx))
+        self.visibility.selected_task(&self.tasks)
     }
 
     /// Identifier of the selected task (if any).
     pub(super) fn selected_task_id(&self) -> Option<TaskId> {
-        self.selected_task().map(|view| view.snapshot.id)
+        self.visibility.selected_task_id(&self.tasks)
     }
 
     #[inline]
@@ -287,23 +239,13 @@ impl<S: TaskStore> App<S> {
     /// Move selection to the next task.
     pub(super) fn select_next(&mut self) {
         Self::runtime_touch();
-        if self.visible.is_empty() {
-            return;
-        }
-        if self.selected + 1 < self.visible.len() {
-            self.selected += 1;
-        }
+        self.visibility.select_next();
     }
 
     /// Move selection to the previous task.
     pub(super) fn select_prev(&mut self) {
         Self::runtime_touch();
-        if self.visible.is_empty() {
-            return;
-        }
-        if self.selected > 0 {
-            self.selected -= 1;
-        }
+        self.visibility.select_prev();
     }
 
     /// Append a comment to the given task and refresh the view.

@@ -328,7 +328,7 @@ impl<S: TaskStore> Ui<S> {
             .highlight_symbol("▶ ");
         let mut state = ListState::default();
         if self.app.has_visible_tasks() {
-            state.select(Some(self.app.selected));
+            state.select(Some(self.app.selection_index()));
         }
         f.render_stateful_widget(list, area, &mut state);
     }

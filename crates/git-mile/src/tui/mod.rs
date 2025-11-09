@@ -20,6 +20,7 @@ mod app;
 mod clipboard;
 mod editor;
 mod task_cache;
+mod task_visibility;
 mod terminal;
 mod ui;
 
