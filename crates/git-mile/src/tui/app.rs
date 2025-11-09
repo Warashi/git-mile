@@ -57,6 +57,7 @@ impl<S: TaskStore> App<S> {
         &self.visibility
     }
 
+    #[allow(clippy::missing_const_for_fn)]
     pub(super) fn visibility_mut(&mut self) -> &mut TaskVisibility {
         &mut self.visibility
     }

@@ -39,7 +39,7 @@ fn expect_some<T>(value: Option<T>, ctx: &str) -> T {
     value.map_or_else(|| panic!("{ctx}"), |inner| inner)
 }
 
-fn app_selected_task<'a, S: TaskStore>(app: &'a App<S>) -> Option<&'a TaskView> {
+fn app_selected_task<S: TaskStore>(app: &App<S>) -> Option<&TaskView> {
     app.visibility().selected_task(&app.tasks)
 }
 

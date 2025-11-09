@@ -1,3 +1,5 @@
+//! Shared task snapshot cache utilities reused by CLI/TUI/MCP.
+
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
@@ -30,6 +32,8 @@ pub struct TaskView {
 }
 
 impl TaskView {
+    /// Build a [`TaskView`] from raw event history.
+    #[must_use]
     pub fn from_events(events: &[Event]) -> Self {
         let ordered = OrderedEvents::from(events);
         let snapshot = TaskSnapshot::replay_ordered(&ordered);
@@ -62,14 +66,22 @@ impl TaskView {
 /// Cached task snapshots and relation indexes.
 #[derive(Debug, Default)]
 pub struct TaskCache {
+    /// Chronologically sorted task views.
     pub tasks: Vec<TaskView>,
+    /// Mapping from task id to index into [`tasks`](Self::tasks).
     pub task_index: HashMap<TaskId, usize>,
+    /// Cached parent relationships.
     pub parents_index: HashMap<TaskId, Vec<TaskId>>,
+    /// Cached child relationships.
     pub children_index: HashMap<TaskId, Vec<TaskId>>,
 }
 
 impl TaskCache {
     /// Load every task snapshot from the store and build indexes.
+    ///
+    /// # Errors
+    ///
+    /// Propagates store-specific read failures.
     pub fn load<S>(store: &S) -> Result<Self, S::Error>
     where
         S: TaskStore,
@@ -130,6 +142,7 @@ impl TaskCache {
     }
 
     /// Return snapshots filtered by the provided filter.
+    #[must_use]
     pub fn filtered_snapshots(&self, filter: &TaskFilter) -> Vec<TaskSnapshot> {
         self.tasks
             .iter()
@@ -276,10 +289,13 @@ mod tests {
             .with_task(todo, vec![created(todo, 5, "todo task")])
             .with_task(done, vec![created(done, 10, "done task")]);
 
-        let mut filter = TaskFilter::default();
-        filter.text = Some("done".into());
+        let filter = TaskFilter {
+            text: Some("done".into()),
+            ..TaskFilter::default()
+        };
 
-        let cache = TaskCache::load(&store).expect("cache");
+        let cache = TaskCache::load(&store)
+            .unwrap_or_else(|err| panic!("must load cache: {err}"));
         let filtered = cache.filtered_snapshots(&filter);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].id, done);

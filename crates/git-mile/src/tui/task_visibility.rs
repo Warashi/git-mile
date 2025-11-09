@@ -68,6 +68,7 @@ impl TaskVisibility {
         !self.visible.is_empty()
     }
 
+    #[cfg(test)]
     pub(super) fn visible_indexes(&self) -> &[usize] {
         &self.visible
     }

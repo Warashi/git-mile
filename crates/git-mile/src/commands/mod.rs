@@ -104,10 +104,6 @@ impl<S: TaskStore> TaskService<S> {
         Ok(TaskSnapshot::replay(&events))
     }
 
-    fn list_tasks(&self) -> Result<Vec<TaskId>> {
-        self.store().list_tasks().map_err(Into::into)
-    }
-
     fn list_snapshots(&self, filter: &TaskFilter) -> Result<Vec<TaskSnapshot>> {
         let cache = TaskCache::load(self.store()).map_err(Into::into)?;
         if filter.is_empty() {
@@ -187,18 +183,18 @@ pub fn run<S: TaskStore>(command: Command, service: &TaskService<S>) -> Result<(
                 workflow.validate_state(Some(state))?;
             }
 
-            let filter = build_filter(
+            let filter = build_filter(CliFilterArgs {
                 states,
                 labels,
                 assignees,
-                state_kinds,
+                include_state_kinds: state_kinds,
                 exclude_state_kinds,
                 parents,
                 children,
                 updated_since,
                 updated_until,
                 text,
-            )?;
+            })?;
             let filter_empty = filter.is_empty();
             let tasks = service.list_snapshots(&filter)?;
 
@@ -222,35 +218,37 @@ pub fn run<S: TaskStore>(command: Command, service: &TaskService<S>) -> Result<(
     Ok(())
 }
 
-fn build_filter(
+struct CliFilterArgs {
     states: Vec<String>,
     labels: Vec<String>,
     assignees: Vec<String>,
-    state_kinds: Vec<String>,
+    include_state_kinds: Vec<String>,
     exclude_state_kinds: Vec<String>,
     parents: Vec<String>,
     children: Vec<String>,
     updated_since: Option<String>,
     updated_until: Option<String>,
     text: Option<String>,
-) -> Result<TaskFilter> {
-    let parent_ids = parse_task_ids(parents)?;
-    let child_ids = parse_task_ids(children)?;
-    let include_kinds = parse_state_kind_list(state_kinds)?;
-    let exclude_kinds = parse_state_kind_list(exclude_state_kinds)?;
-    let since = parse_optional_timestamp(updated_since, "updated-since")?;
-    let until = parse_optional_timestamp(updated_until, "updated-until")?;
+}
+
+fn build_filter(args: CliFilterArgs) -> Result<TaskFilter> {
+    let parent_ids = parse_task_ids(args.parents)?;
+    let child_ids = parse_task_ids(args.children)?;
+    let include_kinds = parse_state_kind_list(args.include_state_kinds)?;
+    let exclude_kinds = parse_state_kind_list(args.exclude_state_kinds)?;
+    let since = parse_optional_timestamp(args.updated_since, "updated-since")?;
+    let until = parse_optional_timestamp(args.updated_until, "updated-until")?;
 
     let mut builder = TaskFilterBuilder::new()
-        .states(states)
-        .labels(labels)
-        .assignees(assignees)
+        .states(args.states)
+        .labels(args.labels)
+        .assignees(args.assignees)
         .parents(parent_ids)
         .children(child_ids)
         .include_state_kinds(include_kinds)
         .exclude_state_kinds(exclude_kinds);
 
-    if let Some(text) = text {
+    if let Some(text) = args.text {
         builder = builder.text(text);
     }
 
@@ -624,57 +622,57 @@ mod tests {
     }
 
     #[test]
-    fn build_filter_trims_text_input() {
-        let filter = build_filter(
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            None,
-            None,
-            Some("  panic at the disco  ".into()),
-        )
-        .expect("filter");
+    fn build_filter_trims_text_input() -> Result<()> {
+        let filter = build_filter(CliFilterArgs {
+            states: Vec::new(),
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            include_state_kinds: Vec::new(),
+            exclude_state_kinds: Vec::new(),
+            parents: Vec::new(),
+            children: Vec::new(),
+            updated_since: None,
+            updated_until: None,
+            text: Some("  panic at the disco  ".into()),
+        })?;
         assert_eq!(filter.text.as_deref(), Some("panic at the disco"));
+        Ok(())
     }
 
     #[test]
-    fn build_filter_discards_blank_text() {
-        let filter = build_filter(
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            None,
-            None,
-            Some("   ".into()),
-        )
-        .expect("filter");
+    fn build_filter_discards_blank_text() -> Result<()> {
+        let filter = build_filter(CliFilterArgs {
+            states: Vec::new(),
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            include_state_kinds: Vec::new(),
+            exclude_state_kinds: Vec::new(),
+            parents: Vec::new(),
+            children: Vec::new(),
+            updated_since: None,
+            updated_until: None,
+            text: Some("   ".into()),
+        })?;
         assert!(filter.text.is_none());
+        Ok(())
     }
 
     #[test]
     fn build_filter_applies_state_kinds_and_parents() -> Result<()> {
         let parent = TaskId::new();
         let child = TaskId::new();
-        let filter = build_filter(
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            vec!["todo".into()],
-            vec!["done".into()],
-            vec![parent.to_string()],
-            vec![child.to_string()],
-            Some("2024-01-01T00:00:00Z".into()),
-            None,
-            None,
-        )?;
+        let filter = build_filter(CliFilterArgs {
+            states: Vec::new(),
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            include_state_kinds: vec!["todo".into()],
+            exclude_state_kinds: vec!["done".into()],
+            parents: vec![parent.to_string()],
+            children: vec![child.to_string()],
+            updated_since: Some("2024-01-01T00:00:00Z".into()),
+            updated_until: None,
+            text: None,
+        })?;
 
         assert!(filter.parents.contains(&parent));
         assert!(filter.children.contains(&child));
@@ -686,37 +684,39 @@ mod tests {
 
     #[test]
     fn build_filter_rejects_invalid_state_kind() {
-        let err = build_filter(
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            vec!["unknown".into()],
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            None,
-            None,
-            None,
-        )
-        .unwrap_err();
+        let Err(err) = build_filter(CliFilterArgs {
+            states: Vec::new(),
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            include_state_kinds: vec!["unknown".into()],
+            exclude_state_kinds: Vec::new(),
+            parents: Vec::new(),
+            children: Vec::new(),
+            updated_since: None,
+            updated_until: None,
+            text: None,
+        }) else {
+            panic!("filter should reject invalid state kind");
+        };
         assert!(err.to_string().contains("Invalid state kind"));
     }
 
     #[test]
     fn build_filter_rejects_invalid_timestamp() {
-        let err = build_filter(
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Some("not-a-timestamp".into()),
-            None,
-            None,
-        )
-        .unwrap_err();
+        let Err(err) = build_filter(CliFilterArgs {
+            states: Vec::new(),
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            include_state_kinds: Vec::new(),
+            exclude_state_kinds: Vec::new(),
+            parents: Vec::new(),
+            children: Vec::new(),
+            updated_since: Some("not-a-timestamp".into()),
+            updated_until: None,
+            text: None,
+        }) else {
+            panic!("filter should reject timestamp");
+        };
         assert!(err.to_string().contains("Invalid updated-since timestamp"));
     }
 

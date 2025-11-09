@@ -12,6 +12,7 @@ use rmcp::ServiceExt;
 mod commands;
 mod config;
 mod mcp;
+/// Shared task snapshot cache utilities.
 pub mod task_cache;
 /// Helpers for computing task diffs shared by CLI/TUI/MCP.
 pub mod task_patch;
