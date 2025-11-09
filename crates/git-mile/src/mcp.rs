@@ -1,6 +1,10 @@
 //! MCP server implementation for git-mile.
 
 use crate::config::WorkflowConfig;
+use crate::task_writer::{
+    CommentRequest, CreateTaskRequest, DescriptionPatch, SetDiff, StatePatch, TaskUpdate, TaskWriteError,
+    TaskWriter,
+};
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::TaskId;
 use git_mile_core::{OrderedEvents, StateKind, TaskFilter, TaskSnapshot};
@@ -261,7 +265,7 @@ fn compare_snapshots(a: &TaskSnapshot, b: &TaskSnapshot) -> Ordering {
 pub struct GitMileServer {
     tool_router: ToolRouter<Self>,
     store: Arc<Mutex<GitStore>>,
-    workflow: Arc<WorkflowConfig>,
+    workflow: WorkflowConfig,
 }
 
 #[tool_router]
@@ -271,7 +275,44 @@ impl GitMileServer {
         Self {
             tool_router: Self::tool_router(),
             store: Arc::new(Mutex::new(store)),
-            workflow: Arc::new(workflow),
+            workflow,
+        }
+    }
+
+    async fn load_snapshot(&self, task: TaskId) -> Result<TaskSnapshot, McpError> {
+        let store = self.store.lock().await;
+        let events = store
+            .load_events(task)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        drop(store);
+        Ok(TaskSnapshot::replay(&events))
+    }
+
+    fn parse_task_ids(ids: Vec<String>, context: &str) -> Result<Vec<TaskId>, McpError> {
+        ids.into_iter()
+            .map(|value| {
+                value
+                    .parse()
+                    .map_err(|e| McpError::invalid_params(format!("Invalid {context}: {e}"), None))
+            })
+            .collect()
+    }
+
+    fn map_task_write_error(err: TaskWriteError) -> McpError {
+        match err {
+            TaskWriteError::InvalidState(state) => {
+                McpError::invalid_params(format!("Invalid workflow state: {state}"), None)
+            }
+            TaskWriteError::MissingParent(parent) => {
+                McpError::invalid_params(format!("Parent task not found: {parent}"), None)
+            }
+            TaskWriteError::MissingTask(task) => {
+                McpError::invalid_params(format!("Task not found: {task}"), None)
+            }
+            TaskWriteError::Store(error) => McpError::internal_error(error.to_string(), None),
+            TaskWriteError::NotImplemented(name) => {
+                McpError::internal_error(format!("{name} not implemented"), None)
+            }
         }
     }
 
@@ -499,7 +540,7 @@ impl GitMileServer {
     ) -> Result<CallToolResult, McpError> {
         let CreateTaskParams {
             title,
-            mut state,
+            state,
             labels,
             assignees,
             description,
@@ -508,68 +549,29 @@ impl GitMileServer {
             actor_email,
         } = params;
 
-        if state.is_none() {
-            state = self.workflow.default_state().map(str::to_owned);
-        }
-
-        self.workflow
-            .validate_state(state.as_deref())
-            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-        let state_kind = self.workflow.resolve_state_kind(state.as_deref());
-
-        let store = self.store.lock().await;
-        let task = TaskId::new();
-        let actor = Actor {
-            name: actor_name,
-            email: actor_email,
-        };
-
-        let event = Event::new(
-            task,
-            &actor,
-            EventKind::TaskCreated {
+        let parents = Self::parse_task_ids(parents, "parent task ID")?;
+        let task = {
+            let store = self.store.lock().await;
+            let writer = TaskWriter::new(&*store, self.workflow.clone());
+            let request = CreateTaskRequest {
                 title,
+                state,
                 labels,
                 assignees,
                 description,
-                state,
-                state_kind,
-            },
-        );
+                parents,
+                actor: Actor {
+                    name: actor_name,
+                    email: actor_email,
+                },
+            };
 
-        store
-            .append_event(&event)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        // Create ChildLinked events for each parent
-        for parent_str in parents {
-            let parent: TaskId = parent_str
-                .parse()
-                .map_err(|e| McpError::invalid_params(format!("Invalid parent task ID: {e}"), None))?;
-
-            // Verify parent task exists
-            let _ = store
-                .load_events(parent)
-                .map_err(|e| McpError::invalid_params(format!("Parent task not found: {e}"), None))?;
-
-            let child_event = Event::new(task, &actor, EventKind::ChildLinked { parent, child: task });
-            store
-                .append_event(&child_event)
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-            let parent_event = Event::new(parent, &actor, EventKind::ChildLinked { parent, child: task });
-            store
-                .append_event(&parent_event)
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        }
-
-        // Load the newly created task to return its snapshot
-        let events = store
-            .load_events(task)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let snapshot = TaskSnapshot::replay(&events);
-
-        drop(store);
+            writer
+                .create_task(request)
+                .map_err(Self::map_task_write_error)?
+                .task
+        };
+        let snapshot = self.load_snapshot(task).await?;
 
         let json_str = serde_json::to_string_pretty(&snapshot)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -585,171 +587,74 @@ impl GitMileServer {
         &self,
         Parameters(params): Parameters<UpdateTaskParams>,
     ) -> Result<CallToolResult, McpError> {
-        let store = self.store.lock().await;
+        let UpdateTaskParams {
+            task_id,
+            title,
+            description,
+            state,
+            clear_state,
+            add_labels,
+            remove_labels,
+            add_assignees,
+            remove_assignees,
+            link_parents,
+            unlink_parents,
+            actor_name,
+            actor_email,
+        } = params;
 
-        // Parse task ID
-        let task: TaskId = params
-            .task_id
+        let task: TaskId = task_id
             .parse()
             .map_err(|e| McpError::invalid_params(format!("Invalid task ID: {e}"), None))?;
-
-        // Verify task exists
-        let _events = store
-            .load_events(task)
-            .map_err(|e| McpError::invalid_params(format!("Task not found: {e}"), None))?;
-
-        let actor = Actor {
-            name: params.actor_name,
-            email: params.actor_email,
+        let mut update = TaskUpdate::default();
+        update.title = title;
+        update.description = description.map(|body| DescriptionPatch::Set { description: body });
+        update.state = if let Some(value) = state {
+            Some(StatePatch::Set { state: value })
+        } else if clear_state {
+            Some(StatePatch::Clear)
+        } else {
+            None
+        };
+        update.labels = SetDiff {
+            added: add_labels,
+            removed: remove_labels,
+        };
+        update.assignees = SetDiff {
+            added: add_assignees,
+            removed: remove_assignees,
         };
 
-        // Process updates in order: title, description, state, labels, assignees
+        let actor = Actor {
+            name: actor_name,
+            email: actor_email,
+        };
 
-        // Update title
-        if let Some(title) = params.title {
-            let event = Event::new(task, &actor, EventKind::TaskTitleSet { title });
-            store
-                .append_event(&event)
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let link_parent_ids = Self::parse_task_ids(link_parents, "parent task ID")?;
+        let unlink_parent_ids = Self::parse_task_ids(unlink_parents, "parent task ID")?;
+
+        {
+            let store = self.store.lock().await;
+            let writer = TaskWriter::new(&*store, self.workflow.clone());
+
+            writer
+                .update_task(task, update, &actor)
+                .map_err(Self::map_task_write_error)?;
+
+            if !link_parent_ids.is_empty() {
+                writer
+                    .link_parents(task, &link_parent_ids, &actor)
+                    .map_err(Self::map_task_write_error)?;
+            }
+
+            if !unlink_parent_ids.is_empty() {
+                writer
+                    .unlink_parents(task, &unlink_parent_ids, &actor)
+                    .map_err(Self::map_task_write_error)?;
+            }
         }
 
-        // Update description
-        if let Some(description) = params.description {
-            let event = Event::new(
-                task,
-                &actor,
-                EventKind::TaskDescriptionSet {
-                    description: Some(description),
-                },
-            );
-            store
-                .append_event(&event)
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        }
-
-        // Clear state if requested
-        if params.clear_state {
-            let event = Event::new(task, &actor, EventKind::TaskStateCleared);
-            store
-                .append_event(&event)
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        }
-
-        // Set state
-        if let Some(state) = params.state {
-            self.workflow
-                .validate_state(Some(&state))
-                .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-            let state_kind = self.workflow.resolve_state_kind(Some(&state));
-            let event = Event::new(task, &actor, EventKind::TaskStateSet { state, state_kind });
-            store
-                .append_event(&event)
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        }
-
-        // Add labels
-        if !params.add_labels.is_empty() {
-            let event = Event::new(
-                task,
-                &actor,
-                EventKind::LabelsAdded {
-                    labels: params.add_labels,
-                },
-            );
-            store
-                .append_event(&event)
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        }
-
-        // Remove labels
-        if !params.remove_labels.is_empty() {
-            let event = Event::new(
-                task,
-                &actor,
-                EventKind::LabelsRemoved {
-                    labels: params.remove_labels,
-                },
-            );
-            store
-                .append_event(&event)
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        }
-
-        // Add assignees
-        if !params.add_assignees.is_empty() {
-            let event = Event::new(
-                task,
-                &actor,
-                EventKind::AssigneesAdded {
-                    assignees: params.add_assignees,
-                },
-            );
-            store
-                .append_event(&event)
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        }
-
-        // Remove assignees
-        if !params.remove_assignees.is_empty() {
-            let event = Event::new(
-                task,
-                &actor,
-                EventKind::AssigneesRemoved {
-                    assignees: params.remove_assignees,
-                },
-            );
-            store
-                .append_event(&event)
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        }
-
-        // Link parents
-        for parent_str in params.link_parents {
-            let parent: TaskId = parent_str
-                .parse()
-                .map_err(|e| McpError::invalid_params(format!("Invalid parent task ID: {e}"), None))?;
-
-            // Verify parent task exists
-            let _ = store
-                .load_events(parent)
-                .map_err(|e| McpError::invalid_params(format!("Parent task not found: {e}"), None))?;
-
-            let child_event = Event::new(task, &actor, EventKind::ChildLinked { parent, child: task });
-            store
-                .append_event(&child_event)
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-            let parent_event = Event::new(parent, &actor, EventKind::ChildLinked { parent, child: task });
-            store
-                .append_event(&parent_event)
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        }
-
-        // Unlink parents
-        for parent_str in params.unlink_parents {
-            let parent: TaskId = parent_str
-                .parse()
-                .map_err(|e| McpError::invalid_params(format!("Invalid parent task ID: {e}"), None))?;
-
-            let child_event = Event::new(task, &actor, EventKind::ChildUnlinked { parent, child: task });
-            store
-                .append_event(&child_event)
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-            let parent_event = Event::new(parent, &actor, EventKind::ChildUnlinked { parent, child: task });
-            store
-                .append_event(&parent_event)
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        }
-
-        // Load the updated task to return its snapshot
-        let events = store
-            .load_events(task)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let snapshot = TaskSnapshot::replay(&events);
-
-        drop(store);
-
+        let snapshot = self.load_snapshot(task).await?;
         let json_str = serde_json::to_string_pretty(&snapshot)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
@@ -834,52 +739,46 @@ impl GitMileServer {
         &self,
         Parameters(params): Parameters<AddCommentParams>,
     ) -> Result<CallToolResult, McpError> {
-        use git_mile_core::id::EventId;
+        let AddCommentParams {
+            task_id,
+            body_md,
+            actor_name,
+            actor_email,
+        } = params;
 
-        let store = self.store.lock().await;
-
-        // Parse task ID
-        let task: TaskId = params
-            .task_id
+        let task: TaskId = task_id
             .parse()
             .map_err(|e| McpError::invalid_params(format!("Invalid task ID: {e}"), None))?;
 
-        // Verify task exists
-        let _events = store
-            .load_events(task)
-            .map_err(|e| McpError::invalid_params(format!("Task not found: {e}"), None))?;
+        let comment_id = {
+            let store = self.store.lock().await;
+            let writer = TaskWriter::new(&*store, self.workflow.clone());
+            let result = writer
+                .add_comment(
+                    task,
+                    CommentRequest {
+                        body_md,
+                        actor: Actor {
+                            name: actor_name,
+                            email: actor_email,
+                        },
+                    },
+                )
+                .map_err(Self::map_task_write_error)?;
 
-        let actor = Actor {
-            name: params.actor_name,
-            email: params.actor_email,
-        };
+            result
+                .comment_id
+                .map(|id| id.to_string())
+                .ok_or_else(|| McpError::internal_error("TaskWriter returned no comment ID", None))
+        }?;
 
-        let comment_id = EventId::new();
-
-        // Create CommentAdded event
-        let event = Event::new(
-            task,
-            &actor,
-            EventKind::CommentAdded {
-                comment_id,
-                body_md: params.body_md,
-            },
-        );
-
-        store
-            .append_event(&event)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        drop(store);
-
-        // Return success with the new comment info
-        let result = serde_json::json!({
+        let response = serde_json::json!({
             "task_id": task.to_string(),
-            "comment_id": comment_id.to_string(),
+            "comment_id": comment_id,
             "status": "added"
         });
 
-        let json_str = serde_json::to_string_pretty(&result)
+        let json_str = serde_json::to_string_pretty(&response)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         Ok(CallToolResult::success(vec![Content::text(json_str)]))

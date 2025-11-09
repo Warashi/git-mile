@@ -258,7 +258,11 @@ where
             oids.push(oid);
         }
 
-        Ok(TaskWriteResult { task, events: oids })
+        Ok(TaskWriteResult {
+            task,
+            events: oids,
+            comment_id: None,
+        })
     }
 
     /// Only mutate the workflow state of a task.
@@ -288,19 +292,14 @@ where
         let CommentRequest { body_md, actor } = comment;
         self.ensure_task_exists(task)?;
 
-        let event = Event::new(
-            task,
-            &actor,
-            EventKind::CommentAdded {
-                comment_id: EventId::new(),
-                body_md,
-            },
-        );
+        let comment_id = EventId::new();
+        let event = Event::new(task, &actor, EventKind::CommentAdded { comment_id, body_md });
         let oid = self.store.append_event(&event).map_err(Self::store_error)?;
 
         Ok(TaskWriteResult {
             task,
             events: vec![oid],
+            comment_id: Some(comment_id),
         })
     }
 
@@ -311,8 +310,46 @@ where
         parents: &[TaskId],
         actor: &Actor,
     ) -> Result<TaskWriteResult, TaskWriteError> {
-        let _ = (task, parents, actor);
-        Err(TaskWriteError::NotImplemented("link_parents"))
+        self.ensure_task_exists(task)?;
+
+        let mut events = Vec::new();
+        for parent in parents {
+            match self.ensure_task_exists(*parent) {
+                Ok(()) => {}
+                Err(TaskWriteError::MissingTask(_)) => return Err(TaskWriteError::MissingParent(*parent)),
+                Err(err) => return Err(err),
+            }
+
+            let child_event = Event::new(
+                task,
+                actor,
+                EventKind::ChildLinked {
+                    parent: *parent,
+                    child: task,
+                },
+            );
+            events.push(self.store.append_event(&child_event).map_err(Self::store_error)?);
+
+            let parent_event = Event::new(
+                *parent,
+                actor,
+                EventKind::ChildLinked {
+                    parent: *parent,
+                    child: task,
+                },
+            );
+            events.push(
+                self.store
+                    .append_event(&parent_event)
+                    .map_err(Self::store_error)?,
+            );
+        }
+
+        Ok(TaskWriteResult {
+            task,
+            events,
+            comment_id: None,
+        })
     }
 
     /// Remove existing parent links from the task.
@@ -322,8 +359,40 @@ where
         parents: &[TaskId],
         actor: &Actor,
     ) -> Result<TaskWriteResult, TaskWriteError> {
-        let _ = (task, parents, actor);
-        Err(TaskWriteError::NotImplemented("unlink_parents"))
+        self.ensure_task_exists(task)?;
+
+        let mut events = Vec::new();
+        for parent in parents {
+            let child_event = Event::new(
+                task,
+                actor,
+                EventKind::ChildUnlinked {
+                    parent: *parent,
+                    child: task,
+                },
+            );
+            events.push(self.store.append_event(&child_event).map_err(Self::store_error)?);
+
+            let parent_event = Event::new(
+                *parent,
+                actor,
+                EventKind::ChildUnlinked {
+                    parent: *parent,
+                    child: task,
+                },
+            );
+            events.push(
+                self.store
+                    .append_event(&parent_event)
+                    .map_err(Self::store_error)?,
+            );
+        }
+
+        Ok(TaskWriteResult {
+            task,
+            events,
+            comment_id: None,
+        })
     }
 }
 
@@ -461,6 +530,8 @@ pub struct TaskWriteResult {
     pub task: TaskId,
     /// Event object IDs created during the operation.
     pub events: Vec<Oid>,
+    /// Comment identifier (when applicable).
+    pub comment_id: Option<EventId>,
 }
 
 /// Parent link metadata emitted during task creation/linking.
@@ -505,5 +576,24 @@ impl TaskStore for GitStore {
 
     fn list_tasks(&self) -> Result<Vec<TaskId>, Self::Error> {
         GitStore::list_tasks(self)
+    }
+}
+
+impl<'a, S> TaskStore for &'a S
+where
+    S: TaskStore + ?Sized,
+{
+    type Error = S::Error;
+
+    fn append_event(&self, event: &Event) -> Result<Oid, Self::Error> {
+        (*self).append_event(event)
+    }
+
+    fn load_events(&self, task: TaskId) -> Result<Vec<Event>, Self::Error> {
+        (*self).load_events(task)
+    }
+
+    fn list_tasks(&self) -> Result<Vec<TaskId>, Self::Error> {
+        (*self).list_tasks()
     }
 }
