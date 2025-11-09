@@ -5,7 +5,7 @@ use super::task_cache::TaskView;
 use super::ui::*;
 use super::*;
 use crate::config::{StateKind, WorkflowState};
-use crate::task_writer::{TaskStore, diff_sets};
+use crate::task_writer::TaskStore;
 use anyhow::{Result, anyhow};
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::{EventId, TaskId};
@@ -14,7 +14,7 @@ use git2::Oid;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::rc::Rc;
 use std::result::Result as StdResult;
@@ -268,17 +268,6 @@ fn ui_with_clipboard(app: App<MockStore>, clipboard: Box<dyn ClipboardSink>) -> 
 fn osc52_sequence_encodes_text() {
     let seq = osc52_sequence("Task-ID");
     assert_eq!(seq, "\x1b]52;c;VGFzay1JRA==\x07");
-}
-
-#[test]
-fn diff_sets_detects_added_and_removed_items() {
-    let current = BTreeSet::from([String::from("a"), String::from("b")]);
-    let desired = BTreeSet::from([String::from("b"), String::from("c")]);
-
-    let diff = diff_sets(&current, &desired);
-
-    assert_eq!(diff.added, vec![String::from("c")]);
-    assert_eq!(diff.removed, vec![String::from("a")]);
 }
 
 #[test]

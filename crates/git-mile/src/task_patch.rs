@@ -2,7 +2,82 @@ use std::collections::BTreeSet;
 
 use git_mile_core::TaskSnapshot;
 
-use crate::task_writer::{DescriptionPatch, SetDiff, StatePatch, TaskUpdate, diff_sets};
+/// Difference between two sets.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SetDiff<T> {
+    /// Entries present in the desired set but missing from the current set.
+    pub added: Vec<T>,
+    /// Entries present in the current set but removed from the desired set.
+    pub removed: Vec<T>,
+}
+
+impl<T> SetDiff<T> {
+    /// Returns true when both added/removed are empty.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty()
+    }
+}
+
+/// Compute differences between two sets.
+#[must_use]
+pub fn diff_sets<T: Ord + Clone>(current: &BTreeSet<T>, desired: &BTreeSet<T>) -> SetDiff<T> {
+    SetDiff {
+        added: desired.difference(current).cloned().collect(),
+        removed: current.difference(desired).cloned().collect(),
+    }
+}
+
+/// Patch for workflow state.
+#[derive(Debug, Clone)]
+pub enum StatePatch {
+    /// Set the state to the provided value.
+    Set {
+        /// Workflow state value.
+        state: String,
+    },
+    /// Clear the state entirely.
+    Clear,
+}
+
+/// Patch for the description body.
+#[derive(Debug, Clone)]
+pub enum DescriptionPatch {
+    /// Overwrite with a new Markdown string.
+    Set {
+        /// Markdown description body.
+        description: String,
+    },
+    /// Clear the description.
+    Clear,
+}
+
+/// Aggregate task update payload shared by frontends.
+#[derive(Debug, Clone, Default)]
+pub struct TaskUpdate {
+    /// Overwrite the task title.
+    pub title: Option<String>,
+    /// Patch applied to the workflow state.
+    pub state: Option<StatePatch>,
+    /// Patch applied to the description.
+    pub description: Option<DescriptionPatch>,
+    /// Label diffs.
+    pub labels: SetDiff<String>,
+    /// Assignee diffs.
+    pub assignees: SetDiff<String>,
+}
+
+impl TaskUpdate {
+    /// Returns true when the update would not emit any events.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.title.is_none()
+            && self.state.is_none()
+            && self.description.is_none()
+            && self.labels.is_empty()
+            && self.assignees.is_empty()
+    }
+}
 
 /// Normalized task edit fields used to compute diffs.
 #[derive(Debug)]
@@ -218,5 +293,15 @@ mod tests {
         assert_eq!(patch.labels.added, vec!["b"]);
         assert_eq!(patch.assignees.removed, vec!["alice"]);
         assert_eq!(patch.assignees.added, vec!["bob"]);
+    }
+
+    #[test]
+    fn diff_sets_detects_added_and_removed_items() {
+        let current = BTreeSet::from(["a".to_string(), "b".to_string()]);
+        let desired = BTreeSet::from(["b".to_string(), "c".to_string()]);
+
+        let diff = diff_sets(&current, &desired);
+        assert_eq!(diff.added, vec!["c"]);
+        assert_eq!(diff.removed, vec!["a"]);
     }
 }

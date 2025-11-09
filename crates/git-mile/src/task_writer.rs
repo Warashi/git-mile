@@ -5,10 +5,11 @@ use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::{EventId, TaskId};
 use git_mile_store_git::GitStore;
 use git2::Oid;
-use std::collections::BTreeSet;
 use tokio::sync::MutexGuard;
 
 use crate::config::WorkflowConfig;
+
+pub use crate::task_patch::{DescriptionPatch, SetDiff, StatePatch, TaskUpdate, diff_sets};
 
 /// Minimal storage abstraction required by [`TaskWriter`].
 pub trait TaskStore {
@@ -449,83 +450,6 @@ pub struct CommentRequest {
     pub body_md: String,
     /// Actor who authored the comment.
     pub actor: Actor,
-}
-
-/// Aggregate task update payload.
-#[derive(Debug, Clone, Default)]
-pub struct TaskUpdate {
-    /// Overwrite the task title.
-    pub title: Option<String>,
-    /// Patch applied to the workflow state.
-    pub state: Option<StatePatch>,
-    /// Patch applied to the description.
-    pub description: Option<DescriptionPatch>,
-    /// Label diffs.
-    pub labels: SetDiff<String>,
-    /// Assignee diffs.
-    pub assignees: SetDiff<String>,
-}
-
-impl TaskUpdate {
-    /// Returns true when the update would not emit any events.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.title.is_none()
-            && self.state.is_none()
-            && self.description.is_none()
-            && self.labels.is_empty()
-            && self.assignees.is_empty()
-    }
-}
-
-/// Patch for workflow state.
-#[derive(Debug, Clone)]
-pub enum StatePatch {
-    /// Set the state to the provided value.
-    Set {
-        /// Workflow state value.
-        state: String,
-    },
-    /// Clear the state entirely.
-    Clear,
-}
-
-/// Patch for the description body.
-#[derive(Debug, Clone)]
-pub enum DescriptionPatch {
-    /// Overwrite with a new Markdown string.
-    Set {
-        /// Markdown description body.
-        description: String,
-    },
-    /// Clear the description.
-    Clear,
-}
-
-/// Difference between two sets.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct SetDiff<T> {
-    /// Entries present in the desired set but missing from the current set.
-    pub added: Vec<T>,
-    /// Entries present in the current set but removed from the desired set.
-    pub removed: Vec<T>,
-}
-
-impl<T> SetDiff<T> {
-    /// Returns true when both added/removed are empty.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.added.is_empty() && self.removed.is_empty()
-    }
-}
-
-/// Compute differences between two sets.
-#[must_use]
-pub fn diff_sets<T: Ord + Clone>(current: &BTreeSet<T>, desired: &BTreeSet<T>) -> SetDiff<T> {
-    SetDiff {
-        added: desired.difference(current).cloned().collect(),
-        removed: current.difference(desired).cloned().collect(),
-    }
 }
 
 /// Result returned when a task is created.
