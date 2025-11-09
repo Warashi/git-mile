@@ -8,8 +8,7 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use git_mile_core::event::{Actor, Event};
-use git_mile_core::id::TaskId;
+use git_mile_core::event::Actor;
 use git_mile_store_git::GitStore;
 use git2::Config;
 use ratatui::{Terminal, backend::CrosstermBackend};
@@ -23,7 +22,7 @@ mod editor;
 mod terminal;
 mod ui;
 
-use self::app::{App, TaskStore};
+use self::app::App;
 use self::ui::{Ui, handle_ui_action};
 
 /// Launch the interactive TUI.
@@ -103,20 +102,6 @@ fn resolve_actor() -> Actor {
         })
         .unwrap_or_else(|_| "git-mile@example.invalid".to_owned());
     Actor { name, email }
-}
-
-impl TaskStore for GitStore {
-    fn list_tasks(&self) -> Result<Vec<TaskId>> {
-        Self::list_tasks(self)
-    }
-
-    fn load_events(&self, task: TaskId) -> Result<Vec<Event>> {
-        Self::load_events(self, task)
-    }
-
-    fn append_event(&self, event: &Event) -> Result<()> {
-        Self::append_event(self, event).map(|_| ())
-    }
 }
 
 #[cfg(test)]

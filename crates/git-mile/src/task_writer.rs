@@ -5,6 +5,7 @@ use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::{EventId, TaskId};
 use git_mile_store_git::GitStore;
 use git2::Oid;
+use std::collections::BTreeSet;
 
 use crate::config::WorkflowConfig;
 
@@ -147,9 +148,117 @@ where
     }
 
     /// Apply a patch to an existing task.
-    pub fn update_task(&self, task: TaskId, patch: TaskUpdate) -> Result<TaskWriteResult, TaskWriteError> {
-        let _ = (task, patch);
-        Err(TaskWriteError::NotImplemented("update_task"))
+    pub fn update_task(
+        &self,
+        task: TaskId,
+        patch: TaskUpdate,
+        actor: &Actor,
+    ) -> Result<TaskWriteResult, TaskWriteError> {
+        self.ensure_task_exists(task)?;
+
+        let TaskUpdate {
+            title,
+            state,
+            description,
+            labels,
+            assignees,
+        } = patch;
+
+        let mut events = Vec::new();
+
+        if let Some(title) = title {
+            events.push(Event::new(task, actor, EventKind::TaskTitleSet { title }));
+        }
+
+        if let Some(state_patch) = state {
+            match state_patch {
+                StatePatch::Set { state } => {
+                    self.validate_state(Some(&state))?;
+                    let state_kind = self.workflow.resolve_state_kind(Some(&state));
+                    events.push(Event::new(
+                        task,
+                        actor,
+                        EventKind::TaskStateSet { state, state_kind },
+                    ));
+                }
+                StatePatch::Clear => {
+                    events.push(Event::new(task, actor, EventKind::TaskStateCleared));
+                }
+            }
+        }
+
+        if let Some(description_patch) = description {
+            match description_patch {
+                DescriptionPatch::Set { description } => {
+                    events.push(Event::new(
+                        task,
+                        actor,
+                        EventKind::TaskDescriptionSet {
+                            description: Some(description),
+                        },
+                    ));
+                }
+                DescriptionPatch::Clear => {
+                    events.push(Event::new(
+                        task,
+                        actor,
+                        EventKind::TaskDescriptionSet { description: None },
+                    ));
+                }
+            }
+        }
+
+        let SetDiff {
+            added: label_added,
+            removed: label_removed,
+        } = labels;
+        if !label_added.is_empty() {
+            events.push(Event::new(
+                task,
+                actor,
+                EventKind::LabelsAdded { labels: label_added },
+            ));
+        }
+        if !label_removed.is_empty() {
+            events.push(Event::new(
+                task,
+                actor,
+                EventKind::LabelsRemoved {
+                    labels: label_removed,
+                },
+            ));
+        }
+
+        let SetDiff {
+            added: assignees_added,
+            removed: assignees_removed,
+        } = assignees;
+        if !assignees_added.is_empty() {
+            events.push(Event::new(
+                task,
+                actor,
+                EventKind::AssigneesAdded {
+                    assignees: assignees_added,
+                },
+            ));
+        }
+        if !assignees_removed.is_empty() {
+            events.push(Event::new(
+                task,
+                actor,
+                EventKind::AssigneesRemoved {
+                    assignees: assignees_removed,
+                },
+            ));
+        }
+
+        let mut oids = Vec::new();
+        for event in events {
+            let oid = self.store.append_event(&event).map_err(Self::store_error)?;
+            oids.push(oid);
+        }
+
+        Ok(TaskWriteResult { task, events: oids })
     }
 
     /// Only mutate the workflow state of a task.
@@ -159,8 +268,15 @@ where
         state: Option<String>,
         actor: &Actor,
     ) -> Result<TaskWriteResult, TaskWriteError> {
-        let _ = (task, state, actor);
-        Err(TaskWriteError::NotImplemented("set_state"))
+        let state_patch = match state {
+            Some(value) => Some(StatePatch::Set { state: value }),
+            None => Some(StatePatch::Clear),
+        };
+        let patch = TaskUpdate {
+            state: state_patch,
+            ..TaskUpdate::default()
+        };
+        self.update_task(task, patch, actor)
     }
 
     /// Append a Markdown comment to the task.
@@ -244,26 +360,87 @@ pub struct CommentRequest {
 pub struct TaskUpdate {
     /// Overwrite the task title.
     pub title: Option<String>,
-    /// Overwrite the description body.
-    pub description: Option<String>,
-    /// Set the workflow state to this value.
-    pub state: Option<String>,
-    /// When true, clears the workflow state.
-    pub clear_state: bool,
-    /// Labels to add.
-    pub add_labels: Vec<String>,
-    /// Labels to remove.
-    pub remove_labels: Vec<String>,
-    /// Assignees to add.
-    pub add_assignees: Vec<String>,
-    /// Assignees to remove.
-    pub remove_assignees: Vec<String>,
-    /// Parent tasks to link.
-    pub link_parents: Vec<TaskId>,
-    /// Parent tasks to unlink.
-    pub unlink_parents: Vec<TaskId>,
-    /// Actor who authored this update.
-    pub actor: Actor,
+    /// Patch applied to the workflow state.
+    pub state: Option<StatePatch>,
+    /// Patch applied to the description.
+    pub description: Option<DescriptionPatch>,
+    /// Label diffs.
+    pub labels: SetDiff<String>,
+    /// Assignee diffs.
+    pub assignees: SetDiff<String>,
+}
+
+impl Default for TaskUpdate {
+    fn default() -> Self {
+        Self {
+            title: None,
+            state: None,
+            description: None,
+            labels: SetDiff::default(),
+            assignees: SetDiff::default(),
+        }
+    }
+}
+
+impl TaskUpdate {
+    /// Returns true when the update would not emit any events.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.title.is_none()
+            && self.state.is_none()
+            && self.description.is_none()
+            && self.labels.is_empty()
+            && self.assignees.is_empty()
+    }
+}
+
+/// Patch for workflow state.
+#[derive(Debug, Clone)]
+pub enum StatePatch {
+    /// Set the state to the provided value.
+    Set {
+        /// Workflow state value.
+        state: String,
+    },
+    /// Clear the state entirely.
+    Clear,
+}
+
+/// Patch for the description body.
+#[derive(Debug, Clone)]
+pub enum DescriptionPatch {
+    /// Overwrite with a new Markdown string.
+    Set {
+        /// Markdown description body.
+        description: String,
+    },
+    /// Clear the description.
+    Clear,
+}
+
+/// Difference between two sets.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SetDiff<T> {
+    /// Entries present in the desired set but missing from the current set.
+    pub added: Vec<T>,
+    /// Entries present in the current set but removed from the desired set.
+    pub removed: Vec<T>,
+}
+
+impl<T> SetDiff<T> {
+    /// Returns true when both added/removed are empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty()
+    }
+}
+
+/// Compute differences between two sets.
+pub fn diff_sets<T: Ord + Clone>(current: &BTreeSet<T>, desired: &BTreeSet<T>) -> SetDiff<T> {
+    SetDiff {
+        added: desired.difference(current).cloned().collect(),
+        removed: current.difference(desired).cloned().collect(),
+    }
 }
 
 /// Result returned when a task is created.

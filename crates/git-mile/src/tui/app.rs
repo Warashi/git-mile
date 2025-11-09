@@ -2,23 +2,22 @@ use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::thread;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Error, Result};
 use git_mile_core::event::{Actor, Event, EventKind};
-use git_mile_core::id::{EventId, TaskId};
+use git_mile_core::id::TaskId;
 use git_mile_core::{OrderedEvents, TaskFilter, TaskSnapshot};
 use time::OffsetDateTime;
 
 use crate::config::WorkflowConfig;
+use crate::task_writer::{
+    CommentRequest, CreateTaskRequest, DescriptionPatch, SetDiff, StatePatch, TaskStore as CoreTaskStore,
+    TaskUpdate, TaskWriter, diff_sets,
+};
 
-/// Storage abstraction so the TUI logic can be unit-tested.
-pub(super) trait TaskStore {
-    /// List all known task identifiers.
-    fn list_tasks(&self) -> Result<Vec<TaskId>>;
-    /// Load every event for the given task.
-    fn load_events(&self, task: TaskId) -> Result<Vec<Event>>;
-    /// Append a single event to the backing store.
-    fn append_event(&self, event: &Event) -> Result<()>;
-}
+/// Storage abstraction marker so the TUI logic can be unit-tested.
+pub(super) trait TaskStore: CoreTaskStore<Error = anyhow::Error> {}
+
+impl<T> TaskStore for T where T: CoreTaskStore<Error = anyhow::Error> {}
 
 /// Actor-written comment on a task.
 #[derive(Debug, Clone)]
@@ -74,7 +73,7 @@ impl TaskView {
 
 /// Application state shared between the TUI event loop and rendering.
 pub(super) struct App<S: TaskStore> {
-    pub(super) store: S,
+    writer: TaskWriter<S>,
     workflow: WorkflowConfig,
     /// Cached task list sorted by最終更新順。フィルタ適用前の全体集合。
     pub tasks: Vec<TaskView>,
@@ -92,8 +91,9 @@ pub(super) struct App<S: TaskStore> {
 impl<S: TaskStore> App<S> {
     /// Create an application instance and eagerly load tasks.
     pub(super) fn new(store: S, workflow: WorkflowConfig) -> Result<Self> {
+        let writer = TaskWriter::new(store, workflow.clone());
         let mut app = Self {
-            store,
+            writer,
             workflow,
             tasks: Vec::new(),
             visible: Vec::new(),
@@ -110,6 +110,10 @@ impl<S: TaskStore> App<S> {
 
     pub(super) const fn workflow(&self) -> &WorkflowConfig {
         &self.workflow
+    }
+
+    pub(super) const fn store(&self) -> &S {
+        self.writer.store()
     }
 
     pub(super) const fn filter(&self) -> &TaskFilter {
@@ -211,8 +215,9 @@ impl<S: TaskStore> App<S> {
         let keep_id = preferred.or_else(|| self.selected_task().map(|view| view.snapshot.id));
 
         let mut views = Vec::new();
-        for tid in self.store.list_tasks()? {
-            let events = self.store.load_events(tid)?;
+        let store = self.writer.store();
+        for tid in store.list_tasks().map_err(Error::from)? {
+            let events = store.load_events(tid).map_err(Error::from)?;
             views.push(TaskView::from_events(&events));
         }
         views.sort_by(|a, b| match (a.last_updated, b.last_updated) {
@@ -327,51 +332,36 @@ impl<S: TaskStore> App<S> {
 
     /// Append a comment to the given task and refresh the view.
     pub(super) fn add_comment(&mut self, task: TaskId, body: String, actor: &Actor) -> Result<()> {
-        let event = Event::new(
-            task,
-            actor,
-            EventKind::CommentAdded {
-                comment_id: EventId::new(),
-                body_md: body,
-            },
-        );
-        self.store.append_event(&event)?;
+        self.writer
+            .add_comment(
+                task,
+                CommentRequest {
+                    body_md: body,
+                    actor: actor.clone(),
+                },
+            )
+            .context("コメントの作成に失敗しました")?;
         self.refresh_tasks_with(Some(task))
     }
 
     /// Create a fresh task and refresh the view, returning the new identifier.
-    pub(super) fn create_task(&mut self, mut data: NewTaskData, actor: &Actor) -> Result<TaskId> {
-        if data.state.is_none() {
-            data.state = self.workflow.default_state().map(str::to_owned);
-        }
-        self.workflow.validate_state(data.state.as_deref())?;
-        let state_kind = self.workflow.resolve_state_kind(data.state.as_deref());
-
-        let task = TaskId::new();
-        let event = Event::new(
-            task,
-            actor,
-            EventKind::TaskCreated {
+    pub(super) fn create_task(&mut self, data: NewTaskData, actor: &Actor) -> Result<TaskId> {
+        let parents = data.parent.into_iter().collect();
+        let result = self
+            .writer
+            .create_task(CreateTaskRequest {
                 title: data.title,
+                state: data.state,
                 labels: data.labels,
                 assignees: data.assignees,
                 description: data.description,
-                state: data.state,
-                state_kind,
-            },
-        );
-        self.store.append_event(&event)?;
+                parents,
+                actor: actor.clone(),
+            })
+            .context("タスクの作成に失敗しました")?;
 
-        // Create ChildLinked event if parent is specified
-        if let Some(parent) = data.parent {
-            let link_event = Event::new(task, actor, EventKind::ChildLinked { parent, child: task });
-            self.store.append_event(&link_event)?;
-            let parent_event = Event::new(parent, actor, EventKind::ChildLinked { parent, child: task });
-            self.store.append_event(&parent_event)?;
-        }
-
-        self.refresh_tasks_with(Some(task))?;
-        Ok(task)
+        self.refresh_tasks_with(Some(result.task))?;
+        Ok(result.task)
     }
 
     /// Update an existing task and refresh the view. Returns `true` when any changes were applied.
@@ -380,11 +370,13 @@ impl<S: TaskStore> App<S> {
         let snapshot = if let Some(view) = self.tasks.iter().find(|view| view.snapshot.id == task) {
             &view.snapshot
         } else {
-            let snapshot = self
-                .store
+            let events = self
+                .writer
+                .store()
                 .load_events(task)
-                .map(|events| TaskSnapshot::replay(&events))
+                .map_err(Error::from)
                 .context("タスクの読み込みに失敗しました")?;
+            let snapshot = TaskSnapshot::replay(&events);
             let snapshot_ref: &TaskSnapshot = loaded_snapshot.insert(snapshot);
             snapshot_ref
         };
@@ -393,15 +385,11 @@ impl<S: TaskStore> App<S> {
         if patch.is_empty() {
             return Ok(false);
         }
-        if let Some(StatePatch::Set { state }) = &patch.state {
-            self.workflow.validate_state(Some(state))?;
-        }
+        let update = patch.into_task_update();
 
-        for event in patch.into_events(task, actor, &self.workflow) {
-            self.store
-                .append_event(&event)
-                .context("タスク更新イベントの書き込みに失敗しました")?;
-        }
+        self.writer
+            .update_task(task, update, actor)
+            .context("タスク更新イベントの書き込みに失敗しました")?;
         self.refresh_tasks_with(Some(task))?;
         Ok(true)
     }
@@ -419,11 +407,13 @@ impl<S: TaskStore> App<S> {
         let snapshot = if let Some(view) = self.tasks.iter().find(|view| view.snapshot.id == task) {
             &view.snapshot
         } else {
-            let snapshot = self
-                .store
+            let events = self
+                .writer
+                .store()
                 .load_events(task)
-                .map(|events| TaskSnapshot::replay(&events))
+                .map_err(Error::from)
                 .context("タスクの読み込みに失敗しました")?;
+            let snapshot = TaskSnapshot::replay(&events);
             let snapshot_ref: &TaskSnapshot = loaded_snapshot.insert(snapshot);
             snapshot_ref
         };
@@ -432,22 +422,8 @@ impl<S: TaskStore> App<S> {
             return Ok(false);
         }
 
-        let event = match state {
-            Some(state_value) => {
-                let state_kind = self.workflow.resolve_state_kind(Some(&state_value));
-                Event::new(
-                    task,
-                    actor,
-                    EventKind::TaskStateSet {
-                        state: state_value,
-                        state_kind,
-                    },
-                )
-            }
-            None => Event::new(task, actor, EventKind::TaskStateCleared),
-        };
-        self.store
-            .append_event(&event)
+        self.writer
+            .set_state(task, state, actor)
             .context("タスクのステータス更新イベントの書き込みに失敗しました")?;
         self.refresh_tasks_with(Some(task))?;
         Ok(true)
@@ -524,125 +500,21 @@ impl TaskPatch {
         patch
     }
 
-    fn into_events(self, task: TaskId, actor: &Actor, workflow: &WorkflowConfig) -> Vec<Event> {
-        let mut events = Vec::new();
-
-        if let Some(title) = self.title {
-            events.push(Event::new(task, actor, EventKind::TaskTitleSet { title }));
-        }
-
-        if let Some(state_patch) = self.state {
-            match state_patch {
-                StatePatch::Set { state } => {
-                    let state_kind = workflow.resolve_state_kind(Some(&state));
-                    events.push(Event::new(
-                        task,
-                        actor,
-                        EventKind::TaskStateSet { state, state_kind },
-                    ));
-                }
-                StatePatch::Clear => {
-                    events.push(Event::new(task, actor, EventKind::TaskStateCleared));
-                }
-            }
-        }
-
-        if let Some(description_patch) = self.description {
-            match description_patch {
-                DescriptionPatch::Set { description } => {
-                    events.push(Event::new(
-                        task,
-                        actor,
-                        EventKind::TaskDescriptionSet {
-                            description: Some(description),
-                        },
-                    ));
-                }
-                DescriptionPatch::Clear => {
-                    events.push(Event::new(
-                        task,
-                        actor,
-                        EventKind::TaskDescriptionSet { description: None },
-                    ));
-                }
-            }
-        }
-
-        if !self.labels.added.is_empty() {
-            events.push(Event::new(
-                task,
-                actor,
-                EventKind::LabelsAdded {
-                    labels: self.labels.added,
-                },
-            ));
-        }
-
-        if !self.labels.removed.is_empty() {
-            events.push(Event::new(
-                task,
-                actor,
-                EventKind::LabelsRemoved {
-                    labels: self.labels.removed,
-                },
-            ));
-        }
-
-        if !self.assignees.added.is_empty() {
-            events.push(Event::new(
-                task,
-                actor,
-                EventKind::AssigneesAdded {
-                    assignees: self.assignees.added,
-                },
-            ));
-        }
-
-        if !self.assignees.removed.is_empty() {
-            events.push(Event::new(
-                task,
-                actor,
-                EventKind::AssigneesRemoved {
-                    assignees: self.assignees.removed,
-                },
-            ));
-        }
-
-        events
-    }
-
-    const fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.title.is_none()
             && self.state.is_none()
             && self.description.is_none()
-            && self.labels.added.is_empty()
-            && self.labels.removed.is_empty()
-            && self.assignees.added.is_empty()
-            && self.assignees.removed.is_empty()
+            && self.labels.is_empty()
+            && self.assignees.is_empty()
     }
-}
 
-#[derive(Debug)]
-enum StatePatch {
-    Set { state: String },
-    Clear,
-}
-
-#[derive(Debug)]
-enum DescriptionPatch {
-    Set { description: String },
-    Clear,
-}
-
-#[derive(Debug, Default, PartialEq, Eq)]
-pub(super) struct SetDiff<T> {
-    pub added: Vec<T>,
-    pub removed: Vec<T>,
-}
-
-pub(super) fn diff_sets<T: Ord + Clone>(current: &BTreeSet<T>, desired: &BTreeSet<T>) -> SetDiff<T> {
-    SetDiff {
-        added: desired.difference(current).cloned().collect(),
-        removed: current.difference(desired).cloned().collect(),
+    fn into_task_update(self) -> TaskUpdate {
+        TaskUpdate {
+            title: self.title,
+            state: self.state,
+            description: self.description,
+            labels: self.labels,
+            assignees: self.assignees,
+        }
     }
 }

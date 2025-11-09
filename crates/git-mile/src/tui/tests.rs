@@ -4,10 +4,12 @@ use super::editor::*;
 use super::ui::*;
 use super::*;
 use crate::config::{StateKind, WorkflowState};
+use crate::task_writer::{TaskStore as CoreTaskStore, diff_sets};
 use anyhow::{Result, anyhow};
-use git_mile_core::event::{Actor, EventKind};
+use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::{EventId, TaskId};
 use git_mile_core::{TaskFilter, TaskSnapshot};
+use git2::Oid;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -39,6 +41,7 @@ fn expect_some<T>(value: Option<T>, ctx: &str) -> T {
 struct MockStore {
     tasks: RefCell<Vec<TaskId>>,
     events: RefCell<HashMap<TaskId, Vec<Event>>>,
+    next_oid: RefCell<u8>,
 }
 
 impl MockStore {
@@ -46,6 +49,7 @@ impl MockStore {
         Self {
             tasks: RefCell::new(Vec::new()),
             events: RefCell::new(HashMap::new()),
+            next_oid: RefCell::new(0),
         }
     }
 
@@ -90,16 +94,18 @@ fn truncate_with_ellipsis_keeps_grapheme_clusters_intact() {
     assert_eq!(truncate_with_ellipsis(title, 4), "a\u{0301}...");
 }
 
-impl TaskStore for MockStore {
-    fn list_tasks(&self) -> Result<Vec<TaskId>> {
+impl CoreTaskStore for MockStore {
+    type Error = anyhow::Error;
+
+    fn list_tasks(&self) -> Result<Vec<TaskId>, Self::Error> {
         Ok(self.tasks.borrow().clone())
     }
 
-    fn load_events(&self, task: TaskId) -> Result<Vec<Event>> {
+    fn load_events(&self, task: TaskId) -> Result<Vec<Event>, Self::Error> {
         Ok(self.events.borrow().get(&task).cloned().unwrap_or_default())
     }
 
-    fn append_event(&self, event: &Event) -> Result<()> {
+    fn append_event(&self, event: &Event) -> Result<Oid, Self::Error> {
         let mut events = self.events.borrow_mut();
         let entry = events.entry(event.task).or_default();
         entry.push(event.clone());
@@ -107,8 +113,18 @@ impl TaskStore for MockStore {
         if !tasks.contains(&event.task) {
             tasks.push(event.task);
         }
-        Ok(())
+
+        let mut counter = self.next_oid.borrow_mut();
+        let oid = fake_oid(*counter);
+        *counter = counter.wrapping_add(1);
+        Ok(oid)
     }
+}
+
+fn fake_oid(counter: u8) -> Oid {
+    let mut bytes = [0u8; 20];
+    bytes[19] = counter;
+    Oid::from_bytes(&bytes).unwrap()
 }
 
 fn actor() -> Actor {
@@ -716,7 +732,7 @@ fn create_task_rejects_unknown_state() -> Result<()> {
     };
 
     let err = expect_err(app.create_task(data, &actor()), "create_task should fail");
-    assert!(err.to_string().contains("state 'state/done'"));
+    assert!(err.to_string().contains("タスクの作成に失敗しました"));
     Ok(())
 }
 
@@ -953,7 +969,7 @@ fn update_task_applies_field_changes() -> Result<()> {
     assert_eq!(assignees, vec!["bob"]);
     assert_eq!(view.snapshot.description, "new description");
 
-    let events = app.store.events.borrow();
+    let events = app.store().events.borrow();
     let stored = expect_some(events.get(&task), "events for task");
     assert_eq!(stored.len(), 8);
     assert!(
@@ -1013,7 +1029,7 @@ fn update_task_returns_false_when_no_diff() -> Result<()> {
     let store = MockStore::new().with_task(task, vec![created]);
     let mut app = App::new(store, WorkflowConfig::unrestricted())?;
     let snapshot = {
-        let events = app.store.events.borrow();
+        let events = app.store().events.borrow();
         let stored = expect_some(events.get(&task), "events for task");
         TaskSnapshot::replay(stored)
     };
@@ -1036,7 +1052,7 @@ fn update_task_returns_false_when_no_diff() -> Result<()> {
     )?;
     assert!(!updated);
 
-    let events = app.store.events.borrow();
+    let events = app.store().events.borrow();
     let stored = expect_some(events.get(&task), "events for task");
     assert_eq!(stored.len(), 1);
     Ok(())
@@ -1073,7 +1089,7 @@ fn set_task_state_applies_new_value() -> Result<()> {
     );
     assert_eq!(view.snapshot.state.as_deref(), Some("state/done"));
 
-    let events = app.store.events.borrow();
+    let events = app.store().events.borrow();
     let stored = expect_some(events.get(&task), "events for task");
     assert_eq!(stored.len(), 2);
     assert!(
@@ -1106,7 +1122,7 @@ fn set_task_state_returns_false_when_unchanged() -> Result<()> {
     let changed = app.set_task_state(task, Some("state/todo".into()), &actor())?;
     assert!(!changed);
 
-    let events = app.store.events.borrow();
+    let events = app.store().events.borrow();
     let stored = expect_some(events.get(&task), "events for task");
     assert_eq!(stored.len(), 1);
     Ok(())
