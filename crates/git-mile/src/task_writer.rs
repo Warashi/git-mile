@@ -1,11 +1,9 @@
-//! Shared task mutation service skeleton.
-//!
-//! NOTE: This module currently contains type definitions only. The actual logic
-//! will be implemented while migrating CLI/TUI/MCP flows to this layer.
+//! Shared task mutation service used by CLI/TUI/MCP surfaces.
 
 use anyhow::Error;
-use git_mile_core::event::{Actor, Event};
-use git_mile_core::id::TaskId;
+use git_mile_core::event::{Actor, Event, EventKind};
+use git_mile_core::id::{EventId, TaskId};
+use git_mile_store_git::GitStore;
 use git2::Oid;
 
 use crate::config::WorkflowConfig;
@@ -13,7 +11,7 @@ use crate::config::WorkflowConfig;
 /// Minimal storage abstraction required by [`TaskWriter`].
 pub trait TaskStore {
     /// Error type bubbled up from the backing store.
-    type Error: std::error::Error + Send + Sync + 'static;
+    type Error: Into<Error>;
 
     /// Append a single event for the target task.
     fn append_event(&self, event: &Event) -> Result<Oid, Self::Error>;
@@ -41,6 +39,11 @@ impl<S> TaskWriter<S> {
     pub const fn workflow(&self) -> &WorkflowConfig {
         &self.workflow
     }
+
+    /// Expose a reference to the underlying store (read-only operations).
+    pub const fn store(&self) -> &S {
+        &self.store
+    }
 }
 
 impl<S> TaskWriter<S> {
@@ -48,7 +51,26 @@ impl<S> TaskWriter<S> {
     where
         S: TaskStore,
     {
-        TaskWriteError::Store(Error::new(err))
+        TaskWriteError::Store(err.into())
+    }
+
+    fn validate_state(&self, state: Option<&str>) -> Result<(), TaskWriteError>
+    where
+        S: TaskStore,
+    {
+        self.workflow
+            .validate_state(state)
+            .map_err(|_| TaskWriteError::InvalidState(state.unwrap_or("<none>").to_owned()))
+    }
+
+    fn ensure_task_exists(&self, task: TaskId) -> Result<(), TaskWriteError>
+    where
+        S: TaskStore,
+    {
+        self.store
+            .load_events(task)
+            .map(|_| ())
+            .map_err(|_| TaskWriteError::MissingTask(task))
     }
 }
 
@@ -58,8 +80,70 @@ where
 {
     /// Create a new task with optional parents.
     pub fn create_task(&self, request: CreateTaskRequest) -> Result<CreateTaskResult, TaskWriteError> {
-        let _ = request;
-        Err(TaskWriteError::NotImplemented("create_task"))
+        let CreateTaskRequest {
+            title,
+            mut state,
+            labels,
+            assignees,
+            description,
+            parents,
+            actor,
+        } = request;
+
+        if state.is_none() {
+            state = self.workflow.default_state().map(str::to_owned);
+        }
+        self.validate_state(state.as_deref())?;
+        let state_kind = self.workflow.resolve_state_kind(state.as_deref());
+
+        let task = TaskId::new();
+        let mut events = Vec::new();
+        let mut parent_links = Vec::new();
+
+        let created_event = Event::new(
+            task,
+            &actor,
+            EventKind::TaskCreated {
+                title,
+                labels,
+                assignees,
+                description,
+                state,
+                state_kind,
+            },
+        );
+        let created_oid = self
+            .store
+            .append_event(&created_event)
+            .map_err(Self::store_error)?;
+        events.push(created_oid);
+
+        for parent in parents {
+            self.ensure_task_exists(parent)
+                .map_err(|_| TaskWriteError::MissingParent(parent))?;
+
+            let child_event = Event::new(task, &actor, EventKind::ChildLinked { parent, child: task });
+            let child_oid = self.store.append_event(&child_event).map_err(Self::store_error)?;
+            events.push(child_oid);
+
+            let parent_event = Event::new(parent, &actor, EventKind::ChildLinked { parent, child: task });
+            let parent_oid = self
+                .store
+                .append_event(&parent_event)
+                .map_err(Self::store_error)?;
+            events.push(parent_oid);
+
+            parent_links.push(ParentLinkResult {
+                parent,
+                oid: parent_oid,
+            });
+        }
+
+        Ok(CreateTaskResult {
+            task,
+            events,
+            parent_links,
+        })
     }
 
     /// Apply a patch to an existing task.
@@ -85,8 +169,23 @@ where
         task: TaskId,
         comment: CommentRequest,
     ) -> Result<TaskWriteResult, TaskWriteError> {
-        let _ = (task, comment);
-        Err(TaskWriteError::NotImplemented("add_comment"))
+        let CommentRequest { body_md, actor } = comment;
+        self.ensure_task_exists(task)?;
+
+        let event = Event::new(
+            task,
+            &actor,
+            EventKind::CommentAdded {
+                comment_id: EventId::new(),
+                body_md,
+            },
+        );
+        let oid = self.store.append_event(&event).map_err(Self::store_error)?;
+
+        Ok(TaskWriteResult {
+            task,
+            events: vec![oid],
+        })
     }
 
     /// Link new parents to the task.
@@ -174,6 +273,8 @@ pub struct CreateTaskResult {
     pub task: TaskId,
     /// Event object IDs created during the operation.
     pub events: Vec<Oid>,
+    /// Parent link events appended on the parent tasks.
+    pub parent_links: Vec<ParentLinkResult>,
 }
 
 /// Result returned for update/comment/link operations.
@@ -183,6 +284,15 @@ pub struct TaskWriteResult {
     pub task: TaskId,
     /// Event object IDs created during the operation.
     pub events: Vec<Oid>,
+}
+
+/// Parent link metadata emitted during task creation/linking.
+#[derive(Debug, Clone)]
+pub struct ParentLinkResult {
+    /// Parent task identifier.
+    pub parent: TaskId,
+    /// Event ID recorded on the parent ref.
+    pub oid: Oid,
 }
 
 /// Errors surfaced by [`TaskWriter`].
@@ -203,4 +313,20 @@ pub enum TaskWriteError {
     /// Placeholder for unimplemented operations.
     #[error("{0} not implemented yet")]
     NotImplemented(&'static str),
+}
+
+impl TaskStore for GitStore {
+    type Error = Error;
+
+    fn append_event(&self, event: &Event) -> Result<Oid, Self::Error> {
+        GitStore::append_event(self, event)
+    }
+
+    fn load_events(&self, task: TaskId) -> Result<Vec<Event>, Self::Error> {
+        GitStore::load_events(self, task)
+    }
+
+    fn list_tasks(&self) -> Result<Vec<TaskId>, Self::Error> {
+        GitStore::list_tasks(self)
+    }
 }

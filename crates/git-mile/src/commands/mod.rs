@@ -1,59 +1,46 @@
 use std::{cmp::Ordering, collections::BTreeSet, str::FromStr};
 
-use anyhow::{Context, Result};
-use git_mile_core::event::{Actor, Event, EventKind};
-use git_mile_core::id::{EventId, TaskId};
+use anyhow::{Context, Result, anyhow};
+use git_mile_core::event::Actor;
+use git_mile_core::id::TaskId;
 use git_mile_core::{TaskFilter, TaskSnapshot};
-use git_mile_store_git::GitStore;
 use git2::Oid;
 
 use crate::config::WorkflowConfig;
 #[cfg(test)]
 use crate::config::WorkflowState;
+use crate::task_writer::{CommentRequest, CreateTaskRequest, TaskStore, TaskWriter};
 use crate::{Command, LsFormat};
-
-/// Minimal abstraction over the backing event store so command handlers can be unit-tested.
-pub trait TaskRepository {
-    fn append_event(&self, event: &Event) -> Result<Oid>;
-    fn load_events(&self, task: TaskId) -> Result<Vec<Event>>;
-    fn list_tasks(&self) -> Result<Vec<TaskId>>;
-}
-
-impl TaskRepository for GitStore {
-    fn append_event(&self, event: &Event) -> Result<Oid> {
-        Self::append_event(self, event)
-    }
-
-    fn load_events(&self, task: TaskId) -> Result<Vec<Event>> {
-        Self::load_events(self, task)
-    }
-
-    fn list_tasks(&self) -> Result<Vec<TaskId>> {
-        Self::list_tasks(self)
-    }
-}
 
 /// Service façade that encapsulates all task-related side effects.
 pub struct TaskService<S> {
-    store: S,
-    workflow: WorkflowConfig,
+    writer: TaskWriter<S>,
 }
 
 impl<S> TaskService<S> {
-    pub const fn new(store: S, workflow: WorkflowConfig) -> Self {
-        Self { store, workflow }
+    pub fn new(store: S, workflow: WorkflowConfig) -> Self
+    where
+        S: TaskStore,
+    {
+        Self {
+            writer: TaskWriter::new(store, workflow),
+        }
     }
 
     pub const fn workflow(&self) -> &WorkflowConfig {
-        &self.workflow
+        self.writer.workflow()
+    }
+
+    fn store(&self) -> &S {
+        self.writer.store()
     }
 }
 
-impl<S: TaskRepository> TaskService<S> {
+impl<S: TaskStore> TaskService<S> {
     fn create_with_parents(&self, input: CreateTaskInput) -> Result<CreateTaskOutput> {
         let CreateTaskInput {
             title,
-            mut state,
+            state,
             labels,
             assignees,
             description,
@@ -61,44 +48,31 @@ impl<S: TaskRepository> TaskService<S> {
             actor,
         } = input;
 
-        if state.is_none() {
-            state = self.workflow.default_state().map(str::to_owned);
-        }
-
-        self.workflow.validate_state(state.as_deref())?;
-        let state_kind = self.workflow.resolve_state_kind(state.as_deref());
-
-        let task = TaskId::new();
-        let created_event = Event::new(
-            task,
-            &actor,
-            EventKind::TaskCreated {
-                title,
-                labels,
-                assignees,
-                description,
-                state,
-                state_kind,
-            },
-        );
-        let created_event_oid = self.store.append_event(&created_event)?;
-
-        let mut parent_links = Vec::new();
-        for parent in parents {
-            self.store
-                .load_events(parent)
-                .with_context(|| format!("Parent task not found: {parent}"))?;
-
-            let child_event = Event::new(task, &actor, EventKind::ChildLinked { parent, child: task });
-            self.store.append_event(&child_event)?;
-
-            let parent_event = Event::new(parent, &actor, EventKind::ChildLinked { parent, child: task });
-            let oid = self.store.append_event(&parent_event)?;
-            parent_links.push(ParentLink { parent, oid });
-        }
+        let request = CreateTaskRequest {
+            title,
+            state,
+            labels,
+            assignees,
+            description,
+            parents,
+            actor,
+        };
+        let result = self.writer.create_task(request)?;
+        let created_event_oid = *result
+            .events
+            .first()
+            .ok_or_else(|| anyhow!("TaskWriter returned no events for create_task"))?;
+        let parent_links = result
+            .parent_links
+            .into_iter()
+            .map(|link| ParentLink {
+                parent: link.parent,
+                oid: link.oid,
+            })
+            .collect();
 
         Ok(CreateTaskOutput {
-            task,
+            task: result.task,
             created_event_oid,
             parent_links,
         })
@@ -108,31 +82,33 @@ impl<S: TaskRepository> TaskService<S> {
         let CommentInput {
             task, message, actor, ..
         } = input;
-        let comment_event = Event::new(
+        let result = self.writer.add_comment(
             task,
-            &actor,
-            EventKind::CommentAdded {
-                comment_id: EventId::new(),
+            CommentRequest {
                 body_md: message,
+                actor,
             },
-        );
-        let oid = self.store.append_event(&comment_event)?;
+        )?;
+        let oid = *result
+            .events
+            .first()
+            .ok_or_else(|| anyhow!("TaskWriter returned no events for add_comment"))?;
         Ok(CommentOutput { task, oid })
     }
 
     fn materialize(&self, task: TaskId) -> Result<TaskSnapshot> {
-        let events = self.store.load_events(task)?;
+        let events = self.store().load_events(task).map_err(|err| err.into())?;
         Ok(TaskSnapshot::replay(&events))
     }
 
     fn list_tasks(&self) -> Result<Vec<TaskId>> {
-        self.store.list_tasks()
+        self.store().list_tasks().map_err(|err| err.into())
     }
 
     fn list_snapshots(&self, filter: &TaskFilter) -> Result<Vec<TaskSnapshot>> {
         let mut snapshots = Vec::new();
         for task_id in self.list_tasks()? {
-            let events = self.store.load_events(task_id)?;
+            let events = self.store().load_events(task_id).map_err(|err| err.into())?;
             snapshots.push(TaskSnapshot::replay(&events));
         }
         snapshots.sort_by(compare_snapshots);
@@ -146,7 +122,7 @@ impl<S: TaskRepository> TaskService<S> {
     }
 }
 
-pub fn run<S: TaskRepository>(command: Command, service: &TaskService<S>) -> Result<()> {
+pub fn run<S: TaskStore>(command: Command, service: &TaskService<S>) -> Result<()> {
     match command {
         Command::New {
             title,
@@ -346,7 +322,7 @@ mod tests {
     use super::*;
     use crate::{Command, LsFormat};
     use anyhow::{Result, anyhow};
-    use git_mile_core::event::EventKind;
+    use git_mile_core::event::{Event, EventKind};
     use std::collections::{HashMap, HashSet};
     use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -366,8 +342,10 @@ mod tests {
         next_oid: Mutex<u8>,
     }
 
-    impl TaskRepository for MockStore {
-        fn append_event(&self, event: &Event) -> Result<Oid> {
+    impl TaskStore for MockStore {
+        type Error = anyhow::Error;
+
+        fn append_event(&self, event: &Event) -> Result<Oid, Self::Error> {
             guard(&self.inner.appended).push(event.clone());
             guard(&self.inner.events)
                 .entry(event.task)
@@ -382,7 +360,7 @@ mod tests {
             Ok(oid)
         }
 
-        fn load_events(&self, task: TaskId) -> Result<Vec<Event>> {
+        fn load_events(&self, task: TaskId) -> Result<Vec<Event>, Self::Error> {
             guard(&self.inner.load_calls).push(task);
             if guard(&self.inner.fail_on_load).contains(&task) {
                 return Err(anyhow!("missing task {task}"));
@@ -390,7 +368,7 @@ mod tests {
             Ok(guard(&self.inner.events).get(&task).cloned().unwrap_or_default())
         }
 
-        fn list_tasks(&self) -> Result<Vec<TaskId>> {
+        fn list_tasks(&self) -> Result<Vec<TaskId>, Self::Error> {
             *guard(&self.inner.list_calls) += 1;
             Ok(guard(&self.inner.list).clone())
         }
