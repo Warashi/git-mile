@@ -790,7 +790,7 @@ fn filter_editor_output_parses_all_fields() {
     let raw = format!(
         "\
 states: state/todo,state/done
-state_kinds: !done
+state_kinds: in_progress,!done
 labels: type/bug
 assignees: alice
 parents: {parent}
@@ -807,6 +807,12 @@ updated_until: 2025-01-02T00:00:00Z
     assert!(filter.parents.contains(&parent));
     assert!(filter.children.contains(&child));
     assert_eq!(filter.text.as_deref(), Some("panic"));
+    assert!(
+        filter
+            .state_kinds
+            .include
+            .contains(&git_mile_core::StateKind::InProgress)
+    );
     assert!(filter.state_kinds.exclude.contains(&StateKind::Done));
     let updated = expect_some(filter.updated, "updated filter");
     let expected_since = expect_ok(OffsetDateTime::parse("2025-01-01T00:00:00Z", &Rfc3339), "ts");
@@ -840,13 +846,6 @@ fn summarize_task_filter_includes_state_kind_clause() {
     filter.state_kinds.exclude.insert(StateKind::Done);
     let summary = summarize_task_filter(&filter);
     assert!(summary.contains("state-kind!=done"));
-}
-
-#[test]
-fn parse_state_kind_filter_handles_include_and_exclude() {
-    let filter = expect_ok(parse_state_kind_filter("in_progress, !done"), "parse succeeds");
-    assert!(filter.include.contains(&StateKind::InProgress));
-    assert!(filter.exclude.contains(&StateKind::Done));
 }
 
 #[test]

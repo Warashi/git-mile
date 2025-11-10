@@ -3,10 +3,10 @@ use std::str::FromStr;
 
 use anyhow::Result;
 use git_mile_core::id::TaskId;
-use git_mile_core::{StateKindFilter, TaskFilter, UpdatedFilter};
+use git_mile_core::{StateKindFilter, TaskFilter};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-use crate::config::StateKind;
+use crate::filter_util::{TaskFilterBuilder, normalize_timestamp, parse_timestamp};
 
 use super::app::NewTaskData;
 use crate::task_cache::TaskView;
@@ -302,7 +302,8 @@ pub(super) fn parse_filter_editor_output(raw: &str) -> Result<TaskFilter, String
     let mut text: Option<String> = None;
     let mut updated_since: Option<OffsetDateTime> = None;
     let mut updated_until: Option<OffsetDateTime> = None;
-    let mut state_kinds_raw: Option<&str> = None;
+    let mut include_state_kind_tokens: Vec<String> = Vec::new();
+    let mut exclude_state_kind_tokens: Vec<String> = Vec::new();
 
     for line in raw.lines() {
         let trimmed = line.trim();
@@ -343,31 +344,34 @@ pub(super) fn parse_filter_editor_output(raw: &str) -> Result<TaskFilter, String
             "updated_until" => {
                 updated_until = parse_optional_timestamp(value)?;
             }
-            "state_kinds" => state_kinds_raw = Some(value),
+            "state_kinds" => {
+                (include_state_kind_tokens, exclude_state_kind_tokens) = split_state_kind_tokens(value);
+            }
             unknown => return Err(format!("未知のフィールドです: {unknown}")),
         }
     }
 
-    let updated = match (updated_since, updated_until) {
-        (None, None) => None,
-        _ => Some(UpdatedFilter {
-            since: updated_since,
-            until: updated_until,
-        }),
-    };
+    let states_vec: Vec<String> = states.into_iter().collect();
+    let labels_vec: Vec<String> = labels.into_iter().collect();
+    let assignees_vec: Vec<String> = assignees.into_iter().collect();
+    let parents_vec: Vec<TaskId> = parents.into_iter().collect();
+    let children_vec: Vec<TaskId> = children.into_iter().collect();
+    let text_input = text;
 
-    let state_kinds = parse_state_kind_filter(state_kinds_raw.unwrap_or(""))?;
+    let mut builder = TaskFilterBuilder::new()
+        .with_states(&states_vec)
+        .with_labels(&labels_vec)
+        .with_assignees(&assignees_vec)
+        .with_parents(&parents_vec)
+        .with_children(&children_vec)
+        .with_text(text_input);
 
-    Ok(TaskFilter {
-        states,
-        state_kinds,
-        labels,
-        assignees,
-        parents,
-        children,
-        text,
-        updated,
-    })
+    builder = builder
+        .with_state_kinds(&include_state_kind_tokens, &exclude_state_kind_tokens)
+        .map_err(|err| err.describe_user_facing())?;
+    builder = builder.with_time_range_values(updated_since, updated_until);
+
+    Ok(builder.build())
 }
 
 fn parse_task_id_list(input: &str) -> Result<BTreeSet<TaskId>, String> {
@@ -383,42 +387,23 @@ fn parse_optional_timestamp(input: &str) -> Result<Option<OffsetDateTime>, Strin
     if input.is_empty() {
         return Ok(None);
     }
-    OffsetDateTime::parse(input, &Rfc3339)
+    parse_timestamp(input)
+        .map(normalize_timestamp)
         .map(Some)
         .map_err(|err| format!("時刻の形式が正しくありません ({input}): {err}"))
 }
 
-pub(super) fn parse_state_kind_filter(input: &str) -> Result<StateKindFilter, String> {
-    if input.trim().is_empty() {
-        return Ok(StateKindFilter::default());
-    }
-    let mut filter = StateKindFilter::default();
+fn split_state_kind_tokens(input: &str) -> (Vec<String>, Vec<String>) {
+    let mut include = Vec::new();
+    let mut exclude = Vec::new();
     for token in parse_list(input) {
-        let (negated, name) = token
-            .strip_prefix('!')
-            .map_or((false, token.as_str()), |rest| (true, rest));
-        let Some(kind) = parse_state_kind_name(name) else {
-            return Err(format!("state_kind の指定が不正です: {name}"));
-        };
-        if negated {
-            filter.exclude.insert(kind);
+        if let Some(rest) = token.strip_prefix('!') {
+            exclude.push(rest.to_owned());
         } else {
-            filter.include.insert(kind);
+            include.push(token);
         }
     }
-    Ok(filter)
-}
-
-fn parse_state_kind_name(name: &str) -> Option<StateKind> {
-    let normalized = name.trim().to_ascii_lowercase().replace(['-', ' '], "_");
-    match normalized.as_str() {
-        "done" => Some(StateKind::Done),
-        "in_progress" => Some(StateKind::InProgress),
-        "blocked" => Some(StateKind::Blocked),
-        "todo" => Some(StateKind::Todo),
-        "backlog" => Some(StateKind::Backlog),
-        _ => None,
-    }
+    (include, exclude)
 }
 
 const STATE_KIND_HINT: &str = "done, in_progress, blocked, todo, backlog";

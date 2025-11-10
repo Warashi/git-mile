@@ -1,6 +1,7 @@
 //! MCP server implementation for git-mile.
 
 use crate::config::WorkflowConfig;
+use crate::filter_util::{FilterBuildError, TaskFilterBuilder};
 use crate::task_cache::TaskCache;
 use crate::task_writer::{
     CommentRequest, CreateTaskRequest, DescriptionPatch, SetDiff, StatePatch, TaskUpdate, TaskWriteError,
@@ -8,7 +9,7 @@ use crate::task_writer::{
 };
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::TaskId;
-use git_mile_core::{OrderedEvents, StateKind, TaskFilter, TaskFilterBuilder, TaskSnapshot, UpdatedFilter};
+use git_mile_core::{OrderedEvents, StateKind, TaskFilter, TaskSnapshot};
 use git_mile_store_git::GitStore;
 use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::tool::{ToolCallContext, ToolRouter};
@@ -243,31 +244,36 @@ struct TaskCommentEntry {
 
 impl ListTasksParams {
     fn into_filter(self) -> Result<TaskFilter, McpError> {
-        let parents = parse_task_ids_for_filter(self.parents, "parent")?;
-        let children = parse_task_ids_for_filter(self.children, "child")?;
-        let include_kinds =
-            parse_state_kind_list_for_filter(self.include_state_kinds, "include_state_kinds")?;
-        let exclude_kinds =
-            parse_state_kind_list_for_filter(self.exclude_state_kinds, "exclude_state_kinds")?;
-        let since = parse_optional_timestamp_arg(self.updated_since, "updated_since")?;
-        let until = parse_optional_timestamp_arg(self.updated_until, "updated_until")?;
+        let Self {
+            states,
+            labels,
+            assignees,
+            include_state_kinds,
+            exclude_state_kinds,
+            parents,
+            children,
+            updated_since,
+            updated_until,
+            text,
+        } = self;
+
+        let parent_ids = parse_task_ids_for_filter(parents, "parent")?;
+        let child_ids = parse_task_ids_for_filter(children, "child")?;
 
         let mut builder = TaskFilterBuilder::new()
-            .states(self.states)
-            .labels(self.labels)
-            .assignees(self.assignees)
-            .include_state_kinds(include_kinds)
-            .exclude_state_kinds(exclude_kinds)
-            .parents(parents)
-            .children(children);
+            .with_states(&states)
+            .with_labels(&labels)
+            .with_assignees(&assignees)
+            .with_parents(&parent_ids)
+            .with_children(&child_ids);
 
-        if let Some(text) = self.text {
-            builder = builder.text(text);
-        }
-
-        if since.is_some() || until.is_some() {
-            builder = builder.updated(UpdatedFilter { since, until });
-        }
+        builder = builder
+            .with_state_kinds(&include_state_kinds, &exclude_state_kinds)
+            .map_err(|err| map_filter_error(&err))?;
+        builder = builder.with_text(text);
+        builder = builder
+            .with_time_range(updated_since, updated_until)
+            .map_err(|err| map_filter_error(&err))?;
 
         Ok(builder.build())
     }
@@ -282,44 +288,8 @@ fn parse_task_ids_for_filter(ids: Vec<String>, context: &str) -> Result<Vec<Task
         .collect()
 }
 
-fn parse_optional_timestamp_arg(
-    value: Option<String>,
-    field: &str,
-) -> Result<Option<OffsetDateTime>, McpError> {
-    let Some(raw) = value else {
-        return Ok(None);
-    };
-    if raw.trim().is_empty() {
-        return Ok(None);
-    }
-    OffsetDateTime::parse(raw.trim(), &Rfc3339)
-        .map(Some)
-        .map_err(|err| McpError::invalid_params(format!("Invalid {field}: {err}"), None))
-}
-
-fn parse_state_kind_list_for_filter(values: Vec<String>, field: &str) -> Result<Vec<StateKind>, McpError> {
-    values
-        .into_iter()
-        .map(|value| parse_state_kind_for_filter(&value, field))
-        .collect()
-}
-
-fn parse_state_kind_for_filter(value: &str, field: &str) -> Result<StateKind, McpError> {
-    let normalized = value.trim().to_ascii_lowercase().replace(['-', ' '], "_");
-    let kind = match normalized.as_str() {
-        "todo" => StateKind::Todo,
-        "in_progress" | "inprogress" => StateKind::InProgress,
-        "blocked" => StateKind::Blocked,
-        "done" => StateKind::Done,
-        "backlog" => StateKind::Backlog,
-        _ => {
-            return Err(McpError::invalid_params(
-                format!("Invalid {field}: {value}"),
-                None,
-            ));
-        }
-    };
-    Ok(kind)
+fn map_filter_error(err: &FilterBuildError) -> McpError {
+    McpError::invalid_params(err.to_string(), None)
 }
 
 fn format_timestamp(ts: OffsetDateTime) -> Result<String, McpError> {

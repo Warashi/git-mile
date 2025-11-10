@@ -11,6 +11,7 @@ use rmcp::ServiceExt;
 
 mod commands;
 mod config;
+mod filter_util;
 mod mcp;
 /// Shared task snapshot cache utilities.
 pub mod task_cache;

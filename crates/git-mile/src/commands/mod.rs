@@ -1,12 +1,13 @@
 use std::str::FromStr;
 
+use crate::filter_util::TaskFilterBuilder;
 use anyhow::{Context, Result, anyhow};
+#[cfg(test)]
+use git_mile_core::StateKind;
 use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
-use git_mile_core::{StateKind, TaskFilter, TaskFilterBuilder, TaskSnapshot, UpdatedFilter};
+use git_mile_core::{TaskFilter, TaskSnapshot};
 use git2::Oid;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 use crate::config::WorkflowConfig;
 #[cfg(test)]
@@ -232,29 +233,32 @@ struct CliFilterArgs {
 }
 
 fn build_filter(args: CliFilterArgs) -> Result<TaskFilter> {
-    let parent_ids = parse_task_ids(args.parents)?;
-    let child_ids = parse_task_ids(args.children)?;
-    let include_kinds = parse_state_kind_list(args.include_state_kinds)?;
-    let exclude_kinds = parse_state_kind_list(args.exclude_state_kinds)?;
-    let since = parse_optional_timestamp(args.updated_since, "updated-since")?;
-    let until = parse_optional_timestamp(args.updated_until, "updated-until")?;
+    let CliFilterArgs {
+        states,
+        labels,
+        assignees,
+        include_state_kinds,
+        exclude_state_kinds,
+        parents,
+        children,
+        updated_since,
+        updated_until,
+        text,
+    } = args;
+
+    let parent_ids = parse_task_ids(parents)?;
+    let child_ids = parse_task_ids(children)?;
 
     let mut builder = TaskFilterBuilder::new()
-        .states(args.states)
-        .labels(args.labels)
-        .assignees(args.assignees)
-        .parents(parent_ids)
-        .children(child_ids)
-        .include_state_kinds(include_kinds)
-        .exclude_state_kinds(exclude_kinds);
+        .with_states(&states)
+        .with_labels(&labels)
+        .with_assignees(&assignees)
+        .with_parents(&parent_ids)
+        .with_children(&child_ids);
 
-    if let Some(text) = args.text {
-        builder = builder.text(text);
-    }
-
-    if since.is_some() || until.is_some() {
-        builder = builder.updated(UpdatedFilter { since, until });
-    }
+    builder = builder.with_state_kinds(&include_state_kinds, &exclude_state_kinds)?;
+    builder = builder.with_text(text);
+    builder = builder.with_time_range(updated_since, updated_until)?;
 
     Ok(builder.build())
 }
@@ -300,34 +304,6 @@ fn parse_task_ids(inputs: Vec<String>) -> Result<Vec<TaskId>> {
 
 fn parse_task_id(raw: &str) -> Result<TaskId> {
     TaskId::from_str(raw).with_context(|| format!("Invalid task id: {raw}"))
-}
-
-fn parse_state_kind_list(inputs: Vec<String>) -> Result<Vec<StateKind>> {
-    inputs.into_iter().map(|value| parse_state_kind(&value)).collect()
-}
-
-fn parse_state_kind(raw: &str) -> Result<StateKind> {
-    let normalized = raw.trim().to_ascii_lowercase().replace(['-', ' '], "_");
-    match normalized.as_str() {
-        "todo" => Ok(StateKind::Todo),
-        "in_progress" | "inprogress" => Ok(StateKind::InProgress),
-        "blocked" => Ok(StateKind::Blocked),
-        "done" => Ok(StateKind::Done),
-        "backlog" => Ok(StateKind::Backlog),
-        other => Err(anyhow!("Invalid state kind: {other}")),
-    }
-}
-
-fn parse_optional_timestamp(value: Option<String>, field: &str) -> Result<Option<OffsetDateTime>> {
-    let Some(raw) = value else {
-        return Ok(None);
-    };
-    if raw.trim().is_empty() {
-        return Ok(None);
-    }
-    OffsetDateTime::parse(raw.trim(), &Rfc3339)
-        .map(Some)
-        .with_context(|| format!("Invalid {field} timestamp"))
 }
 
 struct CreateTaskInput {
@@ -698,7 +674,7 @@ mod tests {
         }) else {
             panic!("filter should reject invalid state kind");
         };
-        assert!(err.to_string().contains("Invalid state kind"));
+        assert!(err.to_string().contains("invalid state kind"));
     }
 
     #[test]
@@ -717,7 +693,7 @@ mod tests {
         }) else {
             panic!("filter should reject timestamp");
         };
-        assert!(err.to_string().contains("Invalid updated-since timestamp"));
+        assert!(err.to_string().contains("invalid updated_since timestamp"));
     }
 
     #[test]
