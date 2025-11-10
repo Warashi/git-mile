@@ -294,8 +294,7 @@ mod tests {
             ..TaskFilter::default()
         };
 
-        let cache = TaskCache::load(&store)
-            .unwrap_or_else(|err| panic!("must load cache: {err}"));
+        let cache = TaskCache::load(&store).unwrap_or_else(|err| panic!("must load cache: {err}"));
         let filtered = cache.filtered_snapshots(&filter);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].id, done);
