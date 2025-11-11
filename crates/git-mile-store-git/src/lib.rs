@@ -10,7 +10,7 @@ use git_mile_core::id::TaskId;
 use git2::{Commit, Oid, Repository, Signature, Sort};
 use lru::LruCache;
 use std::num::NonZeroUsize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tracing::{debug, info};
 
@@ -19,6 +19,7 @@ const EVENT_CACHE_CAPACITY: usize = 256;
 /// Storage based on git refs under `refs/git-mile/tasks/*`.
 pub struct GitStore {
     repo: Repository,
+    repo_path: PathBuf,
     event_cache: Mutex<LruCache<Oid, Event>>,
 }
 
@@ -29,11 +30,13 @@ impl GitStore {
     /// Returns an error if a Git repository cannot be discovered from the given path.
     pub fn open(cwd_or_repo: impl AsRef<Path>) -> Result<Self> {
         let repo = Repository::discover(cwd_or_repo).context("Failed to discover .git")?;
+        let repo_path = repo.path().to_path_buf();
         let capacity = NonZeroUsize::new(EVENT_CACHE_CAPACITY)
             .ok_or_else(|| anyhow!("cache capacity must be non-zero"))?;
         let cache = LruCache::new(capacity);
         Ok(Self {
             repo,
+            repo_path,
             event_cache: Mutex::new(cache),
         })
     }
@@ -225,6 +228,28 @@ impl GitStore {
         }
 
         Ok(modified_tasks)
+    }
+}
+
+impl Clone for GitStore {
+    /// Clone the GitStore by reopening the same repository.
+    ///
+    /// Note: The event cache is not shared between clones.
+    /// Each clone starts with an empty cache.
+    fn clone(&self) -> Self {
+        // Reopen the repository from the saved path
+        let repo = Repository::open(&self.repo_path)
+            .unwrap_or_else(|_| panic!("Failed to reopen repository at {:?}", self.repo_path));
+
+        let capacity = NonZeroUsize::new(EVENT_CACHE_CAPACITY)
+            .expect("cache capacity must be non-zero");
+        let cache = LruCache::new(capacity);
+
+        Self {
+            repo,
+            repo_path: self.repo_path.clone(),
+            event_cache: Mutex::new(cache),
+        }
     }
 }
 
