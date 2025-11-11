@@ -10,6 +10,8 @@ use config::ProjectConfig;
 use git_mile_store_git::GitStore;
 use rmcp::ServiceExt;
 
+/// Async storage abstraction for MCP integration.
+pub mod async_task_store;
 mod commands;
 mod config;
 mod filter_util;

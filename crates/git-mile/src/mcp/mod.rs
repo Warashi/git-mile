@@ -5,6 +5,7 @@ mod tools;
 
 pub use params::*;
 
+use crate::async_task_store::AsyncTaskRepository;
 use crate::config::WorkflowConfig;
 use git_mile_store_git::GitStore;
 use rmcp::handler::server::ServerHandler;
@@ -24,6 +25,7 @@ use tokio::sync::Mutex;
 pub struct GitMileServer {
     tool_router: ToolRouter<Self>,
     store: Arc<Mutex<GitStore>>,
+    repository: Arc<AsyncTaskRepository<Arc<Mutex<GitStore>>>>,
     workflow: WorkflowConfig,
 }
 
@@ -31,9 +33,13 @@ pub struct GitMileServer {
 impl GitMileServer {
     /// Create a new MCP server instance.
     pub fn new(store: GitStore, workflow: WorkflowConfig) -> Self {
+        let store_arc = Arc::new(Mutex::new(store));
+        let repository = Arc::new(AsyncTaskRepository::new(Arc::clone(&store_arc)));
+
         Self {
             tool_router: Self::tool_router(),
-            store: Arc::new(Mutex::new(store)),
+            store: store_arc,
+            repository,
             workflow,
         }
     }
@@ -44,7 +50,7 @@ impl GitMileServer {
         &self,
         params: Parameters<ListTasksParams>,
     ) -> Result<CallToolResult, McpError> {
-        tools::list_tasks::handle_list_tasks(self.store.clone(), params).await
+        tools::list_tasks::handle_list_tasks(self.repository.clone(), params).await
     }
 
     /// List workflow states configured for this repository.

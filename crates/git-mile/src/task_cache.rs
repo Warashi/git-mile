@@ -103,7 +103,10 @@ impl TaskCache {
         Ok(Self::from_views(views))
     }
 
-    fn from_views(views: Vec<TaskView>) -> Self {
+    /// Create a `TaskCache` from pre-built `TaskViews`.
+    ///
+    /// Used by async cache loading to avoid requiring `TaskStore` trait bounds.
+    pub(crate) fn from_views(views: Vec<TaskView>) -> Self {
         let mut cache = Self {
             tasks: views,
             task_index: HashMap::new(),

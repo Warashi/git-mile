@@ -1,10 +1,10 @@
 //! List tasks tool implementation.
 
+use crate::async_task_store::AsyncTaskRepository;
 use crate::filter_util::{FilterBuildError, TaskFilterBuilder};
 use crate::mcp::params::ListTasksParams;
-use crate::task_cache::TaskCache;
 use git_mile_core::id::TaskId;
-use git_mile_core::{TaskFilter, TaskSnapshot};
+use git_mile_core::TaskFilter;
 use git_mile_store_git::GitStore;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content};
@@ -65,18 +65,21 @@ fn map_filter_error(err: &FilterBuildError) -> McpError {
 
 /// List tasks with optional filters.
 pub async fn handle_list_tasks(
-    store: Arc<Mutex<GitStore>>,
+    repository: Arc<AsyncTaskRepository<Arc<Mutex<GitStore>>>>,
     Parameters(params): Parameters<ListTasksParams>,
 ) -> Result<CallToolResult, McpError> {
     let filter = params.into_filter()?;
-    let store_guard = store.lock().await;
-    let cache = TaskCache::load(&*store_guard).map_err(|e| McpError::internal_error(e.to_string(), None))?;
-    drop(store_guard);
 
-    let tasks: Vec<TaskSnapshot> = if filter.is_empty() {
-        cache.snapshots().cloned().collect()
+    let tasks = if filter.is_empty() {
+        repository
+            .list_snapshots(None)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
     } else {
-        cache.filtered_snapshots(&filter)
+        repository
+            .list_snapshots(Some(&filter))
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
     };
 
     let json_str =

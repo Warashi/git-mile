@@ -16,6 +16,13 @@ use tracing::{debug, info};
 
 const EVENT_CACHE_CAPACITY: usize = 256;
 
+// SAFETY: 256 is non-zero
+const EVENT_CACHE_CAPACITY_NONZERO: NonZeroUsize =
+    match NonZeroUsize::new(EVENT_CACHE_CAPACITY) {
+        Some(n) => n,
+        None => unreachable!(),
+    };
+
 /// Storage based on git refs under `refs/git-mile/tasks/*`.
 pub struct GitStore {
     repo: Repository,
@@ -31,9 +38,7 @@ impl GitStore {
     pub fn open(cwd_or_repo: impl AsRef<Path>) -> Result<Self> {
         let repo = Repository::discover(cwd_or_repo).context("Failed to discover .git")?;
         let repo_path = repo.path().to_path_buf();
-        let capacity = NonZeroUsize::new(EVENT_CACHE_CAPACITY)
-            .ok_or_else(|| anyhow!("cache capacity must be non-zero"))?;
-        let cache = LruCache::new(capacity);
+        let cache = LruCache::new(EVENT_CACHE_CAPACITY_NONZERO);
         Ok(Self {
             repo,
             repo_path,
@@ -232,18 +237,19 @@ impl GitStore {
 }
 
 impl Clone for GitStore {
-    /// Clone the GitStore by reopening the same repository.
+    /// Clone the `GitStore` by reopening the same repository.
     ///
     /// Note: The event cache is not shared between clones.
     /// Each clone starts with an empty cache.
+    ///
+    /// # Panics
+    /// Panics if the repository cannot be reopened at the saved path.
     fn clone(&self) -> Self {
         // Reopen the repository from the saved path
         let repo = Repository::open(&self.repo_path)
-            .unwrap_or_else(|_| panic!("Failed to reopen repository at {:?}", self.repo_path));
+            .unwrap_or_else(|_| panic!("Failed to reopen repository at {}", self.repo_path.display()));
 
-        let capacity = NonZeroUsize::new(EVENT_CACHE_CAPACITY)
-            .expect("cache capacity must be non-zero");
-        let cache = LruCache::new(capacity);
+        let cache = LruCache::new(EVENT_CACHE_CAPACITY_NONZERO);
 
         Self {
             repo,
