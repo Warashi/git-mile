@@ -228,6 +228,10 @@ mod tests {
     impl TaskStore for EmptyStore {
         type Error = Error;
 
+        fn task_exists(&self, _task: TaskId) -> Result<bool, Self::Error> {
+            Ok(false)
+        }
+
         fn append_event(&self, _event: &Event) -> Result<Oid, Self::Error> {
             Oid::from_bytes(&[0; 20]).map_err(Into::into)
         }

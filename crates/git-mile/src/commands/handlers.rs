@@ -301,6 +301,13 @@ mod tests {
     impl TaskStore for MockStore {
         type Error = anyhow::Error;
 
+        fn task_exists(&self, task: TaskId) -> Result<bool, Self::Error> {
+            if guard(&self.inner.fail_on_load).contains(&task) {
+                return Err(anyhow!("missing task {task}"));
+            }
+            Ok(guard(&self.inner.events).contains_key(&task))
+        }
+
         fn append_event(&self, event: &Event) -> Result<git2::Oid, Self::Error> {
             guard(&self.inner.appended).push(event.clone());
             guard(&self.inner.events)
@@ -506,7 +513,27 @@ mod tests {
     #[test]
     fn run_comment_dispatches_to_service() -> Result<()> {
         let (service, store) = service_with_store();
-        let task = TaskId::new();
+
+        // First create a task
+        run(
+            Command::New {
+                title: "task for comment".into(),
+                state: None,
+                labels: vec![],
+                assignees: vec![],
+                description: None,
+                parents: vec![],
+                actor_name: "alice".into(),
+                actor_email: "alice@example.invalid".into(),
+            },
+            &service,
+        )?;
+
+        // Get the created task ID
+        let created_events = store.appended();
+        let task = created_events[0].task;
+
+        // Now add a comment
         run(
             Command::Comment {
                 task: task.to_string(),
@@ -518,8 +545,9 @@ mod tests {
         )?;
 
         let events = store.appended();
-        assert_eq!(events.len(), 1);
-        assert!(matches!(events[0].kind, EventKind::CommentAdded { .. }));
+        assert_eq!(events.len(), 2); // 1 for task creation, 1 for comment
+        assert!(matches!(events[0].kind, EventKind::TaskCreated { .. }));
+        assert!(matches!(events[1].kind, EventKind::CommentAdded { .. }));
         Ok(())
     }
 

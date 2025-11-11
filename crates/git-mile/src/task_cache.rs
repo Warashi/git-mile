@@ -182,6 +182,10 @@ mod tests {
     impl CoreTaskStore for MockStore {
         type Error = anyhow::Error;
 
+        fn task_exists(&self, task: TaskId) -> Result<bool, Self::Error> {
+            Ok(self.events.borrow().contains_key(&task))
+        }
+
         fn append_event(&self, _event: &Event) -> Result<Oid, Self::Error> {
             unreachable!("append_event is not used in TaskCache tests")
         }

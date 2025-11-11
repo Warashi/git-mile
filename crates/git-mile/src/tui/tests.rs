@@ -124,6 +124,10 @@ fn truncate_with_ellipsis_keeps_grapheme_clusters_intact() {
 impl TaskStore for MockStore {
     type Error = anyhow::Error;
 
+    fn task_exists(&self, task: TaskId) -> Result<bool, Self::Error> {
+        Ok(self.events.borrow().contains_key(&task))
+    }
+
     fn list_tasks(&self) -> Result<Vec<TaskId>, Self::Error> {
         Ok(self.tasks.borrow().clone())
     }

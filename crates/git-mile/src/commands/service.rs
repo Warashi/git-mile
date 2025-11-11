@@ -166,6 +166,13 @@ mod tests {
     impl TaskStore for MockStore {
         type Error = anyhow::Error;
 
+        fn task_exists(&self, task: TaskId) -> Result<bool, Self::Error> {
+            if guard(&self.inner.fail_on_load).contains(&task) {
+                return Err(anyhow!("missing task {task}"));
+            }
+            Ok(guard(&self.inner.events).contains_key(&task))
+        }
+
         fn append_event(&self, event: &Event) -> Result<Oid, Self::Error> {
             guard(&self.inner.appended).push(event.clone());
             guard(&self.inner.events)
@@ -239,8 +246,20 @@ mod tests {
     #[test]
     fn create_task_links_parents_and_validates_existence() -> Result<()> {
         let (service, store) = service_with_store();
-        let parent = TaskId::new();
 
+        // First create a parent task
+        let parent_output = service.create_with_parents(CreateTaskInput {
+            title: "parent".into(),
+            state: None,
+            labels: vec![],
+            assignees: vec![],
+            description: None,
+            parents: vec![],
+            actor: sample_actor(),
+        })?;
+        let parent = parent_output.task;
+
+        // Now create a child task with the parent
         let output = service.create_with_parents(CreateTaskInput {
             title: "task".into(),
             state: Some("doing".into()),
@@ -255,24 +274,28 @@ mod tests {
         assert_eq!(output.parent_links[0].parent, parent);
 
         let events = store.appended();
-        assert_eq!(events.len(), 3);
+        assert_eq!(events.len(), 4); // 1 for parent creation + 3 for child creation and linking
         match &events[0].kind {
-            EventKind::TaskCreated { title, .. } => assert_eq!(title, "task"),
+            EventKind::TaskCreated { title, .. } => assert_eq!(title, "parent"),
             other => panic!("unexpected event kind: {other:?}"),
         }
         match &events[1].kind {
-            EventKind::ChildLinked { parent: p, child } => {
-                assert_eq!(*p, parent);
-                assert_eq!(*child, output.task);
-                assert_eq!(events[1].task, output.task);
-            }
+            EventKind::TaskCreated { title, .. } => assert_eq!(title, "task"),
             other => panic!("unexpected event kind: {other:?}"),
         }
         match &events[2].kind {
             EventKind::ChildLinked { parent: p, child } => {
                 assert_eq!(*p, parent);
                 assert_eq!(*child, output.task);
-                assert_eq!(events[2].task, parent);
+                assert_eq!(events[2].task, output.task);
+            }
+            other => panic!("unexpected event kind: {other:?}"),
+        }
+        match &events[3].kind {
+            EventKind::ChildLinked { parent: p, child } => {
+                assert_eq!(*p, parent);
+                assert_eq!(*child, output.task);
+                assert_eq!(events[3].task, parent);
             }
             other => panic!("unexpected event kind: {other:?}"),
         }
@@ -354,8 +377,20 @@ mod tests {
     #[test]
     fn add_comment_appends_event() -> Result<()> {
         let (service, store) = service_with_store();
-        let task = TaskId::new();
 
+        // First create a task
+        let create_output = service.create_with_parents(CreateTaskInput {
+            title: "task for comment".into(),
+            state: None,
+            labels: vec![],
+            assignees: vec![],
+            description: None,
+            parents: vec![],
+            actor: sample_actor(),
+        })?;
+        let task = create_output.task;
+
+        // Now add a comment
         let output = service.add_comment(CommentInput {
             task,
             message: "hello".into(),
@@ -364,8 +399,12 @@ mod tests {
 
         assert_eq!(output.task, task);
         let events = store.appended();
-        assert_eq!(events.len(), 1);
+        assert_eq!(events.len(), 2); // 1 for task creation, 1 for comment
         match &events[0].kind {
+            EventKind::TaskCreated { .. } => {}
+            other => panic!("unexpected event kind: {other:?}"),
+        }
+        match &events[1].kind {
             EventKind::CommentAdded { body_md, .. } => assert_eq!(body_md, "hello"),
             other => panic!("unexpected event kind: {other:?}"),
         }
