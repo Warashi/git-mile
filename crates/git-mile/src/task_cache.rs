@@ -64,7 +64,7 @@ impl TaskView {
 }
 
 /// Cached task snapshots and relation indexes.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct TaskCache {
     /// Chronologically sorted task views.
     pub tasks: Vec<TaskView>,

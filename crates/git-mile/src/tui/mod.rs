@@ -1,5 +1,6 @@
 use std::env;
 use std::io::{self, Stdout};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -15,6 +16,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 use tracing::subscriber::NoSubscriber;
 
 use crate::config::WorkflowConfig;
+use crate::task_repository::TaskRepository;
 
 mod app;
 mod clipboard;
@@ -50,13 +52,18 @@ pub fn run(store: GitStore, workflow: WorkflowConfig) -> Result<()> {
     result
 }
 
+#[allow(clippy::arc_with_non_send_sync)]
 fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     store: GitStore,
     workflow: WorkflowConfig,
 ) -> Result<()> {
     let actor = resolve_actor();
-    let app = App::new(store, workflow)?;
+    let store_arc = Arc::new(store);
+    let store_arc_clone = Arc::clone(&store_arc);
+    let store_arc_for_repo = Arc::new(store_arc_clone);
+    let repository = TaskRepository::new(store_arc_for_repo);
+    let app = App::new(store_arc, Arc::new(repository), workflow)?;
     let mut ui = Ui::new(app, actor);
 
     let mut last_tick = Instant::now();

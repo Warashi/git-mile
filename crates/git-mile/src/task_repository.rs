@@ -2,20 +2,20 @@
 
 use anyhow::{Result, anyhow};
 use git_mile_core::{TaskFilter, TaskSnapshot, id::TaskId};
-use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use time::OffsetDateTime;
 
+use crate::task_cache::TaskCache;
 use crate::task_writer::TaskStore;
 
 /// Repository that caches task snapshots and provides efficient access.
 pub struct TaskRepository<S> {
     store: Arc<S>,
-    cache: Arc<RwLock<TaskCache>>,
+    cache: Arc<RwLock<CacheState>>,
 }
 
-struct TaskCache {
-    snapshots: HashMap<TaskId, TaskSnapshot>,
+struct CacheState {
+    cache: TaskCache,
     last_refresh: Option<OffsetDateTime>,
 }
 
@@ -24,8 +24,8 @@ impl<S: TaskStore> TaskRepository<S> {
     pub fn new(store: Arc<S>) -> Self {
         Self {
             store,
-            cache: Arc::new(RwLock::new(TaskCache {
-                snapshots: HashMap::new(),
+            cache: Arc::new(RwLock::new(CacheState {
+                cache: TaskCache::default(),
                 last_refresh: None,
             })),
         }
@@ -36,36 +36,17 @@ impl<S: TaskStore> TaskRepository<S> {
     /// # Errors
     /// Returns an error if loading tasks from the store fails.
     pub fn refresh_if_stale(&self) -> Result<()> {
-        let mut cache = self
+        let mut state = self
             .cache
             .write()
             .map_err(|_| anyhow!("Failed to lock cache"))?;
 
-        if let Some(last_refresh) = cache.last_refresh {
-            // Differential update
-            let modified_tasks = self
-                .store
-                .list_tasks_modified_since(last_refresh)
-                .map_err(Into::into)?;
-
-            for task_id in modified_tasks {
-                let events = self.store.load_events(task_id).map_err(Into::into)?;
-                let snapshot = TaskSnapshot::replay(&events);
-                cache.snapshots.insert(task_id, snapshot);
-            }
-        } else {
-            // Initial full load
-            let all_tasks = self.store.list_tasks().map_err(Into::into)?;
-
-            for task_id in all_tasks {
-                let events = self.store.load_events(task_id).map_err(Into::into)?;
-                let snapshot = TaskSnapshot::replay(&events);
-                cache.snapshots.insert(task_id, snapshot);
-            }
-        }
-
-        cache.last_refresh = Some(OffsetDateTime::now_utc());
-        drop(cache);
+        // For now, always do a full reload using TaskCache::load
+        // TODO: Implement differential updates in the future
+        let loaded_cache = TaskCache::load(&*self.store).map_err(Into::into)?;
+        state.cache = loaded_cache;
+        state.last_refresh = Some(OffsetDateTime::now_utc());
+        drop(state);
         Ok(())
     }
 
@@ -76,21 +57,15 @@ impl<S: TaskStore> TaskRepository<S> {
     pub fn list_snapshots(&self, filter: Option<&TaskFilter>) -> Result<Vec<TaskSnapshot>> {
         self.refresh_if_stale()?;
 
-        let snapshots = {
-            let cache = self
-                .cache
-                .read()
-                .map_err(|_| anyhow!("Failed to lock cache"))?;
+        let state = self
+            .cache
+            .read()
+            .map_err(|_| anyhow!("Failed to lock cache"))?;
 
-            cache.snapshots.values().cloned().collect::<Vec<_>>()
-        };
-
-        let mut filtered = snapshots;
-        if let Some(filter) = filter {
-            filtered.retain(|s| filter.matches(s));
-        }
-
-        Ok(filtered)
+        Ok(filter.map_or_else(
+            || state.cache.snapshots().cloned().collect(),
+            |f| state.cache.filtered_snapshots(f),
+        ))
     }
 
     /// Get a single task snapshot by ID.
@@ -100,15 +75,17 @@ impl<S: TaskStore> TaskRepository<S> {
     pub fn get_snapshot(&self, task_id: TaskId) -> Result<TaskSnapshot> {
         self.refresh_if_stale()?;
 
-        let cache = self
+        let state = self
             .cache
             .read()
             .map_err(|_| anyhow!("Failed to lock cache"))?;
 
-        cache
-            .snapshots
+        state
+            .cache
+            .task_index
             .get(&task_id)
-            .cloned()
+            .and_then(|&idx| state.cache.tasks.get(idx))
+            .map(|view| view.snapshot.clone())
             .ok_or_else(|| anyhow!("Task not found: {task_id}"))
     }
 
@@ -117,15 +94,30 @@ impl<S: TaskStore> TaskRepository<S> {
     /// # Errors
     /// Returns an error if the cache lock cannot be acquired.
     pub fn clear_cache(&self) -> Result<()> {
-        let mut cache = self
+        let mut state = self
             .cache
             .write()
             .map_err(|_| anyhow!("Failed to lock cache"))?;
 
-        cache.snapshots.clear();
-        cache.last_refresh = None;
-        drop(cache);
+        state.cache = TaskCache::default();
+        state.last_refresh = None;
+        drop(state);
         Ok(())
+    }
+
+    /// Get a clone of the current task cache.
+    ///
+    /// # Errors
+    /// Returns an error if refreshing the cache fails or the lock cannot be acquired.
+    pub fn get_cache(&self) -> Result<TaskCache> {
+        self.refresh_if_stale()?;
+
+        let state = self
+            .cache
+            .read()
+            .map_err(|_| anyhow!("Failed to lock cache"))?;
+
+        Ok(state.cache.clone())
     }
 }
 

@@ -215,12 +215,14 @@ mod tests {
     use super::*;
     use crate::config::WorkflowConfig;
     use crate::task_cache::TaskView;
+    use crate::task_repository::TaskRepository;
     use crate::tui::app::App;
     use anyhow::Error;
     use git_mile_core::TaskSnapshot;
     use git_mile_core::event::{Actor, Event};
     use git_mile_core::id::TaskId;
     use git2::Oid;
+    use std::sync::Arc;
 
     #[derive(Clone)]
     struct EmptyStore;
@@ -252,8 +254,13 @@ mod tests {
         }
     }
 
-    fn test_ui() -> Ui<EmptyStore> {
-        let app = App::new(EmptyStore, WorkflowConfig::default())
+    #[allow(clippy::arc_with_non_send_sync)]
+    fn test_ui() -> Ui<Arc<EmptyStore>> {
+        let store = Arc::new(EmptyStore);
+        let store_clone = Arc::clone(&store);
+        let store_for_repo = Arc::new(store_clone);
+        let repository = Arc::new(TaskRepository::new(store_for_repo));
+        let app = App::new(store, repository, WorkflowConfig::default())
             .unwrap_or_else(|err| panic!("failed to init app: {err}"));
         Ui::new(
             app,
@@ -264,7 +271,7 @@ mod tests {
         )
     }
 
-    fn seed_task(ui: &mut Ui<EmptyStore>) -> TaskId {
+    fn seed_task(ui: &mut Ui<Arc<EmptyStore>>) -> TaskId {
         let mut snapshot = TaskSnapshot::default();
         let id = TaskId::new();
         snapshot.id = id;

@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 use anyhow::{Context, Error, Result};
 use git_mile_core::TaskSnapshot;
@@ -7,13 +8,15 @@ use git_mile_core::id::TaskId;
 
 use super::task_visibility::TaskVisibility;
 use crate::config::WorkflowConfig;
-use crate::task_cache::{TaskCache, TaskView};
+use crate::task_cache::TaskView;
 use crate::task_patch::{TaskEditData, TaskPatch};
+use crate::task_repository::TaskRepository;
 use crate::task_writer::{CommentRequest, CreateTaskRequest, TaskStore, TaskWriter};
 
 /// Application state shared between the TUI event loop and rendering.
 pub(super) struct App<S: TaskStore> {
     writer: TaskWriter<S>,
+    repository: Arc<TaskRepository<S>>,
     workflow: WorkflowConfig,
     /// Cached task list sorted by最終更新順。フィルタ適用前の全体集合。
     pub tasks: Vec<TaskView>,
@@ -25,10 +28,11 @@ pub(super) struct App<S: TaskStore> {
 
 impl<S: TaskStore> App<S> {
     /// Create an application instance and eagerly load tasks.
-    pub(super) fn new(store: S, workflow: WorkflowConfig) -> Result<Self> {
+    pub(super) fn new(store: S, repository: Arc<TaskRepository<S>>, workflow: WorkflowConfig) -> Result<Self> {
         let writer = TaskWriter::new(store, workflow.clone());
         let mut app = Self {
             writer,
+            repository,
             workflow,
             tasks: Vec::new(),
             visibility: TaskVisibility::default(),
@@ -47,10 +51,6 @@ impl<S: TaskStore> App<S> {
 
     pub(super) const fn workflow(&self) -> &WorkflowConfig {
         &self.workflow
-    }
-
-    pub(super) const fn store(&self) -> &S {
-        self.writer.store()
     }
 
     pub(super) const fn visibility(&self) -> &TaskVisibility {
@@ -127,7 +127,7 @@ impl<S: TaskStore> App<S> {
     fn refresh_tasks_with(&mut self, preferred: Option<TaskId>) -> Result<()> {
         let keep_id = preferred.or_else(|| self.visibility.selected_task_id(&self.tasks));
 
-        let cache = TaskCache::load(self.store()).map_err(Self::map_store_error)?;
+        let cache = self.repository.get_cache()?;
         self.tasks = cache.tasks;
         self.task_index = cache.task_index;
         self.parents_index = cache.parents_index;
