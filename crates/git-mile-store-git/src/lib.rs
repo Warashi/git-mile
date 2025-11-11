@@ -11,7 +11,7 @@ use git2::{Commit, Oid, Repository, Signature, Sort};
 use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tracing::{debug, info};
 
 const EVENT_CACHE_CAPACITY: usize = 256;
@@ -27,7 +27,7 @@ const EVENT_CACHE_CAPACITY_NONZERO: NonZeroUsize =
 pub struct GitStore {
     repo: Repository,
     repo_path: PathBuf,
-    event_cache: Mutex<LruCache<Oid, Event>>,
+    event_cache: Arc<Mutex<LruCache<Oid, Event>>>,
 }
 
 impl GitStore {
@@ -42,7 +42,7 @@ impl GitStore {
         Ok(Self {
             repo,
             repo_path,
-            event_cache: Mutex::new(cache),
+            event_cache: Arc::new(Mutex::new(cache)),
         })
     }
 
@@ -239,8 +239,8 @@ impl GitStore {
 impl Clone for GitStore {
     /// Clone the `GitStore` by reopening the same repository.
     ///
-    /// Note: The event cache is not shared between clones.
-    /// Each clone starts with an empty cache.
+    /// Note: The event cache is **shared** between clones via `Arc`.
+    /// All clones benefit from the same LRU cache.
     ///
     /// # Panics
     /// Panics if the repository cannot be reopened at the saved path.
@@ -249,12 +249,10 @@ impl Clone for GitStore {
         let repo = Repository::open(&self.repo_path)
             .unwrap_or_else(|_| panic!("Failed to reopen repository at {}", self.repo_path.display()));
 
-        let cache = LruCache::new(EVENT_CACHE_CAPACITY_NONZERO);
-
         Self {
             repo,
             repo_path: self.repo_path.clone(),
-            event_cache: Mutex::new(cache),
+            event_cache: Arc::clone(&self.event_cache),
         }
     }
 }
