@@ -194,6 +194,38 @@ impl GitStore {
             Err(e) => Err(e.into()),
         }
     }
+
+    /// List task IDs that have been modified since the given timestamp.
+    ///
+    /// # Errors
+    /// Returns an error if reference enumeration or commit access fails.
+    pub fn list_tasks_modified_since(&self, since: time::OffsetDateTime) -> Result<Vec<TaskId>> {
+        let mut modified_tasks = Vec::new();
+        let since_unix = since.unix_timestamp();
+
+        for reference in self.repo.references_glob("refs/git-mile/tasks/*")? {
+            let reference = reference?;
+            let Some(name) = reference.name() else {
+                continue;
+            };
+            let Some(id_str) = name.strip_prefix("refs/git-mile/tasks/") else {
+                continue;
+            };
+            let Ok(task_id) = id_str.parse() else {
+                continue;
+            };
+
+            // Check the latest commit timestamp
+            if let Ok(commit) = reference.peel_to_commit() {
+                let commit_time = commit.time().seconds();
+                if commit_time >= since_unix {
+                    modified_tasks.push(task_id);
+                }
+            }
+        }
+
+        Ok(modified_tasks)
+    }
 }
 
 #[cfg(test)]

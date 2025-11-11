@@ -17,6 +17,8 @@ mod mcp;
 pub mod task_cache;
 /// Helpers for computing task diffs shared by CLI/TUI/MCP.
 pub mod task_patch;
+/// Task repository with caching.
+pub mod task_repository;
 pub mod task_writer;
 mod tui;
 
