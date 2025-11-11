@@ -16,6 +16,12 @@ pub trait TaskStore {
     /// Error type bubbled up from the backing store.
     type Error: Into<Error>;
 
+    /// Check if a task exists without loading its events.
+    ///
+    /// # Errors
+    /// Returns a store-specific error when the check fails.
+    fn task_exists(&self, task: TaskId) -> Result<bool, Self::Error>;
+
     /// Append a single event for the target task.
     ///
     /// # Errors
@@ -79,10 +85,11 @@ impl<S> TaskWriter<S> {
     where
         S: TaskStore,
     {
-        self.store
-            .load_events(task)
-            .map(|_| ())
-            .map_err(|_| TaskWriteError::MissingTask(task))
+        match self.store.task_exists(task) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(TaskWriteError::MissingTask(task)),
+            Err(e) => Err(Self::store_error(e)),
+        }
     }
 }
 
@@ -506,6 +513,10 @@ pub enum TaskWriteError {
 impl TaskStore for GitStore {
     type Error = Error;
 
+    fn task_exists(&self, task: TaskId) -> Result<bool, Self::Error> {
+        Self::task_exists(self, task)
+    }
+
     fn append_event(&self, event: &Event) -> Result<Oid, Self::Error> {
         Self::append_event(self, event)
     }
@@ -525,6 +536,10 @@ where
 {
     type Error = S::Error;
 
+    fn task_exists(&self, task: TaskId) -> Result<bool, Self::Error> {
+        (*self).task_exists(task)
+    }
+
     fn append_event(&self, event: &Event) -> Result<Oid, Self::Error> {
         (*self).append_event(event)
     }
@@ -540,6 +555,10 @@ where
 
 impl TaskStore for MutexGuard<'_, GitStore> {
     type Error = Error;
+
+    fn task_exists(&self, task: TaskId) -> Result<bool, Self::Error> {
+        GitStore::task_exists(self, task)
+    }
 
     fn append_event(&self, event: &Event) -> Result<Oid, Self::Error> {
         GitStore::append_event(self, event)

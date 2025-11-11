@@ -1,5 +1,9 @@
 //! Git-backed storage implementation for git-mile.
 
+mod error;
+
+pub use error::GitStoreError;
+
 use anyhow::{Context, Result, anyhow};
 use git_mile_core::event::Event;
 use git_mile_core::id::TaskId;
@@ -177,6 +181,19 @@ impl GitStore {
         }
         Ok(ids)
     }
+
+    /// Check if a task exists without loading its events.
+    ///
+    /// # Errors
+    /// Returns an error if the reference check fails.
+    pub fn task_exists(&self, task: TaskId) -> Result<bool> {
+        let refname = Self::refname(&task);
+        match self.repo.find_reference(&refname) {
+            Ok(_) => Ok(true),
+            Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(false),
+            Err(e) => Err(e.into()),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -344,6 +361,57 @@ mod tests {
             }
             other => panic!("unexpected event kind: {other:?}"),
         }
+
+        fs::remove_dir_all(&base)?;
+        Ok(())
+    }
+
+    #[test]
+    fn task_exists_returns_true_for_existing_task() -> Result<()> {
+        let base = temp_repo_path()?;
+        Repository::init(&base)?;
+
+        let store = GitStore::open(&base)?;
+        let task = TaskId::new();
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+
+        // Task doesn't exist yet
+        assert!(!store.task_exists(task)?);
+
+        // Create task
+        let event = Event::new(
+            task,
+            &actor,
+            EventKind::TaskCreated {
+                title: "Test Task".into(),
+                labels: vec![],
+                assignees: vec![],
+                description: None,
+                state: None,
+                state_kind: None,
+            },
+        );
+        store.append_event(&event)?;
+
+        // Task now exists
+        assert!(store.task_exists(task)?);
+
+        fs::remove_dir_all(&base)?;
+        Ok(())
+    }
+
+    #[test]
+    fn task_exists_returns_false_for_nonexistent_task() -> Result<()> {
+        let base = temp_repo_path()?;
+        Repository::init(&base)?;
+
+        let store = GitStore::open(&base)?;
+        let task = TaskId::new();
+
+        assert!(!store.task_exists(task)?);
 
         fs::remove_dir_all(&base)?;
         Ok(())
