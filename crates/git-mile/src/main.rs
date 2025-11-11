@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
+use std::sync::Arc;
 use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
 
 use commands::TaskService;
@@ -166,9 +167,13 @@ fn execute_command(repo_path: &str, command: Command) -> Result<()> {
         }
 
         (other, workflow) => {
-            let store = GitStore::open(repo_path)?;
+            #[allow(clippy::arc_with_non_send_sync)]
+            let store = Arc::new(GitStore::open(repo_path)?);
+            #[allow(clippy::arc_with_non_send_sync)]
+            let store_for_repo = Arc::new(Arc::clone(&store));
+            let repository = task_repository::TaskRepository::new(store_for_repo);
             let service = TaskService::new(store, workflow);
-            commands::run(other, &service)
+            commands::run(other, &service, &repository)
         }
     }
 }

@@ -1,11 +1,10 @@
 use anyhow::{Result, anyhow};
 use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
-use git_mile_core::{TaskFilter, TaskSnapshot};
+use git_mile_core::TaskSnapshot;
 use git2::Oid;
 
 use crate::config::WorkflowConfig;
-use crate::task_cache::TaskCache;
 use crate::task_writer::{CommentRequest, CreateTaskRequest, TaskStore, TaskWriter};
 
 /// Service façade that encapsulates all task-related side effects.
@@ -96,15 +95,6 @@ impl<S: TaskStore> TaskService<S> {
         let events = self.store().load_events(task).map_err(Into::into)?;
         Ok(TaskSnapshot::replay(&events))
     }
-
-    pub fn list_snapshots(&self, filter: &TaskFilter) -> Result<Vec<TaskSnapshot>> {
-        let cache = TaskCache::load(self.store()).map_err(Into::into)?;
-        if filter.is_empty() {
-            Ok(cache.snapshots().cloned().collect())
-        } else {
-            Ok(cache.filtered_snapshots(filter))
-        }
-    }
 }
 
 pub struct CreateTaskInput {
@@ -144,6 +134,7 @@ mod tests {
     use super::*;
     use crate::config::{WorkflowConfig, WorkflowState};
     use git_mile_core::event::{Event, EventKind};
+    use git_mile_core::TaskFilter;
     use std::collections::{HashMap, HashSet};
     use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -245,15 +236,18 @@ mod tests {
         }
     }
 
-    fn service_with_store() -> (TaskService<MockStore>, MockStore) {
+    fn service_with_store() -> (TaskService<std::sync::Arc<MockStore>>, crate::task_repository::TaskRepository<std::sync::Arc<MockStore>>, MockStore) {
         let store = MockStore::default();
-        let service = TaskService::new(store.clone(), WorkflowConfig::unrestricted());
-        (service, store)
+        let store_arc = std::sync::Arc::new(store.clone());
+        let store_arc_arc = std::sync::Arc::new(std::sync::Arc::clone(&store_arc));
+        let repository = crate::task_repository::TaskRepository::new(store_arc_arc);
+        let service = TaskService::new(store_arc, WorkflowConfig::unrestricted());
+        (service, repository, store)
     }
 
     #[test]
     fn create_task_links_parents_and_validates_existence() -> Result<()> {
-        let (service, store) = service_with_store();
+        let (service, _repository, store) = service_with_store();
 
         // First create a parent task
         let parent_output = service.create_with_parents(CreateTaskInput {
@@ -365,7 +359,7 @@ mod tests {
 
     #[test]
     fn create_task_errors_when_parent_missing() {
-        let (service, store) = service_with_store();
+        let (service, _repository, store) = service_with_store();
         let parent = TaskId::new();
         store.fail_on_load(parent);
 
@@ -384,7 +378,7 @@ mod tests {
 
     #[test]
     fn add_comment_appends_event() -> Result<()> {
-        let (service, store) = service_with_store();
+        let (service, _repository, store) = service_with_store();
 
         // First create a task
         let create_output = service.create_with_parents(CreateTaskInput {
@@ -421,7 +415,7 @@ mod tests {
 
     #[test]
     fn list_snapshots_applies_filters() -> Result<()> {
-        let (service, store) = service_with_store();
+        let (_service, repository, store) = service_with_store();
         let matching = TaskId::new();
         let skipped = TaskId::new();
         store.set_list(vec![matching, skipped]);
@@ -458,7 +452,7 @@ mod tests {
         filter.states.insert("state/todo".into());
         filter.labels.insert("label/docs".into());
 
-        let snapshots = service.list_snapshots(&filter)?;
+        let snapshots = repository.list_snapshots(Some(&filter))?;
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].id, matching);
         Ok(())

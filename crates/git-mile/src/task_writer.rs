@@ -602,3 +602,33 @@ impl TaskStore for MutexGuard<'_, GitStore> {
         GitStore::list_tasks_modified_since(self, since)
     }
 }
+
+impl<S> TaskStore for std::sync::Arc<S>
+where
+    S: TaskStore,
+{
+    type Error = S::Error;
+
+    fn task_exists(&self, task: TaskId) -> Result<bool, Self::Error> {
+        (**self).task_exists(task)
+    }
+
+    fn append_event(&self, event: &Event) -> Result<Oid, Self::Error> {
+        (**self).append_event(event)
+    }
+
+    fn load_events(&self, task: TaskId) -> Result<Vec<Event>, Self::Error> {
+        (**self).load_events(task)
+    }
+
+    fn list_tasks(&self) -> Result<Vec<TaskId>, Self::Error> {
+        (**self).list_tasks()
+    }
+
+    fn list_tasks_modified_since(
+        &self,
+        since: time::OffsetDateTime,
+    ) -> Result<Vec<TaskId>, Self::Error> {
+        (**self).list_tasks_modified_since(since)
+    }
+}

@@ -10,9 +10,14 @@ use crate::filter_util::TaskFilterBuilder;
 use crate::{Command, LsFormat};
 
 use super::service::{CommentInput, CreateTaskInput, TaskService};
+use crate::task_repository::TaskRepository;
 use crate::task_writer::TaskStore;
 
-pub fn run<S: TaskStore>(command: Command, service: &TaskService<S>) -> Result<()> {
+pub fn run<S: TaskStore, R: TaskStore>(
+    command: Command,
+    service: &TaskService<S>,
+    repository: &TaskRepository<R>,
+) -> Result<()> {
     match command {
         Command::New {
             title,
@@ -55,6 +60,7 @@ pub fn run<S: TaskStore>(command: Command, service: &TaskService<S>) -> Result<(
             format,
         } => handle_ls(
             service,
+            repository,
             states,
             labels,
             assignees,
@@ -130,8 +136,9 @@ fn handle_show<S: TaskStore>(service: &TaskService<S>, task: &str) -> Result<()>
 }
 
 #[allow(clippy::too_many_arguments)]
-fn handle_ls<S: TaskStore>(
+fn handle_ls<S: TaskStore, R: TaskStore>(
     service: &TaskService<S>,
+    repository: &TaskRepository<R>,
     states: Vec<String>,
     labels: Vec<String>,
     assignees: Vec<String>,
@@ -162,7 +169,7 @@ fn handle_ls<S: TaskStore>(
         text,
     })?;
     let filter_empty = filter.is_empty();
-    let tasks = service.list_snapshots(&filter)?;
+    let tasks = repository.list_snapshots(Some(&filter))?;
 
     if tasks.is_empty() {
         if filter_empty {
@@ -373,10 +380,13 @@ mod tests {
         mutex.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn service_with_store() -> (TaskService<MockStore>, MockStore) {
+    fn service_with_store() -> (TaskService<std::sync::Arc<MockStore>>, TaskRepository<std::sync::Arc<MockStore>>, MockStore) {
         let store = MockStore::default();
-        let service = TaskService::new(store.clone(), WorkflowConfig::unrestricted());
-        (service, store)
+        let store_arc = std::sync::Arc::new(store.clone());
+        let store_arc_arc = std::sync::Arc::new(std::sync::Arc::clone(&store_arc));
+        let repository = TaskRepository::new(store_arc_arc);
+        let service = TaskService::new(store_arc, WorkflowConfig::unrestricted());
+        (service, repository, store)
     }
 
     #[test]
@@ -497,7 +507,7 @@ mod tests {
 
     #[test]
     fn run_new_dispatches_to_service() -> Result<()> {
-        let (service, store) = service_with_store();
+        let (service, repository, store) = service_with_store();
         run(
             Command::New {
                 title: "via run".into(),
@@ -510,6 +520,7 @@ mod tests {
                 actor_email: "run@example.invalid".into(),
             },
             &service,
+            &repository,
         )?;
 
         let events = store.appended();
@@ -520,7 +531,7 @@ mod tests {
 
     #[test]
     fn run_comment_dispatches_to_service() -> Result<()> {
-        let (service, store) = service_with_store();
+        let (service, repository, store) = service_with_store();
 
         // First create a task
         run(
@@ -535,6 +546,7 @@ mod tests {
                 actor_email: "alice@example.invalid".into(),
             },
             &service,
+            &repository,
         )?;
 
         // Get the created task ID
@@ -550,6 +562,7 @@ mod tests {
                 actor_email: "alice@example.invalid".into(),
             },
             &service,
+            &repository,
         )?;
 
         let events = store.appended();
@@ -561,7 +574,7 @@ mod tests {
 
     #[test]
     fn run_ls_lists_all_tasks() -> Result<()> {
-        let (service, store) = service_with_store();
+        let (service, repository, store) = service_with_store();
         let task = TaskId::new();
         store.set_list(vec![task]);
         run(
@@ -579,6 +592,7 @@ mod tests {
                 format: LsFormat::Table,
             },
             &service,
+            &repository,
         )?;
         assert_eq!(store.list_calls(), 1);
         assert_eq!(store.load_calls(), vec![task]);
@@ -587,13 +601,14 @@ mod tests {
 
     #[test]
     fn run_show_materializes_snapshot() -> Result<()> {
-        let (service, store) = service_with_store();
+        let (service, repository, store) = service_with_store();
         let task = TaskId::new();
         run(
             Command::Show {
                 task: task.to_string(),
             },
             &service,
+            &repository,
         )?;
 
         let calls = store.load_calls();
