@@ -19,12 +19,16 @@ use crate::config::WorkflowConfig;
 mod app;
 mod clipboard;
 mod editor;
+mod handlers;
 mod task_visibility;
 mod terminal;
-mod ui;
+mod tree_view;
+mod view;
+mod widgets;
 
 use self::app::App;
-use self::ui::{Ui, handle_ui_action};
+use self::handlers::handle_ui_action;
+use self::view::Ui;
 
 /// Launch the interactive TUI.
 pub fn run(store: GitStore, workflow: WorkflowConfig) -> Result<()> {

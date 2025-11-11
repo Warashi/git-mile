@@ -1,7 +1,8 @@
 use super::app::*;
 use super::clipboard::*;
 use super::editor::*;
-use super::ui::*;
+use super::view::*;
+use super::widgets::truncate_with_ellipsis;
 use super::*;
 use crate::config::{StateKind, WorkflowState};
 use crate::task_cache::TaskView;
