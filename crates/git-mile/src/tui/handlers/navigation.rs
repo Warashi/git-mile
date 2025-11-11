@@ -243,6 +243,13 @@ mod tests {
         fn list_tasks(&self) -> Result<Vec<TaskId>, Self::Error> {
             Ok(Vec::new())
         }
+
+        fn list_tasks_modified_since(
+            &self,
+            _since: time::OffsetDateTime,
+        ) -> Result<Vec<TaskId>, Self::Error> {
+            Ok(Vec::new())
+        }
     }
 
     fn test_ui() -> Ui<EmptyStore> {

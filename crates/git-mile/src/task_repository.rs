@@ -2,14 +2,15 @@
 
 use anyhow::{Result, anyhow};
 use git_mile_core::{TaskFilter, TaskSnapshot, id::TaskId};
-use git_mile_store_git::GitStore;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use time::OffsetDateTime;
 
+use crate::task_writer::TaskStore;
+
 /// Repository that caches task snapshots and provides efficient access.
-pub struct TaskRepository {
-    store: Arc<GitStore>,
+pub struct TaskRepository<S> {
+    store: Arc<S>,
     cache: Arc<RwLock<TaskCache>>,
 }
 
@@ -18,9 +19,9 @@ struct TaskCache {
     last_refresh: Option<OffsetDateTime>,
 }
 
-impl TaskRepository {
+impl<S: TaskStore> TaskRepository<S> {
     /// Create a new repository wrapping the given store.
-    pub fn new(store: Arc<GitStore>) -> Self {
+    pub fn new(store: Arc<S>) -> Self {
         Self {
             store,
             cache: Arc::new(RwLock::new(TaskCache {
@@ -42,19 +43,22 @@ impl TaskRepository {
 
         if let Some(last_refresh) = cache.last_refresh {
             // Differential update
-            let modified_tasks = self.store.list_tasks_modified_since(last_refresh)?;
+            let modified_tasks = self
+                .store
+                .list_tasks_modified_since(last_refresh)
+                .map_err(Into::into)?;
 
             for task_id in modified_tasks {
-                let events = self.store.load_events(task_id)?;
+                let events = self.store.load_events(task_id).map_err(Into::into)?;
                 let snapshot = TaskSnapshot::replay(&events);
                 cache.snapshots.insert(task_id, snapshot);
             }
         } else {
             // Initial full load
-            let all_tasks = self.store.list_tasks()?;
+            let all_tasks = self.store.list_tasks().map_err(Into::into)?;
 
             for task_id in all_tasks {
-                let events = self.store.load_events(task_id)?;
+                let events = self.store.load_events(task_id).map_err(Into::into)?;
                 let snapshot = TaskSnapshot::replay(&events);
                 cache.snapshots.insert(task_id, snapshot);
             }
@@ -130,9 +134,10 @@ impl TaskRepository {
 mod tests {
     use super::*;
     use git_mile_core::event::{Actor, Event, EventKind};
+    use git_mile_store_git::GitStore;
     use tempfile::TempDir;
 
-    fn setup_test_repo() -> (TempDir, TaskRepository) {
+    fn setup_test_repo() -> (TempDir, TaskRepository<GitStore>) {
         let temp_dir = TempDir::new().expect("create temp dir");
         let repo_path = temp_dir.path();
         git2::Repository::init(repo_path).expect("init git repo");

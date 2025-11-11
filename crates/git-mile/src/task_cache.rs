@@ -197,6 +197,14 @@ mod tests {
         fn list_tasks(&self) -> Result<Vec<TaskId>, Self::Error> {
             Ok(self.tasks.borrow().clone())
         }
+
+        fn list_tasks_modified_since(
+            &self,
+            _since: time::OffsetDateTime,
+        ) -> Result<Vec<TaskId>, Self::Error> {
+            // For testing, return all tasks
+            self.list_tasks()
+        }
     }
 
     fn fixed_task_id(n: u8) -> TaskId {

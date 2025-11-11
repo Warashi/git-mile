@@ -150,6 +150,14 @@ impl TaskStore for MockStore {
         *counter = counter.wrapping_add(1);
         Ok(oid)
     }
+
+    fn list_tasks_modified_since(
+        &self,
+        _since: time::OffsetDateTime,
+    ) -> Result<Vec<TaskId>, Self::Error> {
+        // For testing, return all tasks
+        self.list_tasks()
+    }
 }
 
 fn fake_oid(counter: u8) -> Oid {

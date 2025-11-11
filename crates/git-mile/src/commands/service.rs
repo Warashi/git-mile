@@ -200,6 +200,14 @@ mod tests {
             *guard(&self.inner.list_calls) += 1;
             Ok(guard(&self.inner.list).clone())
         }
+
+        fn list_tasks_modified_since(
+            &self,
+            _since: time::OffsetDateTime,
+        ) -> Result<Vec<TaskId>, Self::Error> {
+            // For testing, return all tasks
+            self.list_tasks()
+        }
     }
 
     impl MockStore {

@@ -39,6 +39,15 @@ pub trait TaskStore {
     /// # Errors
     /// Returns a store-specific error when listing fails.
     fn list_tasks(&self) -> Result<Vec<TaskId>, Self::Error>;
+
+    /// List task IDs that have been modified since the given timestamp.
+    ///
+    /// # Errors
+    /// Returns a store-specific error when the query fails.
+    fn list_tasks_modified_since(
+        &self,
+        since: time::OffsetDateTime,
+    ) -> Result<Vec<TaskId>, Self::Error>;
 }
 
 /// High-level service that validates inputs and emits task events.
@@ -528,6 +537,13 @@ impl TaskStore for GitStore {
     fn list_tasks(&self) -> Result<Vec<TaskId>, Self::Error> {
         Self::list_tasks(self)
     }
+
+    fn list_tasks_modified_since(
+        &self,
+        since: time::OffsetDateTime,
+    ) -> Result<Vec<TaskId>, Self::Error> {
+        Self::list_tasks_modified_since(self, since)
+    }
 }
 
 impl<S> TaskStore for &S
@@ -551,6 +567,13 @@ where
     fn list_tasks(&self) -> Result<Vec<TaskId>, Self::Error> {
         (*self).list_tasks()
     }
+
+    fn list_tasks_modified_since(
+        &self,
+        since: time::OffsetDateTime,
+    ) -> Result<Vec<TaskId>, Self::Error> {
+        (*self).list_tasks_modified_since(since)
+    }
 }
 
 impl TaskStore for MutexGuard<'_, GitStore> {
@@ -570,5 +593,12 @@ impl TaskStore for MutexGuard<'_, GitStore> {
 
     fn list_tasks(&self) -> Result<Vec<TaskId>, Self::Error> {
         GitStore::list_tasks(self)
+    }
+
+    fn list_tasks_modified_since(
+        &self,
+        since: time::OffsetDateTime,
+    ) -> Result<Vec<TaskId>, Self::Error> {
+        GitStore::list_tasks_modified_since(self, since)
     }
 }
