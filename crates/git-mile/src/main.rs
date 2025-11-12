@@ -5,24 +5,12 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::sync::Arc;
 use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
 
-use commands::TaskService;
-use config::ProjectConfig;
+use git_mile_app::{ProjectConfig, TaskService};
 use git_mile_store_git::GitStore;
 use rmcp::ServiceExt;
 
-/// Async storage abstraction for MCP integration.
-pub mod async_task_store;
 mod commands;
-mod config;
-mod filter_util;
 mod mcp;
-/// Shared task snapshot cache utilities.
-pub mod task_cache;
-/// Helpers for computing task diffs shared by CLI/TUI/MCP.
-pub mod task_patch;
-/// Task repository with caching.
-pub mod task_repository;
-pub mod task_writer;
 mod tui;
 
 /// Git-backed tasks without touching the working tree.
@@ -173,7 +161,7 @@ fn execute_command(repo_path: &str, command: Command) -> Result<()> {
             let store = Arc::new(GitStore::open(repo_path)?);
             #[allow(clippy::arc_with_non_send_sync)]
             let store_for_repo = Arc::new(Arc::clone(&store));
-            let repository = task_repository::TaskRepository::new(store_for_repo);
+            let repository = git_mile_app::TaskRepository::new(store_for_repo);
             let service = TaskService::new(store, workflow);
             commands::run(other, &service, &repository)
         }

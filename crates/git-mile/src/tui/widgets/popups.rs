@@ -7,8 +7,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 
-use crate::config::WorkflowState;
-use crate::task_writer::TaskStore;
+use git_mile_app::WorkflowState;
+use git_mile_app::TaskStore;
 
 use super::super::tree_view::TreeNode;
 use super::super::view::Ui;

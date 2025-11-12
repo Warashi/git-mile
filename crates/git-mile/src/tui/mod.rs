@@ -15,8 +15,8 @@ use git2::Config;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use tracing::subscriber::NoSubscriber;
 
-use crate::config::WorkflowConfig;
-use crate::task_repository::TaskRepository;
+use git_mile_app::WorkflowConfig;
+use git_mile_app::TaskRepository;
 
 mod app;
 mod clipboard;

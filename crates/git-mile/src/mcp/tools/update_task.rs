@@ -1,8 +1,8 @@
 //! Update task tool implementation.
 
-use crate::config::WorkflowConfig;
+use git_mile_app::WorkflowConfig;
 use crate::mcp::params::UpdateTaskParams;
-use crate::task_writer::{DescriptionPatch, SetDiff, StatePatch, TaskUpdate, TaskWriteError, TaskWriter};
+use git_mile_app::{DescriptionPatch, SetDiff, StatePatch, TaskUpdate, TaskWriteError, TaskWriter};
 use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
 use git_mile_core::TaskSnapshot;

@@ -5,8 +5,8 @@ mod tools;
 
 pub use params::*;
 
-use crate::async_task_store::AsyncTaskRepository;
-use crate::config::WorkflowConfig;
+use git_mile_app::AsyncTaskRepository;
+use git_mile_app::WorkflowConfig;
 use git_mile_store_git::GitStore;
 use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::tool::{ToolCallContext, ToolRouter};

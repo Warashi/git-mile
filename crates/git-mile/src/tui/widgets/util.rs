@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::config::StateKind;
+use git_mile_app::StateKind;
 use unicode_segmentation::UnicodeSegmentation;
 
 pub(super) fn truncate_with_ellipsis(input: &str, max_graphemes: usize) -> Cow<'_, str> {

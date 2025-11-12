@@ -664,6 +664,7 @@ dependencies = [
  "base64",
  "clap",
  "crossterm 0.27.0",
+ "git-mile-app",
  "git-mile-core",
  "git-mile-store-git",
  "git2",
@@ -681,6 +682,22 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "git-mile-app"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "git-mile-core",
+ "git-mile-store-git",
+ "git2",
+ "serde",
+ "tempfile",
+ "thiserror",
+ "time",
+ "tokio",
+ "toml",
 ]
 
 [[package]]

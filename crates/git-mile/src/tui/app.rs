@@ -7,11 +7,11 @@ use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
 
 use super::task_visibility::TaskVisibility;
-use crate::config::WorkflowConfig;
-use crate::task_cache::TaskView;
-use crate::task_patch::{TaskEditData, TaskPatch};
-use crate::task_repository::TaskRepository;
-use crate::task_writer::{CommentRequest, CreateTaskRequest, TaskStore, TaskWriter};
+use git_mile_app::WorkflowConfig;
+use git_mile_app::TaskView;
+use git_mile_app::{TaskEditData, TaskPatch};
+use git_mile_app::TaskRepository;
+use git_mile_app::{CommentRequest, CreateTaskRequest, TaskStore, TaskWriter};
 
 /// Application state shared between the TUI event loop and rendering.
 pub(super) struct App<S: TaskStore> {

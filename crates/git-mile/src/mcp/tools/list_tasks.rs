@@ -1,7 +1,7 @@
 //! List tasks tool implementation.
 
-use crate::async_task_store::AsyncTaskRepository;
-use crate::filter_util::{FilterBuildError, TaskFilterBuilder};
+use git_mile_app::AsyncTaskRepository;
+use git_mile_app::{FilterBuildError, TaskFilterBuilder};
 use crate::mcp::params::ListTasksParams;
 use git_mile_core::id::TaskId;
 use git_mile_core::TaskFilter;

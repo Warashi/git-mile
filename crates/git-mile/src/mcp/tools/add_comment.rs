@@ -1,8 +1,8 @@
 //! Add comment tool implementation.
 
-use crate::config::WorkflowConfig;
+use git_mile_app::WorkflowConfig;
 use crate::mcp::params::AddCommentParams;
-use crate::task_writer::{CommentRequest, TaskWriteError, TaskWriter};
+use git_mile_app::{CommentRequest, TaskWriteError, TaskWriter};
 use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
 use git_mile_store_git::GitStore;

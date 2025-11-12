@@ -5,7 +5,7 @@ use git_mile_core::id::TaskId;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-use crate::task_writer::TaskStore;
+use git_mile_app::TaskStore;
 
 use super::super::editor::{
     comment_editor_template, edit_task_editor_template, filter_editor_template, new_task_editor_template,

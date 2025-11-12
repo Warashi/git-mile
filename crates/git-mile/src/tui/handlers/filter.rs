@@ -1,4 +1,4 @@
-use crate::task_writer::TaskStore;
+use git_mile_app::TaskStore;
 
 use super::super::editor::{parse_filter_editor_output, summarize_task_filter};
 use super::super::view::Ui;

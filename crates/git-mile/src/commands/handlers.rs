@@ -5,13 +5,11 @@ use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
 use git_mile_core::TaskFilter;
 
-use crate::config::WorkflowConfig;
-use crate::filter_util::TaskFilterBuilder;
 use crate::{Command, LsFormat};
-
-use super::service::{CommentInput, CreateTaskInput, TaskService};
-use crate::task_repository::TaskRepository;
-use crate::task_writer::TaskStore;
+use git_mile_app::{
+    CommentInput, CreateTaskInput, TaskFilterBuilder, TaskRepository, TaskService, TaskStore,
+    WorkflowConfig,
+};
 
 pub fn run<S: TaskStore, R: TaskStore>(
     command: Command,
@@ -284,10 +282,7 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-    use crate::config::WorkflowConfig;
-    use crate::task_writer::TaskStore;
-
-    use super::super::service::TaskService;
+    use git_mile_app::{TaskService, TaskStore, WorkflowConfig};
 
     #[derive(Clone, Default)]
     struct MockStore {

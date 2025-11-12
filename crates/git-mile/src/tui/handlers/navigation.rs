@@ -1,4 +1,4 @@
-use crate::task_writer::TaskStore;
+use git_mile_app::TaskStore;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
@@ -213,9 +213,9 @@ impl<S: TaskStore> Ui<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::WorkflowConfig;
-    use crate::task_cache::TaskView;
-    use crate::task_repository::TaskRepository;
+    use git_mile_app::WorkflowConfig;
+    use git_mile_app::TaskView;
+    use git_mile_app::TaskRepository;
     use crate::tui::app::App;
     use anyhow::Error;
     use git_mile_core::TaskSnapshot;

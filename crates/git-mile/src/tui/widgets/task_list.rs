@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState},
 };
 
-use crate::task_writer::TaskStore;
+use git_mile_app::TaskStore;
 
 use super::super::view::Ui;
 

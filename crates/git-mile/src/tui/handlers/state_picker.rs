@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::task_writer::TaskStore;
+use git_mile_app::TaskStore;
 
 use super::super::view::{DetailFocus, StatePickerOption, StatePickerState, Ui, UiAction};
 

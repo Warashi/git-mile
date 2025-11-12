@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use git_mile_core::TaskFilter;
 use git_mile_core::id::TaskId;
 
-use crate::task_cache::TaskView;
+use git_mile_app::TaskView;
 
 /// Manages task visibility, filters, and selection independent of IO.
 #[derive(Debug, Default)]

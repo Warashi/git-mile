@@ -85,7 +85,6 @@ impl Default for WorkflowConfig {
 
 impl WorkflowConfig {
     /// Configuration without workflow restrictions (used mainly in tests).
-    #[cfg(test)]
     pub const fn unrestricted() -> Self {
         Self {
             states: Vec::new(),
@@ -114,7 +113,6 @@ impl WorkflowConfig {
     }
 
     /// Construct a workflow configuration from explicit states.
-    #[cfg(test)]
     pub const fn from_states(states: Vec<WorkflowState>) -> Self {
         Self {
             states,
@@ -123,7 +121,6 @@ impl WorkflowConfig {
     }
 
     /// Construct workflow configuration with explicit default state.
-    #[cfg(test)]
     pub fn from_states_with_default(states: Vec<WorkflowState>, default_state: Option<&str>) -> Self {
         Self {
             states,
@@ -137,7 +134,7 @@ impl WorkflowConfig {
     }
 
     /// Iterate over allowed workflow states (if any).
-    pub(crate) fn states(&self) -> &[WorkflowState] {
+    pub fn states(&self) -> &[WorkflowState] {
         &self.states
     }
 
@@ -232,7 +229,6 @@ pub struct WorkflowState {
 
 impl WorkflowState {
     /// Create a workflow state with the given wire value.
-    #[cfg(test)]
     pub fn new(value: impl Into<String>) -> Self {
         Self {
             value: value.into(),

@@ -6,10 +6,10 @@ use git_mile_core::id::TaskId;
 use git_mile_core::{StateKindFilter, TaskFilter};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-use crate::filter_util::{TaskFilterBuilder, normalize_timestamp, parse_timestamp};
+use git_mile_app::{TaskFilterBuilder, normalize_timestamp, parse_timestamp};
 
 use super::app::NewTaskData;
-use crate::task_cache::TaskView;
+use git_mile_app::TaskView;
 
 pub(super) fn comment_editor_template(actor: &git_mile_core::event::Actor, task: TaskId) -> String {
     format!(

@@ -3,7 +3,7 @@ use std::io::Stdout;
 use anyhow::Result;
 use ratatui::{Terminal, backend::CrosstermBackend};
 
-use crate::task_writer::TaskStore;
+use git_mile_app::TaskStore;
 
 use super::view::{Ui, UiAction};
 

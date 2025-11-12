@@ -1,6 +1,6 @@
 use git_mile_core::id::TaskId;
 
-use crate::task_writer::TaskStore;
+use git_mile_app::TaskStore;
 
 use super::view::{DetailFocus, Ui};
 

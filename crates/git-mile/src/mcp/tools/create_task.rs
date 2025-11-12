@@ -1,8 +1,8 @@
 //! Create task tool implementation.
 
-use crate::config::WorkflowConfig;
+use git_mile_app::WorkflowConfig;
 use crate::mcp::params::CreateTaskParams;
-use crate::task_writer::{CreateTaskRequest, TaskWriteError, TaskWriter};
+use git_mile_app::{CreateTaskRequest, TaskWriteError, TaskWriter};
 use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
 use git_mile_core::TaskSnapshot;

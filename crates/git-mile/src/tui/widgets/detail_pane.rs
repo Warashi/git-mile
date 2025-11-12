@@ -9,8 +9,8 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
 };
 
-use crate::task_cache::TaskView;
-use crate::task_writer::TaskStore;
+use git_mile_app::TaskView;
+use git_mile_app::TaskStore;
 
 use super::super::view::Ui;
 use super::util::{state_kind_marker, truncate_with_ellipsis};

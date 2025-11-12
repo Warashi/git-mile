@@ -10,9 +10,9 @@ use ratatui::{
     style::{Color, Style},
 };
 
-use crate::config::StateKind;
-use crate::task_cache::TaskView;
-use crate::task_writer::TaskStore;
+use git_mile_app::StateKind;
+use git_mile_app::TaskView;
+use git_mile_app::TaskStore;
 
 use super::app::App;
 use super::clipboard::{ClipboardSink, default_clipboard};

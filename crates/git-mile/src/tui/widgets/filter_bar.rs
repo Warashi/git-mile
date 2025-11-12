@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use crate::task_writer::TaskStore;
+use git_mile_app::TaskStore;
 
 use super::super::editor::summarize_task_filter;
 use super::super::view::{DetailFocus, Message, Ui};

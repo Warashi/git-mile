@@ -1,6 +1,6 @@
 //! List workflow states tool implementation.
 
-use crate::config::WorkflowConfig;
+use git_mile_app::WorkflowConfig;
 use crate::mcp::params::{WorkflowStateEntry, WorkflowStatesResponse};
 use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
