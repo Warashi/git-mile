@@ -1,0 +1,24 @@
+[package]
+name = "git-mile-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Workspace crates
+git-mile-core = { path = "../git-mile-core" }
+git-mile-store-git = { path = "../git-mile-store-git" }
+
+# External dependencies
+anyhow = "1.0"
+thiserror = "2.0"
+git2 = { version = "0.18", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
+tokio = { version = "1", features = ["sync", "rt"] }
+
+[dev-dependencies]
+tempfile = "3.12"
+
+[lints]
+workspace = true

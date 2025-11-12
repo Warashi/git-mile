@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
   "crates/git-mile",
+  "crates/git-mile-app",
   "crates/git-mile-core",
   "crates/git-mile-store-git"
 ]
