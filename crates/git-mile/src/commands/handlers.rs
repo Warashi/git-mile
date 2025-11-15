@@ -1,14 +1,13 @@
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
+use git_mile_core::TaskFilter;
 use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
-use git_mile_core::TaskFilter;
 
 use crate::{Command, LsFormat};
 use git_mile_app::{
-    CommentInput, CreateTaskInput, TaskFilterBuilder, TaskRepository, TaskService, TaskStore,
-    WorkflowConfig,
+    CommentInput, CreateTaskInput, TaskFilterBuilder, TaskRepository, TaskService, TaskStore, WorkflowConfig,
 };
 
 pub fn run<S: TaskStore, R: TaskStore>(
@@ -277,8 +276,8 @@ mod tests {
     use super::*;
     use crate::{Command, LsFormat};
     use anyhow::{Result, anyhow};
-    use git_mile_core::event::{Event, EventKind};
     use git_mile_core::StateKind;
+    use git_mile_core::event::{Event, EventKind};
     use std::collections::{HashMap, HashSet};
     use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -375,7 +374,11 @@ mod tests {
         mutex.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn service_with_store() -> (TaskService<std::sync::Arc<MockStore>>, TaskRepository<std::sync::Arc<MockStore>>, MockStore) {
+    fn service_with_store() -> (
+        TaskService<std::sync::Arc<MockStore>>,
+        TaskRepository<std::sync::Arc<MockStore>>,
+        MockStore,
+    ) {
         let store = MockStore::default();
         let store_arc = std::sync::Arc::new(store.clone());
         let store_arc_arc = std::sync::Arc::new(std::sync::Arc::clone(&store_arc));

@@ -4,9 +4,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result, anyhow, bail};
-pub use git_mile_core::StateKind;
+use anyhow::{anyhow, bail, Context, Result};
 use git2::Repository;
+pub use git_mile_core::StateKind;
 use serde::Deserialize;
 
 const CONFIG_DIR: &str = ".git-mile";
@@ -343,10 +343,9 @@ mod tests {
         let Err(err) = ProjectConfig::from_workdir(dir.path()) else {
             panic!("empty default state should error");
         };
-        assert!(
-            err.to_string()
-                .contains("default workflow state must not be empty")
-        );
+        assert!(err
+            .to_string()
+            .contains("default workflow state must not be empty"));
         Ok(())
     }
 

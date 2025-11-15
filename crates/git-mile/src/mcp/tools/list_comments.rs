@@ -1,17 +1,17 @@
 //! List comments tool implementation.
 
 use crate::mcp::params::{ListCommentsParams, TaskCommentEntry};
+use git_mile_core::OrderedEvents;
 use git_mile_core::event::EventKind;
 use git_mile_core::id::{EventId, TaskId};
-use git_mile_core::OrderedEvents;
 use git_mile_store_git::GitStore;
+use rmcp::ErrorData as McpError;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content};
-use rmcp::ErrorData as McpError;
 use std::collections::HashMap;
 use std::sync::Arc;
-use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use tokio::sync::Mutex;
 
 fn format_timestamp(ts: OffsetDateTime) -> Result<String, McpError> {

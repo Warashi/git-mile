@@ -1,9 +1,9 @@
 //! List workflow states tool implementation.
 
-use git_mile_app::WorkflowConfig;
 use crate::mcp::params::{WorkflowStateEntry, WorkflowStatesResponse};
-use rmcp::model::{CallToolResult, Content};
+use git_mile_app::WorkflowConfig;
 use rmcp::ErrorData as McpError;
+use rmcp::model::{CallToolResult, Content};
 
 /// List workflow states configured for this repository.
 #[allow(clippy::unused_async)]

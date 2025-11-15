@@ -1,11 +1,11 @@
 //! Async storage abstraction for MCP integration.
 
-use anyhow::{Error, Result, anyhow};
+use anyhow::{anyhow, Error, Result};
+use git2::Oid;
 use git_mile_core::event::Event;
 use git_mile_core::id::TaskId;
 use git_mile_core::{TaskFilter, TaskSnapshot};
 use git_mile_store_git::{GitStore, GitStoreError};
-use git2::Oid;
 use std::sync::Arc;
 use time::OffsetDateTime;
 use tokio::sync::Mutex;

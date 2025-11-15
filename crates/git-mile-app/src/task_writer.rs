@@ -1,15 +1,15 @@
 //! Shared task mutation service used by CLI/TUI/MCP surfaces.
 
 use anyhow::Error;
+use git2::Oid;
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::{EventId, TaskId};
 use git_mile_store_git::GitStore;
-use git2::Oid;
 use tokio::sync::MutexGuard;
 
 use crate::config::WorkflowConfig;
 
-pub use crate::task_patch::{DescriptionPatch, SetDiff, StatePatch, TaskUpdate, diff_sets};
+pub use crate::task_patch::{diff_sets, DescriptionPatch, SetDiff, StatePatch, TaskUpdate};
 
 /// Minimal storage abstraction required by [`TaskWriter`].
 pub trait TaskStore {
@@ -44,10 +44,7 @@ pub trait TaskStore {
     ///
     /// # Errors
     /// Returns a store-specific error when the query fails.
-    fn list_tasks_modified_since(
-        &self,
-        since: time::OffsetDateTime,
-    ) -> Result<Vec<TaskId>, Self::Error>;
+    fn list_tasks_modified_since(&self, since: time::OffsetDateTime) -> Result<Vec<TaskId>, Self::Error>;
 }
 
 /// High-level service that validates inputs and emits task events.
@@ -538,10 +535,7 @@ impl TaskStore for GitStore {
         Self::list_tasks(self)
     }
 
-    fn list_tasks_modified_since(
-        &self,
-        since: time::OffsetDateTime,
-    ) -> Result<Vec<TaskId>, Self::Error> {
+    fn list_tasks_modified_since(&self, since: time::OffsetDateTime) -> Result<Vec<TaskId>, Self::Error> {
         Self::list_tasks_modified_since(self, since)
     }
 }
@@ -568,10 +562,7 @@ where
         (*self).list_tasks()
     }
 
-    fn list_tasks_modified_since(
-        &self,
-        since: time::OffsetDateTime,
-    ) -> Result<Vec<TaskId>, Self::Error> {
+    fn list_tasks_modified_since(&self, since: time::OffsetDateTime) -> Result<Vec<TaskId>, Self::Error> {
         (*self).list_tasks_modified_since(since)
     }
 }
@@ -595,10 +586,7 @@ impl TaskStore for MutexGuard<'_, GitStore> {
         GitStore::list_tasks(self)
     }
 
-    fn list_tasks_modified_since(
-        &self,
-        since: time::OffsetDateTime,
-    ) -> Result<Vec<TaskId>, Self::Error> {
+    fn list_tasks_modified_since(&self, since: time::OffsetDateTime) -> Result<Vec<TaskId>, Self::Error> {
         GitStore::list_tasks_modified_since(self, since)
     }
 }
@@ -625,10 +613,7 @@ where
         (**self).list_tasks()
     }
 
-    fn list_tasks_modified_since(
-        &self,
-        since: time::OffsetDateTime,
-    ) -> Result<Vec<TaskId>, Self::Error> {
+    fn list_tasks_modified_since(&self, since: time::OffsetDateTime) -> Result<Vec<TaskId>, Self::Error> {
         (**self).list_tasks_modified_since(since)
     }
 }

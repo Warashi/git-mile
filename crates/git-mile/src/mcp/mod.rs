@@ -12,11 +12,11 @@ use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::tool::{ToolCallContext, ToolRouter};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolRequestParam, CallToolResult, Implementation, InitializeResult, ListToolsResult,
-    ProtocolVersion, ServerCapabilities,
+    CallToolRequestParam, CallToolResult, Implementation, InitializeResult, ListToolsResult, ProtocolVersion,
+    ServerCapabilities,
 };
 use rmcp::service::{RequestContext, RoleServer};
-use rmcp::{tool, tool_router, ErrorData as McpError};
+use rmcp::{ErrorData as McpError, tool, tool_router};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -46,10 +46,7 @@ impl GitMileServer {
 
     /// List tasks with optional filters.
     #[tool(description = "List tasks in the repository, optionally filtered by state/label/assignee/text")]
-    async fn list_tasks(
-        &self,
-        params: Parameters<ListTasksParams>,
-    ) -> Result<CallToolResult, McpError> {
+    async fn list_tasks(&self, params: Parameters<ListTasksParams>) -> Result<CallToolResult, McpError> {
         tools::list_tasks::handle_list_tasks(self.repository.clone(), params).await
     }
 
@@ -61,10 +58,7 @@ impl GitMileServer {
 
     /// Fetch a single task snapshot by ID.
     #[tool(description = "Fetch a single task snapshot by ID")]
-    async fn get_task(
-        &self,
-        params: Parameters<GetTaskParams>,
-    ) -> Result<CallToolResult, McpError> {
+    async fn get_task(&self, params: Parameters<GetTaskParams>) -> Result<CallToolResult, McpError> {
         tools::get_task::handle_get_task(self.store.clone(), params).await
     }
 
@@ -90,10 +84,7 @@ impl GitMileServer {
     #[tool(
         description = "Create a new task with title, labels, assignees, description, state, and parent tasks"
     )]
-    async fn create_task(
-        &self,
-        params: Parameters<CreateTaskParams>,
-    ) -> Result<CallToolResult, McpError> {
+    async fn create_task(&self, params: Parameters<CreateTaskParams>) -> Result<CallToolResult, McpError> {
         tools::create_task::handle_create_task(self.store.clone(), self.workflow.clone(), params).await
     }
 
@@ -101,10 +92,7 @@ impl GitMileServer {
     #[tool(
         description = "Update an existing task's title, description, state, labels, assignees, or parent tasks"
     )]
-    async fn update_task(
-        &self,
-        params: Parameters<UpdateTaskParams>,
-    ) -> Result<CallToolResult, McpError> {
+    async fn update_task(&self, params: Parameters<UpdateTaskParams>) -> Result<CallToolResult, McpError> {
         tools::update_task::handle_update_task(self.store.clone(), self.workflow.clone(), params).await
     }
 
@@ -119,10 +107,7 @@ impl GitMileServer {
 
     /// Add a comment to a task.
     #[tool(description = "Add a comment to a task")]
-    async fn add_comment(
-        &self,
-        params: Parameters<AddCommentParams>,
-    ) -> Result<CallToolResult, McpError> {
+    async fn add_comment(&self, params: Parameters<AddCommentParams>) -> Result<CallToolResult, McpError> {
         tools::add_comment::handle_add_comment(self.store.clone(), self.workflow.clone(), params).await
     }
 }

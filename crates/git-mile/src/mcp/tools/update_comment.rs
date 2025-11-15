@@ -4,9 +4,9 @@ use crate::mcp::params::UpdateCommentParams;
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::{EventId, TaskId};
 use git_mile_store_git::GitStore;
+use rmcp::ErrorData as McpError;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content};
-use rmcp::ErrorData as McpError;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -34,9 +34,9 @@ pub async fn handle_update_comment(
         .load_events(task)
         .map_err(|e| McpError::invalid_params(format!("Task not found: {e}"), None))?;
 
-    let comment_exists = events.iter().any(
-        |ev| matches!(&ev.kind, EventKind::CommentAdded { comment_id: cid, .. } if *cid == comment_id),
-    );
+    let comment_exists = events
+        .iter()
+        .any(|ev| matches!(&ev.kind, EventKind::CommentAdded { comment_id: cid, .. } if *cid == comment_id));
 
     if !comment_exists {
         return Err(McpError::invalid_params(
@@ -73,8 +73,8 @@ pub async fn handle_update_comment(
         "status": "updated"
     });
 
-    let json_str = serde_json::to_string_pretty(&result)
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    let json_str =
+        serde_json::to_string_pretty(&result).map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
     Ok(CallToolResult::success(vec![Content::text(json_str)]))
 }

@@ -1,8 +1,8 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
+use git2::Oid;
 use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
 use git_mile_core::TaskSnapshot;
-use git2::Oid;
 
 use crate::config::WorkflowConfig;
 use crate::task_writer::{CommentRequest, CreateTaskRequest, TaskStore, TaskWriter};
@@ -236,7 +236,11 @@ mod tests {
         }
     }
 
-    fn service_with_store() -> (TaskService<std::sync::Arc<MockStore>>, crate::task_repository::TaskRepository<std::sync::Arc<MockStore>>, MockStore) {
+    fn service_with_store() -> (
+        TaskService<std::sync::Arc<MockStore>>,
+        crate::task_repository::TaskRepository<std::sync::Arc<MockStore>>,
+        MockStore,
+    ) {
         let store = MockStore::default();
         let store_arc = std::sync::Arc::new(store.clone());
         let store_arc_arc = std::sync::Arc::new(std::sync::Arc::clone(&store_arc));

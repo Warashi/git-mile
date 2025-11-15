@@ -1,14 +1,14 @@
 //! Add comment tool implementation.
 
-use git_mile_app::WorkflowConfig;
 use crate::mcp::params::AddCommentParams;
+use git_mile_app::WorkflowConfig;
 use git_mile_app::{CommentRequest, TaskWriteError, TaskWriter};
 use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
 use git_mile_store_git::GitStore;
+use rmcp::ErrorData as McpError;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content};
-use rmcp::ErrorData as McpError;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -69,8 +69,8 @@ pub async fn handle_add_comment(
         "status": "added"
     });
 
-    let json_str = serde_json::to_string_pretty(&response)
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    let json_str =
+        serde_json::to_string_pretty(&response).map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
     Ok(CallToolResult::success(vec![Content::text(json_str)]))
 }

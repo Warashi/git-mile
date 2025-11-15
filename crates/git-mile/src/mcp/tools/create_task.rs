@@ -1,15 +1,15 @@
 //! Create task tool implementation.
 
-use git_mile_app::WorkflowConfig;
 use crate::mcp::params::CreateTaskParams;
+use git_mile_app::WorkflowConfig;
 use git_mile_app::{CreateTaskRequest, TaskWriteError, TaskWriter};
+use git_mile_core::TaskSnapshot;
 use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
-use git_mile_core::TaskSnapshot;
 use git_mile_store_git::GitStore;
+use rmcp::ErrorData as McpError;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content};
-use rmcp::ErrorData as McpError;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -41,10 +41,7 @@ fn map_task_write_error(err: TaskWriteError) -> McpError {
     }
 }
 
-async fn load_snapshot(
-    store: Arc<Mutex<GitStore>>,
-    task: TaskId,
-) -> Result<TaskSnapshot, McpError> {
+async fn load_snapshot(store: Arc<Mutex<GitStore>>, task: TaskId) -> Result<TaskSnapshot, McpError> {
     let store_guard = store.lock().await;
     let events = store_guard
         .load_events(task)
@@ -86,10 +83,7 @@ pub async fn handle_create_task(
             },
         };
 
-        writer
-            .create_task(request)
-            .map_err(map_task_write_error)?
-            .task
+        writer.create_task(request).map_err(map_task_write_error)?.task
     };
     let snapshot = load_snapshot(store, task).await?;
 

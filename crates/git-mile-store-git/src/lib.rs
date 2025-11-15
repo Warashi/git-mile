@@ -17,11 +17,10 @@ use tracing::{debug, info};
 const EVENT_CACHE_CAPACITY: usize = 256;
 
 // SAFETY: 256 is non-zero
-const EVENT_CACHE_CAPACITY_NONZERO: NonZeroUsize =
-    match NonZeroUsize::new(EVENT_CACHE_CAPACITY) {
-        Some(n) => n,
-        None => unreachable!(),
-    };
+const EVENT_CACHE_CAPACITY_NONZERO: NonZeroUsize = match NonZeroUsize::new(EVENT_CACHE_CAPACITY) {
+    Some(n) => n,
+    None => unreachable!(),
+};
 
 /// Storage based on git refs under `refs/git-mile/tasks/*`.
 pub struct GitStore {

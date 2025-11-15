@@ -1,7 +1,7 @@
 //! Parameter definitions for MCP tools.
 
-use git_mile_core::event::Actor;
 use git_mile_core::StateKind;
+use git_mile_core::event::Actor;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

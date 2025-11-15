@@ -1,7 +1,7 @@
 //! Task repository with caching for efficient snapshot access.
 
-use anyhow::{Result, anyhow};
-use git_mile_core::{TaskFilter, TaskSnapshot, id::TaskId};
+use anyhow::{anyhow, Result};
+use git_mile_core::{id::TaskId, TaskFilter, TaskSnapshot};
 use std::sync::{Arc, RwLock};
 use time::OffsetDateTime;
 
@@ -36,10 +36,7 @@ impl<S: TaskStore> TaskRepository<S> {
     /// # Errors
     /// Returns an error if loading tasks from the store fails.
     pub fn refresh_if_stale(&self) -> Result<()> {
-        let mut state = self
-            .cache
-            .write()
-            .map_err(|_| anyhow!("Failed to lock cache"))?;
+        let mut state = self.cache.write().map_err(|_| anyhow!("Failed to lock cache"))?;
 
         // For now, always do a full reload using TaskCache::load
         // TODO: Implement differential updates in the future
@@ -57,10 +54,7 @@ impl<S: TaskStore> TaskRepository<S> {
     pub fn list_snapshots(&self, filter: Option<&TaskFilter>) -> Result<Vec<TaskSnapshot>> {
         self.refresh_if_stale()?;
 
-        let state = self
-            .cache
-            .read()
-            .map_err(|_| anyhow!("Failed to lock cache"))?;
+        let state = self.cache.read().map_err(|_| anyhow!("Failed to lock cache"))?;
 
         Ok(filter.map_or_else(
             || state.cache.snapshots().cloned().collect(),
@@ -75,10 +69,7 @@ impl<S: TaskStore> TaskRepository<S> {
     pub fn get_snapshot(&self, task_id: TaskId) -> Result<TaskSnapshot> {
         self.refresh_if_stale()?;
 
-        let state = self
-            .cache
-            .read()
-            .map_err(|_| anyhow!("Failed to lock cache"))?;
+        let state = self.cache.read().map_err(|_| anyhow!("Failed to lock cache"))?;
 
         state
             .cache
@@ -94,10 +85,7 @@ impl<S: TaskStore> TaskRepository<S> {
     /// # Errors
     /// Returns an error if the cache lock cannot be acquired.
     pub fn clear_cache(&self) -> Result<()> {
-        let mut state = self
-            .cache
-            .write()
-            .map_err(|_| anyhow!("Failed to lock cache"))?;
+        let mut state = self.cache.write().map_err(|_| anyhow!("Failed to lock cache"))?;
 
         state.cache = TaskCache::default();
         state.last_refresh = None;
@@ -112,10 +100,7 @@ impl<S: TaskStore> TaskRepository<S> {
     pub fn get_cache(&self) -> Result<TaskCache> {
         self.refresh_if_stale()?;
 
-        let state = self
-            .cache
-            .read()
-            .map_err(|_| anyhow!("Failed to lock cache"))?;
+        let state = self.cache.read().map_err(|_| anyhow!("Failed to lock cache"))?;
 
         Ok(state.cache.clone())
     }
