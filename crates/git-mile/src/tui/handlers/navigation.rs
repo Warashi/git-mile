@@ -1,8 +1,8 @@
-use git_mile_app::TaskStore;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use git_mile_app::TaskStore;
 
-use super::super::view::{CommentViewerState, DetailFocus, Ui, UiAction};
+use super::super::view::{CommentViewerState, DescriptionViewerState, DetailFocus, Ui, UiAction};
 
 impl<S: TaskStore> Ui<S> {
     pub(in crate::tui) fn handle_key(&mut self, key: KeyEvent) -> Result<Option<UiAction>> {
@@ -19,6 +19,7 @@ impl<S: TaskStore> Ui<S> {
             DetailFocus::TreeView => Ok(self.handle_tree_view_key(key)),
             DetailFocus::StatePicker => Ok(self.handle_state_picker_key(key)),
             DetailFocus::CommentViewer => Ok(self.handle_comment_viewer_key(key)),
+            DetailFocus::DescriptionViewer => Ok(self.handle_description_viewer_key(key)),
         }
     }
 
@@ -83,6 +84,10 @@ impl<S: TaskStore> Ui<S> {
                 self.open_comment_viewer();
                 Ok(None)
             }
+            KeyCode::Char('d' | 'D') => {
+                self.open_description_viewer();
+                Ok(None)
+            }
             KeyCode::Char('f' | 'F') => Ok(Some(UiAction::EditFilter)),
             _ => Ok(None),
         }
@@ -138,6 +143,32 @@ impl<S: TaskStore> Ui<S> {
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.comment_viewer_scroll_up(10);
+                None
+            }
+            _ => None,
+        }
+    }
+
+    const fn handle_description_viewer_key(&mut self, key: KeyEvent) -> Option<UiAction> {
+        match key.code {
+            KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
+                self.close_description_viewer();
+                None
+            }
+            KeyCode::Char('j' | 'J') => {
+                self.description_viewer_scroll_down(1);
+                None
+            }
+            KeyCode::Char('k' | 'K') => {
+                self.description_viewer_scroll_up(1);
+                None
+            }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.description_viewer_scroll_down(10);
+                None
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.description_viewer_scroll_up(10);
                 None
             }
             _ => None,
@@ -208,16 +239,45 @@ impl<S: TaskStore> Ui<S> {
             viewer.scroll_offset = viewer.scroll_offset.saturating_sub(lines);
         }
     }
+
+    pub(in crate::tui) fn open_description_viewer(&mut self) {
+        let Some(task) = self.selected_task() else {
+            self.error("説明を表示するタスクが選択されていません");
+            return;
+        };
+        self.description_viewer = Some(DescriptionViewerState {
+            task_id: task.snapshot.id,
+            scroll_offset: 0,
+        });
+        self.detail_focus = DetailFocus::DescriptionViewer;
+    }
+
+    const fn close_description_viewer(&mut self) {
+        self.description_viewer = None;
+        self.detail_focus = DetailFocus::None;
+    }
+
+    const fn description_viewer_scroll_down(&mut self, lines: u16) {
+        if let Some(viewer) = &mut self.description_viewer {
+            viewer.scroll_offset = viewer.scroll_offset.saturating_add(lines);
+        }
+    }
+
+    const fn description_viewer_scroll_up(&mut self, lines: u16) {
+        if let Some(viewer) = &mut self.description_viewer {
+            viewer.scroll_offset = viewer.scroll_offset.saturating_sub(lines);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use git_mile_app::WorkflowConfig;
-    use git_mile_app::TaskView;
-    use git_mile_app::TaskRepository;
     use crate::tui::app::App;
     use anyhow::Error;
+    use git_mile_app::TaskRepository;
+    use git_mile_app::TaskView;
+    use git_mile_app::WorkflowConfig;
     use git_mile_core::TaskSnapshot;
     use git_mile_core::event::{Actor, Event};
     use git_mile_core::id::TaskId;
@@ -304,6 +364,28 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
         ui.handle_comment_viewer_key(key);
         assert!(ui.comment_viewer.is_none());
+        assert_eq!(ui.detail_focus, DetailFocus::None);
+    }
+
+    #[test]
+    fn description_viewer_opens_on_d_key() {
+        let mut ui = test_ui();
+        seed_task(&mut ui);
+        let key = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE);
+        assert!(matches!(ui.handle_task_list_key(key), Ok(None)));
+        assert_eq!(ui.detail_focus, DetailFocus::DescriptionViewer);
+        assert!(ui.description_viewer.is_some());
+    }
+
+    #[test]
+    fn description_viewer_escape_closes_popup() {
+        let mut ui = test_ui();
+        seed_task(&mut ui);
+        ui.open_description_viewer();
+        assert_eq!(ui.detail_focus, DetailFocus::DescriptionViewer);
+        let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        ui.handle_description_viewer_key(key);
+        assert!(ui.description_viewer.is_none());
         assert_eq!(ui.detail_focus, DetailFocus::None);
     }
 }

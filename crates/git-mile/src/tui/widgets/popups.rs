@@ -7,8 +7,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 
-use git_mile_app::WorkflowState;
 use git_mile_app::TaskStore;
+use git_mile_app::WorkflowState;
 
 use super::super::tree_view::TreeNode;
 use super::super::view::Ui;
@@ -216,6 +216,63 @@ impl<S: TaskStore> Ui<S> {
                         lines.push(Line::from(body_line.to_owned()));
                     }
                     lines.push(Line::from(""));
+                }
+                let paragraph = Paragraph::new(lines)
+                    .wrap(Wrap { trim: false })
+                    .scroll((viewer.scroll_offset, 0));
+                f.render_widget(paragraph, inner);
+            }
+        }
+    }
+
+    pub(in crate::tui) fn draw_description_viewer_popup(&self, f: &mut Frame<'_>) {
+        let Some(viewer) = &self.description_viewer else {
+            return;
+        };
+        let area = f.area();
+
+        let mut popup_width = (area.width * 4) / 5;
+        popup_width = popup_width.max(40).min(area.width);
+        let mut popup_height = (area.height * 4) / 5;
+        popup_height = popup_height.max(10).min(area.height);
+        let popup_x = area.width.saturating_sub(popup_width) / 2;
+        let popup_y = area.height.saturating_sub(popup_height) / 2;
+        let popup_area = Rect {
+            x: popup_x,
+            y: popup_y,
+            width: popup_width,
+            height: popup_height,
+        };
+
+        let task_title = self
+            .app
+            .tasks
+            .iter()
+            .find(|view| view.snapshot.id == viewer.task_id)
+            .map_or("不明", |view| view.snapshot.title.as_str());
+
+        let block = Block::default()
+            .title(format!("説明: {task_title}"))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan));
+        f.render_widget(Clear, popup_area);
+        f.render_widget(block.clone(), popup_area);
+        let inner = block.inner(popup_area);
+
+        if let Some(task) = self
+            .app
+            .tasks
+            .iter()
+            .find(|view| view.snapshot.id == viewer.task_id)
+        {
+            if task.snapshot.description.is_empty() {
+                let paragraph =
+                    Paragraph::new("説明はまだありません。").style(Style::default().fg(Color::DarkGray));
+                f.render_widget(paragraph, inner);
+            } else {
+                let mut lines = Vec::new();
+                for line in task.snapshot.description.lines() {
+                    lines.push(Line::from(line.to_owned()));
                 }
                 let paragraph = Paragraph::new(lines)
                     .wrap(Wrap { trim: false })

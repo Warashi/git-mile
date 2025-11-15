@@ -7,11 +7,11 @@ use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
 
 use super::task_visibility::TaskVisibility;
-use git_mile_app::WorkflowConfig;
-use git_mile_app::TaskView;
-use git_mile_app::{TaskEditData, TaskPatch};
 use git_mile_app::TaskRepository;
+use git_mile_app::TaskView;
+use git_mile_app::WorkflowConfig;
 use git_mile_app::{CommentRequest, CreateTaskRequest, TaskStore, TaskWriter};
+use git_mile_app::{TaskEditData, TaskPatch};
 
 /// Application state shared between the TUI event loop and rendering.
 pub(super) struct App<S: TaskStore> {
@@ -28,7 +28,11 @@ pub(super) struct App<S: TaskStore> {
 
 impl<S: TaskStore> App<S> {
     /// Create an application instance and eagerly load tasks.
-    pub(super) fn new(store: S, repository: Arc<TaskRepository<S>>, workflow: WorkflowConfig) -> Result<Self> {
+    pub(super) fn new(
+        store: S,
+        repository: Arc<TaskRepository<S>>,
+        workflow: WorkflowConfig,
+    ) -> Result<Self> {
         let writer = TaskWriter::new(store, workflow.clone());
         let mut app = Self {
             writer,

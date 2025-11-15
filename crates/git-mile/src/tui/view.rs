@@ -11,8 +11,8 @@ use ratatui::{
 };
 
 use git_mile_app::StateKind;
-use git_mile_app::TaskView;
 use git_mile_app::TaskStore;
+use git_mile_app::TaskView;
 
 use super::app::App;
 use super::clipboard::{ClipboardSink, default_clipboard};
@@ -43,6 +43,12 @@ pub(super) struct CommentViewerState {
     pub(super) scroll_offset: u16,
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct DescriptionViewerState {
+    pub(super) task_id: TaskId,
+    pub(super) scroll_offset: u16,
+}
+
 pub(super) struct StatePickerState {
     pub(super) task_id: TaskId,
     pub(super) options: Vec<StatePickerOption>,
@@ -60,6 +66,8 @@ pub(super) enum DetailFocus {
     StatePicker,
     /// Focus on comment viewer popup.
     CommentViewer,
+    /// Focus on description viewer popup.
+    DescriptionViewer,
 }
 
 pub(super) struct Ui<S: TaskStore> {
@@ -75,6 +83,8 @@ pub(super) struct Ui<S: TaskStore> {
     pub(super) state_picker: Option<StatePickerState>,
     /// Comment viewer popup state.
     pub(super) comment_viewer: Option<CommentViewerState>,
+    /// Description viewer popup state.
+    pub(super) description_viewer: Option<DescriptionViewerState>,
     pub(super) clipboard: Box<dyn ClipboardSink>,
 }
 
@@ -102,6 +112,7 @@ impl<S: TaskStore> Ui<S> {
             tree_state: TreeViewState::new(),
             state_picker: None,
             comment_viewer: None,
+            description_viewer: None,
             clipboard,
         };
         ui.apply_default_filter();
@@ -154,6 +165,7 @@ impl<S: TaskStore> Ui<S> {
             DetailFocus::TreeView => self.draw_tree_view_popup(f),
             DetailFocus::StatePicker => self.draw_state_picker_popup(f),
             DetailFocus::CommentViewer => self.draw_comment_viewer_popup(f),
+            DetailFocus::DescriptionViewer => self.draw_description_viewer_popup(f),
             DetailFocus::None => {}
         }
     }

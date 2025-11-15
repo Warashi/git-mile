@@ -3,11 +3,11 @@ use super::clipboard::*;
 use super::editor::*;
 use super::view::*;
 use super::widgets::truncate_with_ellipsis;
-use git_mile_app::{StateKind, WorkflowState, WorkflowConfig};
-use git_mile_app::TaskView;
+use anyhow::{Result, anyhow};
 use git_mile_app::TaskRepository;
 use git_mile_app::TaskStore;
-use anyhow::{Result, anyhow};
+use git_mile_app::TaskView;
+use git_mile_app::{StateKind, WorkflowConfig, WorkflowState};
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::{EventId, TaskId};
 use git_mile_core::{TaskFilter, TaskSnapshot};
@@ -143,10 +143,7 @@ impl TaskStore for MockStore {
         Ok(self.tasks.borrow().clone())
     }
 
-    fn list_tasks_modified_since(
-        &self,
-        _since: time::OffsetDateTime,
-    ) -> Result<Vec<TaskId>, Self::Error> {
+    fn list_tasks_modified_since(&self, _since: time::OffsetDateTime) -> Result<Vec<TaskId>, Self::Error> {
         // For testing, return all tasks
         self.list_tasks()
     }
