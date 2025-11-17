@@ -61,15 +61,15 @@ impl<S: TaskStore> Ui<S> {
     }
 
     fn draw_breadcrumb(&self, f: &mut Frame<'_>, area: Rect, task_id: TaskId) {
-        let parents = self.app.get_parents(task_id);
+        let ancestors = self.app.get_ancestor_chain(task_id);
         let mut breadcrumb_items: Vec<Span<'_>> = Vec::new();
 
         breadcrumb_items.push(Span::raw("Home"));
 
-        for parent in &parents {
+        for ancestor in &ancestors {
             breadcrumb_items.push(Span::raw(" > "));
-            let parent_title = truncate_with_ellipsis(parent.snapshot.title.as_str(), 20);
-            breadcrumb_items.push(Span::raw(parent_title));
+            let ancestor_title = truncate_with_ellipsis(ancestor.snapshot.title.as_str(), 20);
+            breadcrumb_items.push(Span::raw(ancestor_title));
         }
 
         breadcrumb_items.push(Span::raw(" > "));
