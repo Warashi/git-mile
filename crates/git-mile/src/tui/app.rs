@@ -123,6 +123,39 @@ impl<S: TaskStore> App<S> {
         None
     }
 
+    /// Get the full ancestor chain from root to the given task's immediate parents.
+    /// Returns an empty vector if the task has no parents.
+    /// The chain is ordered from root (oldest ancestor) to immediate parent.
+    pub(super) fn get_ancestor_chain(&self, task_id: TaskId) -> Vec<&TaskView> {
+        let mut chain = Vec::new();
+        let mut current = task_id;
+        let mut visited = HashSet::new();
+
+        // Traverse up the parent chain
+        while visited.insert(current) {
+            if let Some(parents) = self.parents_index.get(&current) {
+                if parents.is_empty() {
+                    break;
+                }
+                // Take the first parent (tasks typically have one primary parent)
+                if let Some(&parent_id) = parents.first() {
+                    if let Some(&idx) = self.task_index.get(&parent_id) {
+                        if let Some(parent_view) = self.tasks.get(idx) {
+                            chain.push(parent_view);
+                            current = parent_id;
+                            continue;
+                        }
+                    }
+                }
+            }
+            break;
+        }
+
+        // Reverse to get root-to-parent order
+        chain.reverse();
+        chain
+    }
+
     /// Reload tasks from the store and keep the selection in bounds.
     pub(super) fn refresh_tasks(&mut self) -> Result<()> {
         self.refresh_tasks_with(None)
