@@ -383,7 +383,12 @@ mod tests {
         let store_arc = std::sync::Arc::new(store.clone());
         let store_arc_arc = std::sync::Arc::new(std::sync::Arc::clone(&store_arc));
         let repository = TaskRepository::new(store_arc_arc);
-        let service = TaskService::new(store_arc, WorkflowConfig::unrestricted());
+        let service = TaskService::new(
+            store_arc,
+            WorkflowConfig::unrestricted(),
+            git_mile_app::HooksConfig::default(),
+            std::path::PathBuf::from("/tmp/.git-mile"),
+        );
         (service, repository, store)
     }
 

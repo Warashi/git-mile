@@ -134,16 +134,20 @@ fn main() -> Result<()> {
 }
 
 fn execute_command(repo_path: &str, command: Command) -> Result<()> {
-    let workflow = ProjectConfig::load(repo_path)?.workflow;
-    match (command, workflow) {
-        (Command::Tui, workflow) => {
+    let config = ProjectConfig::load(repo_path)?;
+    let workflow = config.workflow;
+    let hooks = config.hooks;
+    let base_dir = std::path::PathBuf::from(repo_path).join(".git-mile");
+
+    match (command, workflow, hooks, base_dir) {
+        (Command::Tui, workflow, hooks, base_dir) => {
             let store = GitStore::open(repo_path)?;
-            tui::run(store, workflow)
+            tui::run(store, workflow, hooks, base_dir)
         }
 
-        (Command::Mcp, workflow) => {
+        (Command::Mcp, workflow, hooks, base_dir) => {
             let store = GitStore::open(repo_path)?;
-            let server = mcp::GitMileServer::new(store, workflow);
+            let server = mcp::GitMileServer::new(store, workflow, hooks, base_dir);
             tokio::runtime::Runtime::new()?
                 .block_on(async move {
                     let transport = (tokio::io::stdin(), tokio::io::stdout());
@@ -156,13 +160,13 @@ fn execute_command(repo_path: &str, command: Command) -> Result<()> {
                 .map(|_| ())
         }
 
-        (other, workflow) => {
+        (other, workflow, hooks, base_dir) => {
             #[allow(clippy::arc_with_non_send_sync)]
             let store = Arc::new(GitStore::open(repo_path)?);
             #[allow(clippy::arc_with_non_send_sync)]
             let store_for_repo = Arc::new(Arc::clone(&store));
             let repository = git_mile_app::TaskRepository::new(store_for_repo);
-            let service = TaskService::new(store, workflow);
+            let service = TaskService::new(store, workflow, hooks, base_dir);
             commands::run(other, &service, &repository)
         }
     }
