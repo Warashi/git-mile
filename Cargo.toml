@@ -4,6 +4,7 @@ members = [
   "crates/git-mile",
   "crates/git-mile-app",
   "crates/git-mile-core",
+  "crates/git-mile-hooks",
   "crates/git-mile-store-git"
 ]
 

@@ -714,6 +714,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "git-mile-hooks"
+version = "0.1.0"
+dependencies = [
+ "git-mile-core",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "git-mile-store-git"
 version = "0.1.0"
 dependencies = [
