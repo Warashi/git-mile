@@ -1,15 +1,17 @@
 //! Shared task mutation service used by CLI/TUI/MCP surfaces.
 
 use anyhow::Error;
-use git2::Oid;
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::{EventId, TaskId};
+use git_mile_hooks::{HookContext, HookExecutor, HookKind, HooksConfig};
 use git_mile_store_git::GitStore;
+use git2::Oid;
+use std::path::PathBuf;
 use tokio::sync::MutexGuard;
 
 use crate::config::WorkflowConfig;
 
-pub use crate::task_patch::{diff_sets, DescriptionPatch, SetDiff, StatePatch, TaskUpdate};
+pub use crate::task_patch::{DescriptionPatch, SetDiff, StatePatch, TaskUpdate, diff_sets};
 
 /// Minimal storage abstraction required by [`TaskWriter`].
 pub trait TaskStore {
@@ -51,12 +53,24 @@ pub trait TaskStore {
 pub struct TaskWriter<S> {
     store: S,
     workflow: WorkflowConfig,
+    hooks_config: HooksConfig,
+    base_dir: PathBuf,
 }
 
 impl<S> TaskWriter<S> {
     /// Construct a new writer.
-    pub const fn new(store: S, workflow: WorkflowConfig) -> Self {
-        Self { store, workflow }
+    pub const fn new(
+        store: S,
+        workflow: WorkflowConfig,
+        hooks_config: HooksConfig,
+        base_dir: PathBuf,
+    ) -> Self {
+        Self {
+            store,
+            workflow,
+            hooks_config,
+            base_dir,
+        }
     }
 
     /// Borrow the workflow configuration.
@@ -96,6 +110,55 @@ impl<S> TaskWriter<S> {
             Ok(false) => Err(TaskWriteError::MissingTask(task)),
             Err(e) => Err(Self::store_error(e)),
         }
+    }
+
+    /// Execute a pre-hook and reject the operation if it fails
+    fn execute_pre_hook(&self, kind: HookKind, event: &Event) -> Result<(), TaskWriteError>
+    where
+        S: TaskStore,
+    {
+        let executor = HookExecutor::new(self.hooks_config.clone(), self.base_dir.clone());
+        let context = HookContext {
+            event: event.clone(),
+            data: None,
+        };
+
+        match executor.execute(kind, &context) {
+            Ok(result) => {
+                if result.is_success() {
+                    Ok(())
+                } else {
+                    Err(TaskWriteError::HookRejected {
+                        hook: kind.script_name().to_owned(),
+                        exit_code: result.exit_code,
+                        stderr: result.stderr,
+                    })
+                }
+            }
+            Err(git_mile_hooks::HookError::NotFound(_)) => {
+                // Hook script not found - this is not an error, just skip
+                Ok(())
+            }
+            Err(e) => Err(TaskWriteError::HookFailed {
+                hook: kind.script_name().to_owned(),
+                error: e.to_string(),
+            }),
+        }
+    }
+
+    /// Execute a post-hook (errors are logged but don't fail the operation)
+    fn execute_post_hook(&self, kind: HookKind, event: &Event)
+    where
+        S: TaskStore,
+    {
+        let executor = HookExecutor::new(self.hooks_config.clone(), self.base_dir.clone());
+        let context = HookContext {
+            event: event.clone(),
+            data: None,
+        };
+
+        // Post-hooks should not fail the operation, so we ignore errors
+        let _ = executor.execute(kind, &context);
     }
 }
 
@@ -140,11 +203,18 @@ where
                 state_kind,
             },
         );
+
+        // Execute pre-task-create hook
+        self.execute_pre_hook(HookKind::PreTaskCreate, &created_event)?;
+
         let created_oid = self
             .store
             .append_event(&created_event)
             .map_err(Self::store_error)?;
         events.push(created_oid);
+
+        // Execute post-task-create hook
+        self.execute_post_hook(HookKind::PostTaskCreate, &created_event);
 
         for parent in parents {
             self.ensure_task_exists(parent)
@@ -514,6 +584,24 @@ pub enum TaskWriteError {
     /// Placeholder for unimplemented operations.
     #[error("{0} not implemented yet")]
     NotImplemented(&'static str),
+    /// Hook rejected the operation.
+    #[error("hook '{hook}' rejected operation (exit code {exit_code}): {stderr}")]
+    HookRejected {
+        /// Hook name
+        hook: String,
+        /// Exit code
+        exit_code: i32,
+        /// Standard error output
+        stderr: String,
+    },
+    /// Hook execution failed.
+    #[error("hook '{hook}' failed: {error}")]
+    HookFailed {
+        /// Hook name
+        hook: String,
+        /// Error message
+        error: String,
+    },
 }
 
 impl TaskStore for GitStore {
