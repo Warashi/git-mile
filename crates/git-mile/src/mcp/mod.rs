@@ -5,8 +5,7 @@ mod tools;
 
 pub use params::*;
 
-use git_mile_app::AsyncTaskRepository;
-use git_mile_app::WorkflowConfig;
+use git_mile_app::{AsyncTaskRepository, HooksConfig, WorkflowConfig};
 use git_mile_store_git::GitStore;
 use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::tool::{ToolCallContext, ToolRouter};
@@ -17,6 +16,7 @@ use rmcp::model::{
 };
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{ErrorData as McpError, tool, tool_router};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -27,12 +27,19 @@ pub struct GitMileServer {
     store: Arc<Mutex<GitStore>>,
     repository: Arc<AsyncTaskRepository<Arc<Mutex<GitStore>>>>,
     workflow: WorkflowConfig,
+    hooks_config: HooksConfig,
+    base_dir: PathBuf,
 }
 
 #[tool_router]
 impl GitMileServer {
     /// Create a new MCP server instance.
-    pub fn new(store: GitStore, workflow: WorkflowConfig) -> Self {
+    pub fn new(
+        store: GitStore,
+        workflow: WorkflowConfig,
+        hooks_config: HooksConfig,
+        base_dir: PathBuf,
+    ) -> Self {
         let store_arc = Arc::new(Mutex::new(store));
         let repository = Arc::new(AsyncTaskRepository::new(Arc::clone(&store_arc)));
 
@@ -41,6 +48,8 @@ impl GitMileServer {
             store: store_arc,
             repository,
             workflow,
+            hooks_config,
+            base_dir,
         }
     }
 
@@ -85,7 +94,14 @@ impl GitMileServer {
         description = "Create a new task with title, labels, assignees, description, state, and parent tasks"
     )]
     async fn create_task(&self, params: Parameters<CreateTaskParams>) -> Result<CallToolResult, McpError> {
-        tools::create_task::handle_create_task(self.store.clone(), self.workflow.clone(), params).await
+        tools::create_task::handle_create_task(
+            self.store.clone(),
+            self.workflow.clone(),
+            self.hooks_config.clone(),
+            self.base_dir.clone(),
+            params,
+        )
+        .await
     }
 
     /// Update an existing task.
@@ -93,7 +109,14 @@ impl GitMileServer {
         description = "Update an existing task's title, description, state, labels, assignees, or parent tasks"
     )]
     async fn update_task(&self, params: Parameters<UpdateTaskParams>) -> Result<CallToolResult, McpError> {
-        tools::update_task::handle_update_task(self.store.clone(), self.workflow.clone(), params).await
+        tools::update_task::handle_update_task(
+            self.store.clone(),
+            self.workflow.clone(),
+            self.hooks_config.clone(),
+            self.base_dir.clone(),
+            params,
+        )
+        .await
     }
 
     /// Update a comment.
@@ -108,7 +131,14 @@ impl GitMileServer {
     /// Add a comment to a task.
     #[tool(description = "Add a comment to a task")]
     async fn add_comment(&self, params: Parameters<AddCommentParams>) -> Result<CallToolResult, McpError> {
-        tools::add_comment::handle_add_comment(self.store.clone(), self.workflow.clone(), params).await
+        tools::add_comment::handle_add_comment(
+            self.store.clone(),
+            self.workflow.clone(),
+            self.hooks_config.clone(),
+            self.base_dir.clone(),
+            params,
+        )
+        .await
     }
 }
 

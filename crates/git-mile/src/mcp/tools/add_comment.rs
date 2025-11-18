@@ -27,6 +27,17 @@ fn map_task_write_error(err: TaskWriteError) -> McpError {
         TaskWriteError::NotImplemented(name) => {
             McpError::internal_error(format!("{name} not implemented"), None)
         }
+        TaskWriteError::HookRejected {
+            hook,
+            exit_code,
+            stderr,
+        } => McpError::invalid_params(
+            format!("Hook '{hook}' rejected operation (exit code {exit_code}): {stderr}"),
+            None,
+        ),
+        TaskWriteError::HookFailed { hook, error } => {
+            McpError::internal_error(format!("Hook '{hook}' failed: {error}"), None)
+        }
     }
 }
 
@@ -34,6 +45,8 @@ fn map_task_write_error(err: TaskWriteError) -> McpError {
 pub async fn handle_add_comment(
     store: Arc<Mutex<GitStore>>,
     workflow: WorkflowConfig,
+    hooks_config: git_mile_app::HooksConfig,
+    base_dir: std::path::PathBuf,
     Parameters(params): Parameters<AddCommentParams>,
 ) -> Result<CallToolResult, McpError> {
     let AddCommentParams {
@@ -47,7 +60,7 @@ pub async fn handle_add_comment(
         .parse()
         .map_err(|e| McpError::invalid_params(format!("Invalid task ID: {e}"), None))?;
 
-    let comment_id = TaskWriter::new(store.lock().await, workflow)
+    let comment_id = TaskWriter::new(store.lock().await, workflow, hooks_config, base_dir)
         .add_comment(
             task,
             CommentRequest {

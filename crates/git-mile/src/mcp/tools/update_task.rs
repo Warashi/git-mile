@@ -38,6 +38,17 @@ fn map_task_write_error(err: TaskWriteError) -> McpError {
         TaskWriteError::NotImplemented(name) => {
             McpError::internal_error(format!("{name} not implemented"), None)
         }
+        TaskWriteError::HookRejected {
+            hook,
+            exit_code,
+            stderr,
+        } => McpError::invalid_params(
+            format!("Hook '{hook}' rejected operation (exit code {exit_code}): {stderr}"),
+            None,
+        ),
+        TaskWriteError::HookFailed { hook, error } => {
+            McpError::internal_error(format!("Hook '{hook}' failed: {error}"), None)
+        }
     }
 }
 
@@ -54,6 +65,8 @@ async fn load_snapshot(store: Arc<Mutex<GitStore>>, task: TaskId) -> Result<Task
 pub async fn handle_update_task(
     store: Arc<Mutex<GitStore>>,
     workflow: WorkflowConfig,
+    hooks_config: git_mile_app::HooksConfig,
+    base_dir: std::path::PathBuf,
     Parameters(params): Parameters<UpdateTaskParams>,
 ) -> Result<CallToolResult, McpError> {
     let UpdateTaskParams {
@@ -107,7 +120,7 @@ pub async fn handle_update_task(
     let unlink_parent_ids = parse_task_ids(unlink_parents, "parent task ID")?;
 
     {
-        let writer = TaskWriter::new(store.lock().await, workflow);
+        let writer = TaskWriter::new(store.lock().await, workflow, hooks_config, base_dir);
 
         writer
             .update_task(task, update, &actor)
