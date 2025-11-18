@@ -1,7 +1,7 @@
 //! Task repository with caching for efficient snapshot access.
 
-use anyhow::{anyhow, Result};
-use git_mile_core::{id::TaskId, TaskFilter, TaskSnapshot};
+use anyhow::{Result, anyhow};
+use git_mile_core::{TaskFilter, TaskSnapshot, id::TaskId};
 use std::sync::{Arc, RwLock};
 use time::OffsetDateTime;
 

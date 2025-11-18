@@ -159,10 +159,10 @@ impl TaskCache {
 mod tests {
     use super::*;
     use crate::task_writer::TaskStore as CoreTaskStore;
-    use git2::Oid;
+    use git_mile_core::TaskFilter;
     use git_mile_core::event::{Actor, Event, EventKind};
     use git_mile_core::id::TaskId;
-    use git_mile_core::TaskFilter;
+    use git2::Oid;
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::str::FromStr;

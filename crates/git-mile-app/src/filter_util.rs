@@ -3,7 +3,7 @@ use std::fmt::{self, Display};
 use git_mile_core::id::TaskId;
 use git_mile_core::{StateKind, TaskFilter, TaskFilterBuilder as CoreTaskFilterBuilder, UpdatedFilter};
 use thiserror::Error;
-use time::{format_description::well_known::Rfc3339, OffsetDateTime, UtcOffset};
+use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 
 /// Error type returned while constructing task filters from user-facing inputs.
 #[derive(Debug, Error)]
