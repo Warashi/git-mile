@@ -1,10 +1,12 @@
-use anyhow::{anyhow, Result};
-use git2::Oid;
+use anyhow::{Result, anyhow};
+use git_mile_core::TaskSnapshot;
 use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
-use git_mile_core::TaskSnapshot;
+use git2::Oid;
 
-use crate::config::WorkflowConfig;
+use std::path::PathBuf;
+
+use crate::config::{HooksConfig, WorkflowConfig};
 use crate::task_writer::{CommentRequest, CreateTaskRequest, TaskStore, TaskWriter};
 
 /// Service façade that encapsulates all task-related side effects.
@@ -13,12 +15,12 @@ pub struct TaskService<S> {
 }
 
 impl<S> TaskService<S> {
-    pub const fn new(store: S, workflow: WorkflowConfig) -> Self
+    pub const fn new(store: S, workflow: WorkflowConfig, hooks_config: HooksConfig, base_dir: PathBuf) -> Self
     where
         S: TaskStore,
     {
         Self {
-            writer: TaskWriter::new(store, workflow),
+            writer: TaskWriter::new(store, workflow, hooks_config, base_dir),
         }
     }
 
@@ -133,8 +135,8 @@ pub struct CommentOutput {
 mod tests {
     use super::*;
     use crate::config::{WorkflowConfig, WorkflowState};
-    use git_mile_core::event::{Event, EventKind};
     use git_mile_core::TaskFilter;
+    use git_mile_core::event::{Event, EventKind};
     use std::collections::{HashMap, HashSet};
     use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -245,7 +247,12 @@ mod tests {
         let store_arc = std::sync::Arc::new(store.clone());
         let store_arc_arc = std::sync::Arc::new(std::sync::Arc::clone(&store_arc));
         let repository = crate::task_repository::TaskRepository::new(store_arc_arc);
-        let service = TaskService::new(store_arc, WorkflowConfig::unrestricted());
+        let service = TaskService::new(
+            store_arc,
+            WorkflowConfig::unrestricted(),
+            HooksConfig::default(),
+            PathBuf::from("/tmp/.git-mile"),
+        );
         (service, repository, store)
     }
 
@@ -312,7 +319,12 @@ mod tests {
     fn create_task_rejects_unknown_state_when_restricted() {
         let store = MockStore::default();
         let workflow = WorkflowConfig::from_states(vec![WorkflowState::new("state/ready")]);
-        let service = TaskService::new(store, workflow);
+        let service = TaskService::new(
+            store,
+            workflow,
+            HooksConfig::default(),
+            PathBuf::from("/tmp/.git-mile"),
+        );
 
         let Err(err) = service.create_with_parents(CreateTaskInput {
             title: "task".into(),
@@ -336,7 +348,12 @@ mod tests {
             vec![WorkflowState::new("state/ready")],
             Some("state/ready"),
         );
-        let service = TaskService::new(store.clone(), workflow);
+        let service = TaskService::new(
+            store.clone(),
+            workflow,
+            HooksConfig::default(),
+            PathBuf::from("/tmp/.git-mile"),
+        );
 
         let output = service.create_with_parents(CreateTaskInput {
             title: "task".into(),
