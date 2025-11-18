@@ -320,8 +320,14 @@ mod tests {
         let store_clone = Arc::clone(&store);
         let store_for_repo = Arc::new(store_clone);
         let repository = Arc::new(TaskRepository::new(store_for_repo));
-        let app = App::new(store, repository, WorkflowConfig::default())
-            .unwrap_or_else(|err| panic!("failed to init app: {err}"));
+        let app = App::new(
+            store,
+            repository,
+            WorkflowConfig::default(),
+            git_mile_app::HooksConfig::default(),
+            std::path::PathBuf::new(),
+        )
+        .unwrap_or_else(|err| panic!("failed to init app: {err}"));
         Ui::new(
             app,
             Actor {

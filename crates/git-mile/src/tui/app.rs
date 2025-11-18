@@ -32,8 +32,10 @@ impl<S: TaskStore> App<S> {
         store: S,
         repository: Arc<TaskRepository<S>>,
         workflow: WorkflowConfig,
+        hooks_config: git_mile_app::HooksConfig,
+        base_dir: std::path::PathBuf,
     ) -> Result<Self> {
-        let writer = TaskWriter::new(store, workflow.clone());
+        let writer = TaskWriter::new(store, workflow.clone(), hooks_config, base_dir);
         let mut app = Self {
             writer,
             repository,

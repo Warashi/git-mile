@@ -47,7 +47,13 @@ fn create_test_app(store: MockStore, workflow: WorkflowConfig) -> Result<App<Arc
     let store_arc_clone = Arc::clone(&store_arc);
     let store_arc_for_repo = Arc::new(store_arc_clone);
     let repository = Arc::new(TaskRepository::new(store_arc_for_repo));
-    App::new(store_arc, repository, workflow)
+    App::new(
+        store_arc,
+        repository,
+        workflow,
+        git_mile_app::HooksConfig::default(),
+        std::path::PathBuf::new(),
+    )
 }
 
 fn app_selected_task<S: TaskStore>(app: &App<S>) -> Option<&TaskView> {

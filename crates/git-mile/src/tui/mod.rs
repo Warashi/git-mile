@@ -33,7 +33,12 @@ use self::handlers::handle_ui_action;
 use self::view::Ui;
 
 /// Launch the interactive TUI.
-pub fn run(store: GitStore, workflow: WorkflowConfig) -> Result<()> {
+pub fn run(
+    store: GitStore,
+    workflow: WorkflowConfig,
+    hooks_config: git_mile_app::HooksConfig,
+    base_dir: std::path::PathBuf,
+) -> Result<()> {
     enable_raw_mode().context("failed to enable raw mode")?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen).context("failed to enter alternate screen")?;
@@ -42,7 +47,7 @@ pub fn run(store: GitStore, workflow: WorkflowConfig) -> Result<()> {
     terminal.hide_cursor()?;
 
     let result = tracing::subscriber::with_default(NoSubscriber::default(), || {
-        run_event_loop(&mut terminal, store, workflow)
+        run_event_loop(&mut terminal, store, workflow, hooks_config, base_dir)
     });
 
     disable_raw_mode().ok();
@@ -57,13 +62,15 @@ fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     store: GitStore,
     workflow: WorkflowConfig,
+    hooks_config: git_mile_app::HooksConfig,
+    base_dir: std::path::PathBuf,
 ) -> Result<()> {
     let actor = resolve_actor();
     let store_arc = Arc::new(store);
     let store_arc_clone = Arc::clone(&store_arc);
     let store_arc_for_repo = Arc::new(store_arc_clone);
     let repository = TaskRepository::new(store_arc_for_repo);
-    let app = App::new(store_arc, Arc::new(repository), workflow)?;
+    let app = App::new(store_arc, Arc::new(repository), workflow, hooks_config, base_dir)?;
     let mut ui = Ui::new(app, actor);
 
     let mut last_tick = Instant::now();
