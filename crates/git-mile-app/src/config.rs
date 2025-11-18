@@ -4,9 +4,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{anyhow, bail, Context, Result};
-use git2::Repository;
+use anyhow::{Context, Result, anyhow, bail};
 pub use git_mile_core::StateKind;
+pub use git_mile_hooks::HooksConfig;
+use git2::Repository;
 use serde::Deserialize;
 
 const CONFIG_DIR: &str = ".git-mile";
@@ -17,6 +18,8 @@ const CONFIG_FILE: &str = "config.toml";
 pub struct ProjectConfig {
     #[serde(default)]
     pub workflow: WorkflowConfig,
+    #[serde(default)]
+    pub hooks: HooksConfig,
 }
 
 impl ProjectConfig {
@@ -343,9 +346,10 @@ mod tests {
         let Err(err) = ProjectConfig::from_workdir(dir.path()) else {
             panic!("empty default state should error");
         };
-        assert!(err
-            .to_string()
-            .contains("default workflow state must not be empty"));
+        assert!(
+            err.to_string()
+                .contains("default workflow state must not be empty")
+        );
         Ok(())
     }
 
