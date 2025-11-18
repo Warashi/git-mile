@@ -77,6 +77,26 @@ pub struct HookContext {
     pub data: Option<serde_json::Value>,
 }
 
+impl HookContext {
+    /// Create a new hook context from an event
+    #[must_use]
+    pub fn new(event: &Event) -> Self {
+        Self {
+            event: event.clone(),
+            data: None,
+        }
+    }
+
+    /// Create a new hook context with additional data
+    #[must_use]
+    pub fn with_data(event: &Event, data: serde_json::Value) -> Self {
+        Self {
+            event: event.clone(),
+            data: Some(data),
+        }
+    }
+}
+
 /// Result from hook execution
 #[derive(Debug, Clone)]
 pub struct HookResult {
