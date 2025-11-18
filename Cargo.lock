@@ -690,6 +690,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "git-mile-core",
+ "git-mile-hooks",
  "git-mile-store-git",
  "git2",
  "serde",

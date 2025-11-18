@@ -13,6 +13,7 @@ categories.workspace = true
 [dependencies]
 # Workspace crates
 git-mile-core = { path = "../git-mile-core" }
+git-mile-hooks = { path = "../git-mile-hooks" }
 git-mile-store-git = { path = "../git-mile-store-git" }
 
 # External dependencies
