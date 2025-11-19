@@ -135,20 +135,14 @@ impl<S: TaskStore> App<S> {
 
         // Traverse up the parent chain
         while visited.insert(current) {
-            if let Some(parents) = self.parents_index.get(&current) {
-                if parents.is_empty() {
-                    break;
-                }
-                // Take the first parent (tasks typically have one primary parent)
-                if let Some(&parent_id) = parents.first() {
-                    if let Some(&idx) = self.task_index.get(&parent_id) {
-                        if let Some(parent_view) = self.tasks.get(idx) {
-                            chain.push(parent_view);
-                            current = parent_id;
-                            continue;
-                        }
-                    }
-                }
+            if let Some(parents) = self.parents_index.get(&current)
+                && let Some(&parent_id) = parents.first()
+                && let Some(&idx) = self.task_index.get(&parent_id)
+                && let Some(parent_view) = self.tasks.get(idx)
+            {
+                chain.push(parent_view);
+                current = parent_id;
+                continue;
             }
             break;
         }

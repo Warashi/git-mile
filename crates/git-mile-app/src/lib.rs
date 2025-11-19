@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 //! Application layer logic for git-mile.
 //!
 //! This crate provides high-level services, caching, configuration, and utilities
