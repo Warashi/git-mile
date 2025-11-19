@@ -9,18 +9,19 @@ use git_mile_core::event::Event;
 use git_mile_core::id::TaskId;
 use git2::{Commit, Oid, Repository, Signature, Sort};
 use lru::LruCache;
-use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::{env, num::NonZeroUsize};
 use tracing::{debug, info};
 
-const EVENT_CACHE_CAPACITY: usize = 256;
-
-// SAFETY: 256 is non-zero
-const EVENT_CACHE_CAPACITY_NONZERO: NonZeroUsize = match NonZeroUsize::new(EVENT_CACHE_CAPACITY) {
-    Some(n) => n,
-    None => unreachable!(),
-};
+/// Default capacity for the event cache when no override is provided.
+const DEFAULT_EVENT_CACHE_CAPACITY: usize = 256;
+/// Environment variable controlling the `GitStore` event cache capacity.
+const EVENT_CACHE_CAPACITY_ENV_VAR: &str = "GIT_MILE_CACHE_CAPACITY";
+/// Prefix placed ahead of every git-mile event commit message.
+const EVENT_COMMIT_PREFIX: &str = "git-mile-event: ";
+/// Canonical OID of Git's empty tree object.
+const EMPTY_TREE_OID_HEX: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 /// Storage based on git refs under `refs/git-mile/tasks/*`.
 pub struct GitStore {
@@ -37,7 +38,7 @@ impl GitStore {
     pub fn open(cwd_or_repo: impl AsRef<Path>) -> Result<Self> {
         let repo = Repository::discover(cwd_or_repo).context("Failed to discover .git")?;
         let repo_path = repo.path().to_path_buf();
-        let cache = LruCache::new(EVENT_CACHE_CAPACITY_NONZERO);
+        let cache = LruCache::new(Self::event_cache_capacity());
         Ok(Self {
             repo,
             repo_path,
@@ -48,6 +49,22 @@ impl GitStore {
     /// Name of the ref for a task.
     fn refname(task: &TaskId) -> String {
         format!("refs/git-mile/tasks/{task}")
+    }
+
+    fn event_cache_capacity() -> NonZeroUsize {
+        let env_value = env::var(EVENT_CACHE_CAPACITY_ENV_VAR).ok();
+        Self::cache_capacity_from_override(env_value).unwrap_or_else(Self::default_cache_capacity)
+    }
+
+    fn default_cache_capacity() -> NonZeroUsize {
+        NonZeroUsize::new(DEFAULT_EVENT_CACHE_CAPACITY).map_or_else(
+            || unreachable!("DEFAULT_EVENT_CACHE_CAPACITY must be non-zero"),
+            |value| value,
+        )
+    }
+
+    fn cache_capacity_from_override(raw: Option<String>) -> Option<NonZeroUsize> {
+        raw?.parse::<usize>().ok().and_then(NonZeroUsize::new)
     }
 
     fn cached_event(&self, oid: Oid) -> Option<Event> {
@@ -89,7 +106,7 @@ impl GitStore {
         let Some((head, body)) = message.split_once("\n\n") else {
             return Ok(None);
         };
-        if !head.starts_with("git-mile-event: ") {
+        if !head.starts_with(EVENT_COMMIT_PREFIX) {
             return Ok(None);
         }
 
@@ -115,6 +132,11 @@ impl GitStore {
             idx.clear()?;
             idx.write_tree()?
         };
+        debug_assert_eq!(
+            tree_oid.to_string(),
+            EMPTY_TREE_OID_HEX,
+            "empty tree OID should remain stable"
+        );
         let tree = self.repo.find_tree(tree_oid)?;
 
         // Parent (if ref exists)
@@ -129,7 +151,7 @@ impl GitStore {
 
         // Commit message: first line + blank + pretty JSON
         let body = serde_json::to_string_pretty(ev)?;
-        let msg = format!("git-mile-event: {}\n\n{}", ev.id, body);
+        let msg = format!("{EVENT_COMMIT_PREFIX}{}\n\n{}", ev.id, body);
 
         let parent_refs: Vec<&Commit<'_>> = parents.iter().collect();
         let oid = self
@@ -402,7 +424,7 @@ mod tests {
         }
         let body = serde_json::to_string_pretty(&legacy_value)?;
         let refname = GitStore::refname(&task);
-        let msg = format!("git-mile-event: {}\n\n{}", legacy_event.id, body);
+        let msg = format!("{EVENT_COMMIT_PREFIX}{}\n\n{}", legacy_event.id, body);
         let sig = Signature::now(&actor.name, &actor.email)?;
         let mut idx = repo.index()?;
         idx.clear()?;
@@ -475,6 +497,22 @@ mod tests {
 
         fs::remove_dir_all(&base)?;
         Ok(())
+    }
+
+    #[test]
+    fn capacity_override_accepts_valid_numbers() {
+        if let Some(override_value) = GitStore::cache_capacity_from_override(Some("512".into())) {
+            assert_eq!(override_value.get(), 512);
+        } else {
+            panic!("override must accept positive numbers");
+        }
+    }
+
+    #[test]
+    fn capacity_override_rejects_invalid_values() {
+        assert!(GitStore::cache_capacity_from_override(Some("abc".into())).is_none());
+        assert!(GitStore::cache_capacity_from_override(Some("0".into())).is_none());
+        assert!(GitStore::cache_capacity_from_override(None).is_none());
     }
 
     fn temp_repo_path() -> Result<PathBuf> {
