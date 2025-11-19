@@ -46,7 +46,7 @@ impl ListTasksParams {
             .with_time_range(updated_since, updated_until)
             .map_err(|err| map_filter_error(&err))?;
 
-        Ok(builder.build())
+        builder.build().map_err(|err| map_filter_error(&err))
     }
 }
 

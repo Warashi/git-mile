@@ -371,7 +371,7 @@ pub(super) fn parse_filter_editor_output(raw: &str) -> Result<TaskFilter, String
         .map_err(|err| err.describe_user_facing())?;
     builder = builder.with_time_range_values(updated_since, updated_until);
 
-    Ok(builder.build())
+    builder.build().map_err(|err| err.describe_user_facing())
 }
 
 fn parse_task_id_list(input: &str) -> Result<BTreeSet<TaskId>, String> {

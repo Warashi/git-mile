@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use git_mile_core::TaskFilter;
 use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
@@ -225,7 +225,7 @@ fn build_filter(args: CliFilterArgs) -> Result<TaskFilter> {
     builder = builder.with_text(text);
     builder = builder.with_time_range(updated_since, updated_until)?;
 
-    Ok(builder.build())
+    builder.build().map_err(|err| anyhow!(err))
 }
 
 fn render_task_table(tasks: &[git_mile_core::TaskSnapshot], workflow: &WorkflowConfig) {

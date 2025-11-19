@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::Hash;
+use thiserror::Error;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -201,6 +202,32 @@ pub struct TaskFilter {
     /// Timestamp range filter.
     #[serde(default)]
     pub updated: Option<UpdatedFilter>,
+}
+
+/// Minimum number of characters required for text filters after trimming.
+pub const MIN_TEXT_QUERY_LENGTH: usize = 1;
+/// Maximum number of characters permitted for text filters after trimming.
+pub const MAX_TEXT_QUERY_LENGTH: usize = 256;
+
+/// Errors encountered while validating task filters.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum FilterValidationError {
+    /// Text query shorter than [`MIN_TEXT_QUERY_LENGTH`].
+    #[error("text query must be at least {min} characters (got {actual})")]
+    TextTooShort {
+        /// Required minimum length.
+        min: usize,
+        /// Actual length of the query.
+        actual: usize,
+    },
+    /// Text query longer than [`MAX_TEXT_QUERY_LENGTH`].
+    #[error("text query must be at most {max} characters (got {actual})")]
+    TextTooLong {
+        /// Maximum allowed length.
+        max: usize,
+        /// Actual length of the query.
+        actual: usize,
+    },
 }
 
 /// Builder that normalizes inputs while constructing [`TaskFilter`] values.
@@ -418,6 +445,29 @@ impl TaskFilter {
             && self.children.is_empty()
             && self.text.as_deref().is_none_or(|needle| needle.trim().is_empty())
             && self.updated.as_ref().is_none_or(UpdatedFilter::is_empty)
+    }
+
+    /// Validate filter invariants (e.g. text length bounds).
+    ///
+    /// # Errors
+    /// Returns a [`FilterValidationError`] when any constraint is violated.
+    pub fn validate(&self) -> Result<(), FilterValidationError> {
+        if let Some(text) = self.text.as_deref() {
+            let length = text.chars().count();
+            if length < MIN_TEXT_QUERY_LENGTH {
+                return Err(FilterValidationError::TextTooShort {
+                    min: MIN_TEXT_QUERY_LENGTH,
+                    actual: length,
+                });
+            }
+            if length > MAX_TEXT_QUERY_LENGTH {
+                return Err(FilterValidationError::TextTooLong {
+                    max: MAX_TEXT_QUERY_LENGTH,
+                    actual: length,
+                });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -779,6 +829,34 @@ mod tests {
 
         let empty = TaskFilterBuilder::new().text("   ").build();
         assert!(empty.text.is_none());
+    }
+
+    #[test]
+    fn task_filter_validation_flags_short_queries() {
+        let filter = TaskFilter {
+            text: Some(String::new()),
+            ..TaskFilter::default()
+        };
+        assert_eq!(
+            filter.validate(),
+            Err(FilterValidationError::TextTooShort {
+                min: MIN_TEXT_QUERY_LENGTH,
+                actual: 0
+            })
+        );
+    }
+
+    #[test]
+    fn task_filter_validation_flags_long_queries() {
+        let long_query = "a".repeat(MAX_TEXT_QUERY_LENGTH + 1);
+        let filter = TaskFilterBuilder::new().text(long_query).build();
+        assert_eq!(
+            filter.validate(),
+            Err(FilterValidationError::TextTooLong {
+                max: MAX_TEXT_QUERY_LENGTH,
+                actual: MAX_TEXT_QUERY_LENGTH + 1
+            })
+        );
     }
 
     #[test]

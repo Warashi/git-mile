@@ -1,7 +1,9 @@
 use std::fmt::{self, Display};
 
 use git_mile_core::id::TaskId;
-use git_mile_core::{StateKind, TaskFilter, TaskFilterBuilder as CoreTaskFilterBuilder, UpdatedFilter};
+use git_mile_core::{
+    FilterValidationError, StateKind, TaskFilter, TaskFilterBuilder as CoreTaskFilterBuilder, UpdatedFilter,
+};
 use thiserror::Error;
 use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 
@@ -16,6 +18,8 @@ pub enum FilterBuildError {
         #[source]
         source: time::error::Parse,
     },
+    #[error("{message}")]
+    InvalidTextQuery { message: String },
 }
 
 /// Result alias for filter construction helpers.
@@ -125,8 +129,10 @@ impl TaskFilterBuilder {
     }
 
     /// Build the final [`TaskFilter`].
-    #[must_use]
-    pub fn build(self) -> TaskFilter {
+    ///
+    /// # Errors
+    /// Returns [`FilterBuildError::InvalidTextQuery`] when the text filter violates length limits.
+    pub fn build(self) -> FilterBuildResult<TaskFilter> {
         let mut builder = CoreTaskFilterBuilder::new()
             .states(self.states)
             .labels(self.labels)
@@ -147,7 +153,9 @@ impl TaskFilterBuilder {
             });
         }
 
-        builder.build()
+        let filter = builder.build();
+        filter.validate().map_err(FilterBuildError::from)?;
+        Ok(filter)
     }
 }
 
@@ -213,6 +221,20 @@ impl FilterBuildError {
             Self::InvalidTimestamp { field, .. } => {
                 format!("{field} の時刻フォーマットが不正です (RFC3339 必須)")
             }
+            Self::InvalidTextQuery { message } => format!("テキストフィルターが不正です: {message}"),
+        }
+    }
+}
+
+impl From<FilterValidationError> for FilterBuildError {
+    fn from(err: FilterValidationError) -> Self {
+        match err {
+            FilterValidationError::TextTooShort { min, actual } => Self::InvalidTextQuery {
+                message: format!("最低 {min} 文字以上で入力してください (現在 {actual} 文字)"),
+            },
+            FilterValidationError::TextTooLong { max, actual } => Self::InvalidTextQuery {
+                message: format!("最大 {max} 文字までです (現在 {actual} 文字)"),
+            },
         }
     }
 }
@@ -305,21 +327,24 @@ mod tests {
         let children = vec![child];
         let include_kinds = vec!["todo".into()];
         let exclude_kinds = vec!["done".into()];
-        let filter = TaskFilterBuilder::new()
-            .with_states(&states)
-            .with_labels(&labels)
-            .with_assignees(&assignees)
-            .with_parents(&parents)
-            .with_children(&children)
-            .with_state_kinds(&include_kinds, &exclude_kinds)
-            .unwrap_or_else(|err| panic!("state kinds parse: {err}"))
-            .with_text(Some(" Panic ".into()))
-            .with_time_range(
-                Some("2025-01-01T00:00:00Z".into()),
-                Some("2025-01-02T00:00:00Z".into()),
-            )
-            .unwrap_or_else(|err| panic!("time range parse: {err}"))
-            .build();
+        let filter = ok(
+            TaskFilterBuilder::new()
+                .with_states(&states)
+                .with_labels(&labels)
+                .with_assignees(&assignees)
+                .with_parents(&parents)
+                .with_children(&children)
+                .with_state_kinds(&include_kinds, &exclude_kinds)
+                .unwrap_or_else(|err| panic!("state kinds parse: {err}"))
+                .with_text(Some(" Panic ".into()))
+                .with_time_range(
+                    Some("2025-01-01T00:00:00Z".into()),
+                    Some("2025-01-02T00:00:00Z".into()),
+                )
+                .unwrap_or_else(|err| panic!("time range parse: {err}"))
+                .build(),
+            "build filter",
+        );
 
         assert!(filter.states.contains("state/todo"));
         assert!(filter.labels.contains("type/doc"));
