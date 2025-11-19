@@ -49,18 +49,13 @@ pub async fn handle_update_comment(
         name: params.actor_name,
         email: params.actor_email,
     };
-
-    // Create CommentUpdated event
-    let event = Event::new(
-        task,
-        &actor,
-        EventKind::CommentUpdated {
-            comment_id,
-            body_md: params.body_md,
-        },
-    );
+    let body_md = params.body_md;
 
     with_store(store, move |cloned_store| {
+        let mut event = Event::new(task, &actor, EventKind::CommentUpdated { comment_id, body_md });
+        let lamport = next_lamport(&cloned_store, task)?;
+        event.lamport = lamport;
+
         cloned_store
             .append_event(&event)
             .map(|_| ())
@@ -79,4 +74,11 @@ pub async fn handle_update_comment(
         serde_json::to_string_pretty(&result).map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
     Ok(CallToolResult::success(vec![Content::text(json_str)]))
+}
+
+fn next_lamport(store: &GitStore, task: TaskId) -> Result<u64, McpError> {
+    let events = store
+        .load_events(task)
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    Ok(events.iter().map(|event| event.lamport).max().unwrap_or(0) + 1)
 }

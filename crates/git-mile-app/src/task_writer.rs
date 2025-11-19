@@ -6,6 +6,7 @@ use git_mile_core::id::{EventId, TaskId};
 use git_mile_hooks::{HookContext, HookExecutor, HookKind, HooksConfig};
 use git_mile_store_git::GitStore;
 use git2::Oid;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use tokio::sync::MutexGuard;
 
@@ -81,6 +82,53 @@ impl<S> TaskWriter<S> {
     /// Expose a reference to the underlying store (read-only operations).
     pub const fn store(&self) -> &S {
         &self.store
+    }
+}
+
+struct LamportTracker<'a, S> {
+    store: &'a S,
+    cache: BTreeMap<TaskId, u64>,
+}
+
+impl<'a, S> LamportTracker<'a, S>
+where
+    S: TaskStore,
+{
+    #[allow(clippy::missing_const_for_fn)]
+    fn new(store: &'a S) -> Self {
+        Self {
+            store,
+            cache: BTreeMap::new(),
+        }
+    }
+
+    fn assign(&mut self, event: &mut Event) -> Result<(), TaskWriteError> {
+        event.lamport = self.next(event.task)?;
+        Ok(())
+    }
+
+    fn next(&mut self, task: TaskId) -> Result<u64, TaskWriteError> {
+        if let Some(value) = self.cache.get_mut(&task) {
+            *value += 1;
+            return Ok(*value);
+        }
+
+        let mut previous = 0;
+        match self.store.task_exists(task) {
+            Ok(true) => {
+                let events = self
+                    .store
+                    .load_events(task)
+                    .map_err(TaskWriter::<S>::store_error)?;
+                previous = events.iter().map(|event| event.lamport).max().unwrap_or(0);
+            }
+            Ok(false) => {}
+            Err(err) => return Err(TaskWriter::<S>::store_error(err)),
+        }
+
+        let next = previous + 1;
+        self.cache.insert(task, next);
+        Ok(next)
     }
 }
 
@@ -189,9 +237,10 @@ where
 
         let task = TaskId::new();
         let mut events = Vec::new();
+        let mut lamports = LamportTracker::new(&self.store);
         let mut parent_links = Vec::new();
 
-        let created_event = Event::new(
+        let mut created_event = Event::new(
             task,
             &actor,
             EventKind::TaskCreated {
@@ -203,6 +252,7 @@ where
                 state_kind,
             },
         );
+        lamports.assign(&mut created_event)?;
 
         // Execute pre-task-create hook
         self.execute_pre_hook(HookKind::PreTaskCreate, &created_event)?;
@@ -220,11 +270,13 @@ where
             self.ensure_task_exists(parent)
                 .map_err(|_| TaskWriteError::MissingParent(parent))?;
 
-            let child_event = Event::new(task, &actor, EventKind::ChildLinked { parent, child: task });
+            let mut child_event = Event::new(task, &actor, EventKind::ChildLinked { parent, child: task });
+            lamports.assign(&mut child_event)?;
             let child_oid = self.store.append_event(&child_event).map_err(Self::store_error)?;
             events.push(child_oid);
 
-            let parent_event = Event::new(parent, &actor, EventKind::ChildLinked { parent, child: task });
+            let mut parent_event = Event::new(parent, &actor, EventKind::ChildLinked { parent, child: task });
+            lamports.assign(&mut parent_event)?;
             let parent_oid = self
                 .store
                 .append_event(&parent_event)
@@ -248,6 +300,7 @@ where
     ///
     /// # Errors
     /// Returns [`TaskWriteError`] when the task is missing, validation fails, or storage errors occur.
+    #[allow(clippy::too_many_lines)]
     pub fn update_task(
         &self,
         task: TaskId,
@@ -265,6 +318,7 @@ where
         } = patch;
 
         let mut events = Vec::new();
+        let mut lamports = LamportTracker::new(&self.store);
 
         if let Some(title) = title {
             events.push(Event::new(task, actor, EventKind::TaskTitleSet { title }));
@@ -353,7 +407,8 @@ where
         }
 
         let mut oids = Vec::new();
-        for event in events {
+        for mut event in events {
+            lamports.assign(&mut event)?;
             let oid = self.store.append_event(&event).map_err(Self::store_error)?;
             oids.push(oid);
         }
@@ -398,7 +453,9 @@ where
         self.ensure_task_exists(task)?;
 
         let comment_id = EventId::new();
-        let event = Event::new(task, &actor, EventKind::CommentAdded { comment_id, body_md });
+        let mut lamports = LamportTracker::new(&self.store);
+        let mut event = Event::new(task, &actor, EventKind::CommentAdded { comment_id, body_md });
+        lamports.assign(&mut event)?;
         let oid = self.store.append_event(&event).map_err(Self::store_error)?;
 
         Ok(TaskWriteResult {
@@ -421,6 +478,7 @@ where
         self.ensure_task_exists(task)?;
 
         let mut events = Vec::new();
+        let mut lamports = LamportTracker::new(&self.store);
         for parent in parents {
             match self.ensure_task_exists(*parent) {
                 Ok(()) => {}
@@ -428,7 +486,7 @@ where
                 Err(err) => return Err(err),
             }
 
-            let child_event = Event::new(
+            let mut child_event = Event::new(
                 task,
                 actor,
                 EventKind::ChildLinked {
@@ -436,9 +494,10 @@ where
                     child: task,
                 },
             );
+            lamports.assign(&mut child_event)?;
             events.push(self.store.append_event(&child_event).map_err(Self::store_error)?);
 
-            let parent_event = Event::new(
+            let mut parent_event = Event::new(
                 *parent,
                 actor,
                 EventKind::ChildLinked {
@@ -446,6 +505,7 @@ where
                     child: task,
                 },
             );
+            lamports.assign(&mut parent_event)?;
             events.push(
                 self.store
                     .append_event(&parent_event)
@@ -473,8 +533,9 @@ where
         self.ensure_task_exists(task)?;
 
         let mut events = Vec::new();
+        let mut lamports = LamportTracker::new(&self.store);
         for parent in parents {
-            let child_event = Event::new(
+            let mut child_event = Event::new(
                 task,
                 actor,
                 EventKind::ChildUnlinked {
@@ -482,9 +543,10 @@ where
                     child: task,
                 },
             );
+            lamports.assign(&mut child_event)?;
             events.push(self.store.append_event(&child_event).map_err(Self::store_error)?);
 
-            let parent_event = Event::new(
+            let mut parent_event = Event::new(
                 *parent,
                 actor,
                 EventKind::ChildUnlinked {
@@ -492,6 +554,7 @@ where
                     child: task,
                 },
             );
+            lamports.assign(&mut parent_event)?;
             events.push(
                 self.store
                     .append_event(&parent_event)

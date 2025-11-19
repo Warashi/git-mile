@@ -19,6 +19,9 @@ pub struct Event {
     pub schema: String,
     /// Unique event identifier.
     pub id: EventId,
+    /// Lamport clock for deterministic ordering (defaults to zero for legacy events).
+    #[serde(default)]
+    pub lamport: u64,
     #[serde(with = "time::serde::rfc3339")]
     /// Event timestamp in UTC.
     pub ts: OffsetDateTime,
@@ -146,6 +149,7 @@ impl Event {
         Self {
             schema: "git-mile-event@1".to_owned(),
             id: EventId::new(),
+            lamport: 0,
             ts: OffsetDateTime::now_utc(),
             actor: actor.clone(),
             task,
@@ -175,6 +179,7 @@ mod tests {
         assert_eq!(event.task, task_id);
         assert!(matches!(event.kind, EventKind::TaskStateCleared));
         assert_ne!(event.id, EventId::default());
+        assert_eq!(event.lamport, 0);
 
         let now = OffsetDateTime::now_utc();
         let earliest = now - Duration::seconds(5);
@@ -213,5 +218,34 @@ mod tests {
             }
             other => panic!("unexpected event kind: {other:?}"),
         }
+    }
+
+    #[test]
+    fn lamport_defaults_to_zero_for_legacy_events() {
+        let task = TaskId::new();
+        let comment_actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+        let event_id = EventId::new();
+        let json = serde_json::json!({
+            "schema": "git-mile-event@1",
+            "id": event_id.to_string(),
+            "ts": "2024-01-01T00:00:00Z",
+            "actor": {
+                "name": comment_actor.name,
+                "email": comment_actor.email,
+            },
+            "task": task.to_string(),
+            "kind": {
+                "type": "taskStateCleared"
+            }
+        });
+
+        let encoded = serde_json::to_string(&json)
+            .unwrap_or_else(|err| panic!("encode json: {err}"));
+        let event: Event =
+            serde_json::from_str(&encoded).unwrap_or_else(|err| panic!("must decode legacy event: {err}"));
+        assert_eq!(event.lamport, 0);
     }
 }

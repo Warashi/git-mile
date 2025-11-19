@@ -31,8 +31,11 @@ impl<'a> OrderedEvents<'a> {
     #[must_use]
     pub fn new(events: &'a [Event]) -> Self {
         let mut ordered: Vec<&Event> = events.iter().collect();
-        ordered.sort_by(|a, b| match a.ts.cmp(&b.ts) {
-            Ordering::Equal => a.id.cmp(&b.id),
+        ordered.sort_by(|a, b| match a.lamport.cmp(&b.lamport) {
+            Ordering::Equal => match a.ts.cmp(&b.ts) {
+                Ordering::Equal => a.id.cmp(&b.id),
+                other => other,
+            },
             other => other,
         });
         Self { ordered }
@@ -745,6 +748,7 @@ where
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 struct EventStamp {
+    lamport: u64,
     ts: OffsetDateTime,
     id: EventId,
 }
@@ -752,6 +756,7 @@ struct EventStamp {
 impl Default for EventStamp {
     fn default() -> Self {
         Self {
+            lamport: 0,
             ts: OffsetDateTime::UNIX_EPOCH,
             id: EventId::default(),
         }
@@ -760,7 +765,11 @@ impl Default for EventStamp {
 
 impl EventStamp {
     const fn from_event(ev: &Event) -> Self {
-        Self { ts: ev.ts, id: ev.id }
+        Self {
+            lamport: ev.lamport,
+            ts: ev.ts,
+            id: ev.id,
+        }
     }
 
     fn max(self, other: Self) -> Self {
@@ -820,7 +829,7 @@ mod tests {
     }
 
     #[test]
-    fn ordered_events_sorts_by_timestamp_then_id() {
+    fn ordered_events_prioritize_lamport_then_timestamp() {
         let task = TaskId::new();
         let actor = Actor {
             name: "tester".into(),
@@ -850,13 +859,17 @@ mod tests {
         );
 
         let base = OffsetDateTime::now_utc();
-        first.ts = base + Duration::seconds(5);
-        second.ts = base + Duration::seconds(5);
-        third.ts = base + Duration::seconds(10);
+        first.ts = base + Duration::seconds(10);
+        second.ts = base + Duration::seconds(2);
+        third.ts = base + Duration::seconds(5);
         first.id = fixed_event_id(1);
         second.id = fixed_event_id(2);
         third.id = fixed_event_id(3);
+        first.lamport = 1;
+        second.lamport = 3;
+        third.lamport = 2;
 
+        let second_id = second.id;
         let events = vec![third, second, first];
 
         let ordered = OrderedEvents::from(events.as_slice());
@@ -868,15 +881,45 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(titles, vec!["first", "second", "third"]);
-        let expected_latest = events
-            .iter()
-            .max_by(|a, b| match a.ts.cmp(&b.ts) {
-                Ordering::Equal => a.id.cmp(&b.id),
-                other => other,
-            })
-            .map_or_else(|| panic!("events must be non-empty"), |ev| ev.id);
-        assert_eq!(ordered.latest().map(|ev| ev.id), Some(expected_latest));
+        assert_eq!(titles, vec!["first", "third", "second"]);
+        assert_eq!(ordered.latest().map(|ev| ev.id), Some(second_id));
+    }
+
+    #[test]
+    fn event_stamp_orders_by_lamport_then_timestamp_then_id() {
+        let base = OffsetDateTime::now_utc();
+        let first = EventStamp {
+            lamport: 1,
+            ts: base,
+            id: fixed_event_id(1),
+        };
+        let mut second = EventStamp {
+            lamport: 2,
+            ts: base - Duration::seconds(5),
+            id: fixed_event_id(2),
+        };
+        let mut third = EventStamp {
+            lamport: 2,
+            ts: base + Duration::seconds(1),
+            id: fixed_event_id(3),
+        };
+        let mut fourth = EventStamp {
+            lamport: 2,
+            ts: third.ts,
+            id: fixed_event_id(4),
+        };
+
+        assert!(first < second, "lamport must dominate timestamp");
+        assert!(second < third, "timestamp must break lamport ties");
+        assert!(third < fourth, "event id must break timestamp ties");
+
+        second.lamport = 5;
+        third.lamport = 5;
+        third.ts = base;
+        fourth.lamport = 5;
+        fourth.ts = base;
+
+        assert!(fourth > third);
     }
 
     #[test]
@@ -935,6 +978,47 @@ mod tests {
         assert_eq!(via_iter.labels, via_replay.labels);
         assert_eq!(via_iter.assignees, via_replay.assignees);
         assert_eq!(via_iter.updated_rfc3339, via_replay.updated_rfc3339);
+    }
+
+    #[test]
+    fn lamport_clock_breaks_timestamp_ties() {
+        let task = TaskId::new();
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+
+        let ts = OffsetDateTime::now_utc();
+        let mut first = Event::new(
+            task,
+            &actor,
+            EventKind::TaskTitleSet {
+                title: "First".into(),
+            },
+        );
+        first.ts = ts;
+        first.lamport = 1;
+
+        let mut second = Event::new(
+            task,
+            &actor,
+            EventKind::TaskTitleSet {
+                title: "Second".into(),
+            },
+        );
+        second.ts = ts;
+        second.lamport = 2;
+
+        let mut forward = TaskSnapshot::default();
+        forward.apply(&first);
+        forward.apply(&second);
+
+        let mut reverse = TaskSnapshot::default();
+        reverse.apply(&second);
+        reverse.apply(&first);
+
+        assert_eq!(forward.title, "Second");
+        assert_eq!(reverse.title, "Second");
     }
 
     #[test]
