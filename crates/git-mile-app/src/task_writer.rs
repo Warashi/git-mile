@@ -48,6 +48,39 @@ pub trait TaskStore {
     /// # Errors
     /// Returns a store-specific error when the query fails.
     fn list_tasks_modified_since(&self, since: time::OffsetDateTime) -> Result<Vec<TaskId>, Self::Error>;
+
+    /// Load events for the provided task ids in a single call.
+    ///
+    /// The default implementation iterates over [`load_events`](Self::load_events)
+    /// for each task id and collects the results.
+    ///
+    /// # Errors
+    /// Propagates the first error from the underlying store.
+    fn load_events_for_tasks(&self, task_ids: &[TaskId]) -> Result<Vec<(TaskId, Vec<Event>)>, Self::Error> {
+        let mut results = Vec::with_capacity(task_ids.len());
+        for &task in task_ids {
+            let events = self.load_events(task)?;
+            results.push((task, events));
+        }
+        Ok(results)
+    }
+
+    /// Load all events for every known task.
+    ///
+    /// The default implementation uses [`list_tasks`](Self::list_tasks) +
+    /// [`load_events`](Self::load_events). Stores can override this method to
+    /// provide more efficient bulk loading.
+    ///
+    /// # Errors
+    /// Propagates the first error from the underlying store.
+    fn load_all_events(&self) -> Result<Vec<(TaskId, Vec<Event>)>, Self::Error> {
+        let mut results = Vec::new();
+        for task in self.list_tasks()? {
+            let events = self.load_events(task)?;
+            results.push((task, events));
+        }
+        Ok(results)
+    }
 }
 
 /// High-level service that validates inputs and emits task events.
@@ -689,6 +722,10 @@ impl TaskStore for GitStore {
     fn list_tasks_modified_since(&self, since: time::OffsetDateTime) -> Result<Vec<TaskId>, Self::Error> {
         Self::list_tasks_modified_since(self, since)
     }
+
+    fn load_all_events(&self) -> Result<Vec<(TaskId, Vec<Event>)>, Self::Error> {
+        Self::load_all_task_events(self)
+    }
 }
 
 impl<S> TaskStore for &S
@@ -716,6 +753,10 @@ where
     fn list_tasks_modified_since(&self, since: time::OffsetDateTime) -> Result<Vec<TaskId>, Self::Error> {
         (*self).list_tasks_modified_since(since)
     }
+
+    fn load_all_events(&self) -> Result<Vec<(TaskId, Vec<Event>)>, Self::Error> {
+        (*self).load_all_events()
+    }
 }
 
 impl TaskStore for MutexGuard<'_, GitStore> {
@@ -739,6 +780,10 @@ impl TaskStore for MutexGuard<'_, GitStore> {
 
     fn list_tasks_modified_since(&self, since: time::OffsetDateTime) -> Result<Vec<TaskId>, Self::Error> {
         GitStore::list_tasks_modified_since(self, since)
+    }
+
+    fn load_all_events(&self) -> Result<Vec<(TaskId, Vec<Event>)>, Self::Error> {
+        GitStore::load_all_events(self)
     }
 }
 
@@ -766,5 +811,9 @@ where
 
     fn list_tasks_modified_since(&self, since: time::OffsetDateTime) -> Result<Vec<TaskId>, Self::Error> {
         (**self).list_tasks_modified_since(since)
+    }
+
+    fn load_all_events(&self) -> Result<Vec<(TaskId, Vec<Event>)>, Self::Error> {
+        (**self).load_all_events()
     }
 }

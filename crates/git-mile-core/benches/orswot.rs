@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
 
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
+use criterion::{BatchSize, BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use git_mile_core::TaskSnapshot;
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::TaskId;

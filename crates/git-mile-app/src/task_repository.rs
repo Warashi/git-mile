@@ -182,16 +182,15 @@ impl<S: TaskStore> TaskRepository<S> {
     }
 
     fn load_task_views(&self, task_ids: &[TaskId]) -> Result<Vec<TaskView>> {
-        let mut views = Vec::with_capacity(task_ids.len());
-        for &task_id in task_ids {
-            let events = self
-                .store
-                .load_events(task_id)
-                .map_err(Into::into)
-                .with_context(|| format!("Failed to load events for task {task_id}"))?;
-            views.push(TaskView::from_events(&events));
-        }
-        Ok(views)
+        let batches = self
+            .store
+            .load_events_for_tasks(task_ids)
+            .map_err(Into::into)
+            .with_context(|| "Failed to load events for requested tasks".to_string())?;
+        Ok(batches
+            .into_iter()
+            .map(|(_, events)| TaskView::from_events(&events))
+            .collect())
     }
 }
 

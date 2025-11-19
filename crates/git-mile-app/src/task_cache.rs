@@ -105,8 +105,7 @@ impl TaskCache {
     {
         let mut views = Vec::new();
 
-        for task_id in store.list_tasks()? {
-            let events = store.load_events(task_id)?;
+        for (_, events) in store.load_all_events()? {
             views.push(TaskView::from_events(&events));
         }
 
