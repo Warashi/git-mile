@@ -16,6 +16,7 @@ use git_mile_app::TaskView;
 
 use super::app::App;
 use super::clipboard::{ClipboardSink, default_clipboard};
+use super::constants::UI_MESSAGE_TTL_SECS;
 use super::tree_view::TreeViewState;
 
 #[derive(Debug, Clone)]
@@ -197,7 +198,7 @@ impl<S: TaskStore> Ui<S> {
 
     pub(super) fn tick(&mut self) {
         if let Some(msg) = &self.message
-            && msg.is_expired(Duration::from_secs(5))
+            && msg.is_expired(Duration::from_secs(UI_MESSAGE_TTL_SECS))
         {
             self.message = None;
         }

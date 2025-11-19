@@ -16,9 +16,14 @@ use rmcp::model::{
 };
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{ErrorData as McpError, tool, tool_router};
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::time::Duration;
+use tokio::{sync::Mutex, time::timeout};
+
+/// Default timeout applied to MCP tool executions in seconds.
+const TOOL_CALL_TIMEOUT_SECS: u64 = 30;
 
 /// MCP server for git-mile.
 #[derive(Clone)]
@@ -183,6 +188,52 @@ impl ServerHandler for GitMileServer {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let tool_context = ToolCallContext::new(self, request, context);
-        self.tool_router.call(tool_context).await
+        await_tool_call(
+            self.tool_router.call(tool_context),
+            Duration::from_secs(TOOL_CALL_TIMEOUT_SECS),
+        )
+        .await
+    }
+}
+
+async fn await_tool_call<F, T>(future: F, deadline: Duration) -> Result<T, McpError>
+where
+    F: Future<Output = Result<T, McpError>>,
+{
+    timeout(deadline, future)
+        .await
+        .map_err(|_| McpError::internal_error("Tool call timed out", None))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rmcp::model::ErrorCode;
+    use tokio::time::sleep;
+
+    #[tokio::test]
+    async fn await_tool_call_propagates_success() {
+        let Ok(result) = await_tool_call(async { Ok::<_, McpError>("ok") }, Duration::from_millis(5)).await
+        else {
+            panic!("call must succeed");
+        };
+        assert_eq!(result, "ok");
+    }
+
+    #[tokio::test]
+    async fn await_tool_call_returns_timeout_error() {
+        let Err(error) = await_tool_call(
+            async {
+                sleep(Duration::from_millis(10)).await;
+                Ok::<_, McpError>("never reached")
+            },
+            Duration::from_millis(1),
+        )
+        .await
+        else {
+            panic!("call should time out");
+        };
+        assert_eq!(error.code, ErrorCode::INTERNAL_ERROR);
+        assert!(error.message.contains("timed out"));
     }
 }

@@ -20,6 +20,7 @@ use git_mile_app::WorkflowConfig;
 
 mod app;
 mod clipboard;
+pub mod constants;
 mod editor;
 mod handlers;
 mod task_visibility;
@@ -29,6 +30,7 @@ mod view;
 mod widgets;
 
 use self::app::App;
+use self::constants::TUI_TICK_RATE_MS;
 use self::handlers::handle_ui_action;
 use self::view::Ui;
 
@@ -74,7 +76,7 @@ fn run_event_loop(
     let mut ui = Ui::new(app, actor);
 
     let mut last_tick = Instant::now();
-    let tick_rate = Duration::from_millis(200);
+    let tick_rate = Duration::from_millis(TUI_TICK_RATE_MS);
 
     loop {
         terminal.draw(|f| ui.draw(f))?;

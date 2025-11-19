@@ -10,6 +10,12 @@ use ratatui::{
 use git_mile_app::TaskStore;
 use git_mile_app::WorkflowState;
 
+use super::super::constants::{
+    COMMENT_VIEWER_HEIGHT_PERCENT, COMMENT_VIEWER_MIN_HEIGHT, COMMENT_VIEWER_MIN_WIDTH,
+    COMMENT_VIEWER_WIDTH_PERCENT, STATE_PICKER_HEIGHT_PERCENT, STATE_PICKER_MIN_HEIGHT,
+    STATE_PICKER_MIN_WIDTH, STATE_PICKER_WIDTH_PERCENT, TASK_LIST_HIGHLIGHT_SYMBOL, TREE_COLLAPSED_MARKER,
+    TREE_EXPANDED_MARKER, TREE_INDENT_UNIT, TREE_LEAF_MARKER, TREE_POPUP_PERCENT,
+};
 use super::super::tree_view::TreeNode;
 use super::super::view::Ui;
 use super::util::state_kind_marker;
@@ -17,8 +23,8 @@ use super::util::state_kind_marker;
 impl<S: TaskStore> Ui<S> {
     pub(in crate::tui) fn draw_tree_view_popup(&self, f: &mut Frame<'_>) {
         let area = f.area();
-        let popup_width = (area.width * 80) / 100;
-        let popup_height = (area.height * 80) / 100;
+        let popup_width = (area.width * TREE_POPUP_PERCENT) / 100;
+        let popup_height = (area.height * TREE_POPUP_PERCENT) / 100;
         let popup_x = (area.width - popup_width) / 2;
         let popup_y = (area.height - popup_height) / 2;
 
@@ -52,14 +58,20 @@ impl<S: TaskStore> Ui<S> {
                 continue;
             };
 
-            let indent = "  ".repeat(*depth);
+            let indent = TREE_INDENT_UNIT.repeat(*depth);
             let children = self.app.get_children(*task_id);
             let has_children = !children.is_empty();
             let tree_char = if has_children {
                 self.find_node_in_state(*task_id)
-                    .map_or("▶", |node| if node.expanded { "▼" } else { "▶" })
+                    .map_or(TREE_COLLAPSED_MARKER, |node| {
+                        if node.expanded {
+                            TREE_EXPANDED_MARKER
+                        } else {
+                            TREE_COLLAPSED_MARKER
+                        }
+                    })
             } else {
-                "■"
+                TREE_LEAF_MARKER
             };
 
             let state_value = task.snapshot.state.as_deref();
@@ -94,10 +106,10 @@ impl<S: TaskStore> Ui<S> {
         };
         let area = f.area();
 
-        let mut popup_width = (area.width * 2) / 5;
-        popup_width = popup_width.max(30).min(area.width);
-        let mut popup_height = (area.height * 3) / 5;
-        popup_height = popup_height.max(6).min(area.height);
+        let mut popup_width = (area.width * STATE_PICKER_WIDTH_PERCENT) / 100;
+        popup_width = popup_width.max(STATE_PICKER_MIN_WIDTH).min(area.width);
+        let mut popup_height = (area.height * STATE_PICKER_HEIGHT_PERCENT) / 100;
+        popup_height = popup_height.max(STATE_PICKER_MIN_HEIGHT).min(area.height);
         let popup_x = area.width.saturating_sub(popup_width) / 2;
         let popup_y = area.height.saturating_sub(popup_height) / 2;
         let popup_area = Rect {
@@ -152,7 +164,7 @@ impl<S: TaskStore> Ui<S> {
                     .fg(Color::Black)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("▶ ");
+            .highlight_symbol(TASK_LIST_HIGHLIGHT_SYMBOL);
 
         f.render_stateful_widget(list, inner, &mut list_state);
     }
@@ -163,10 +175,10 @@ impl<S: TaskStore> Ui<S> {
         };
         let area = f.area();
 
-        let mut popup_width = (area.width * 4) / 5;
-        popup_width = popup_width.max(40).min(area.width);
-        let mut popup_height = (area.height * 4) / 5;
-        popup_height = popup_height.max(10).min(area.height);
+        let mut popup_width = (area.width * COMMENT_VIEWER_WIDTH_PERCENT) / 100;
+        popup_width = popup_width.max(COMMENT_VIEWER_MIN_WIDTH).min(area.width);
+        let mut popup_height = (area.height * COMMENT_VIEWER_HEIGHT_PERCENT) / 100;
+        popup_height = popup_height.max(COMMENT_VIEWER_MIN_HEIGHT).min(area.height);
         let popup_x = area.width.saturating_sub(popup_width) / 2;
         let popup_y = area.height.saturating_sub(popup_height) / 2;
         let popup_area = Rect {
