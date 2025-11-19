@@ -11,19 +11,16 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-# Workspace crates
+anyhow = "1.0"
 git-mile-core = { path = "../git-mile-core" }
 git-mile-hooks = { path = "../git-mile-hooks" }
 git-mile-store-git = { path = "../git-mile-store-git" }
-
-# External dependencies
-anyhow = "1.0"
-thiserror = "2.0"
 git2 = { version = "0.18", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
-toml = "0.8"
+thiserror = "2.0"
 time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
-tokio = { version = "1", features = ["sync", "rt"] }
+tokio = { version = "1", features = ["rt", "sync"] }
+toml = "0.8"
 
 [dev-dependencies]
 tempfile = "3.12"

@@ -9,6 +9,10 @@ license = "MIT"
 keywords.workspace = true
 categories.workspace = true
 
+[[bench]]
+harness = false
+name = "orswot"
+
 [dependencies]
 anyhow = "1"
 crdts = { version = "7", default-features = false }
@@ -25,10 +29,6 @@ uuid = { version = "1", features = ["serde", "v7"] }
 
 [dev-dependencies]
 criterion = "0.5"
-
-[[bench]]
-name = "orswot"
-harness = false
 
 [lints]
 workspace = true
