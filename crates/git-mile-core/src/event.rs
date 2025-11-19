@@ -242,8 +242,7 @@ mod tests {
             }
         });
 
-        let encoded = serde_json::to_string(&json)
-            .unwrap_or_else(|err| panic!("encode json: {err}"));
+        let encoded = serde_json::to_string(&json).unwrap_or_else(|err| panic!("encode json: {err}"));
         let event: Event =
             serde_json::from_str(&encoded).unwrap_or_else(|err| panic!("must decode legacy event: {err}"));
         assert_eq!(event.lamport, 0);

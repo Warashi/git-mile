@@ -5,11 +5,13 @@ pub mod event;
 /// Identifier types.
 pub mod id;
 mod state;
+mod text_matcher;
 
 pub use state::StateKind;
 
 use crate::event::{Event, EventKind};
 use crate::id::{EventId, TaskId};
+use crate::text_matcher::TextMatcher;
 use crdts::CmRDT;
 use crdts::lwwreg::LWWReg;
 use crdts::orswot::Orswot;
@@ -354,14 +356,55 @@ impl TaskFilter {
     /// Check whether the provided snapshot satisfies this filter.
     #[must_use]
     pub fn matches(&self, task: &TaskSnapshot) -> bool {
-        self.matches_state(task)
-            && self.matches_state_kind(task)
-            && self.matches_labels(task)
-            && self.matches_assignees(task)
-            && self.matches_parents(task)
-            && self.matches_children(task)
-            && self.matches_text(task)
-            && self.matches_updated(task)
+        if !self.states.is_empty()
+            && !task
+                .state
+                .as_ref()
+                .is_some_and(|state| self.states.contains(state))
+        {
+            return false;
+        }
+
+        if !self.state_kinds.matches(task.state_kind) {
+            return false;
+        }
+
+        if !self.labels.is_empty() && !self.labels.iter().all(|label| task.labels.contains(label)) {
+            return false;
+        }
+
+        if !self.assignees.is_empty()
+            && !task
+                .assignees
+                .iter()
+                .any(|assignee| self.assignees.contains(assignee))
+        {
+            return false;
+        }
+
+        if !self.parents.is_empty() && !task.parents.iter().any(|parent| self.parents.contains(parent)) {
+            return false;
+        }
+
+        if !self.children.is_empty() && !task.children.iter().any(|child| self.children.contains(child)) {
+            return false;
+        }
+
+        if let Some(query) = self.text.as_deref()
+            && TextMatcher::new(query).is_some_and(|matcher| !matcher.matches(task))
+        {
+            return false;
+        }
+
+        if self
+            .updated
+            .as_ref()
+            .is_some_and(|filter| !filter.matches(task.updated_at()))
+        {
+            return false;
+        }
+
+        true
     }
 
     /// Determine whether this filter has any active criteria.
@@ -375,81 +418,6 @@ impl TaskFilter {
             && self.children.is_empty()
             && self.text.as_deref().is_none_or(|needle| needle.trim().is_empty())
             && self.updated.as_ref().is_none_or(UpdatedFilter::is_empty)
-    }
-
-    fn matches_state(&self, task: &TaskSnapshot) -> bool {
-        if self.states.is_empty() {
-            return true;
-        }
-        task.state
-            .as_ref()
-            .is_some_and(|state| self.states.contains(state))
-    }
-
-    fn matches_state_kind(&self, task: &TaskSnapshot) -> bool {
-        self.state_kinds.matches(task.state_kind)
-    }
-
-    fn matches_labels(&self, task: &TaskSnapshot) -> bool {
-        self.labels.iter().all(|label| task.labels.contains(label))
-    }
-
-    fn matches_assignees(&self, task: &TaskSnapshot) -> bool {
-        if self.assignees.is_empty() {
-            return true;
-        }
-        task.assignees
-            .iter()
-            .any(|assignee| self.assignees.contains(assignee))
-    }
-
-    fn matches_parents(&self, task: &TaskSnapshot) -> bool {
-        if self.parents.is_empty() {
-            return true;
-        }
-        task.parents.iter().any(|parent| self.parents.contains(parent))
-    }
-
-    fn matches_children(&self, task: &TaskSnapshot) -> bool {
-        if self.children.is_empty() {
-            return true;
-        }
-        task.children.iter().any(|child| self.children.contains(child))
-    }
-
-    fn matches_text(&self, task: &TaskSnapshot) -> bool {
-        let Some(needle) = self
-            .text
-            .as_ref()
-            .and_then(|value| (!value.trim().is_empty()).then(|| value.to_ascii_lowercase()))
-        else {
-            return true;
-        };
-
-        let mut haystacks = Vec::new();
-        haystacks.push(task.title.as_str());
-        haystacks.push(task.description.as_str());
-        if let Some(state) = task.state.as_deref() {
-            haystacks.push(state);
-        }
-        if haystacks
-            .into_iter()
-            .any(|field| field.to_ascii_lowercase().contains(&needle))
-        {
-            return true;
-        }
-
-        task.labels
-            .iter()
-            .map(String::as_str)
-            .chain(task.assignees.iter().map(String::as_str))
-            .any(|field| field.to_ascii_lowercase().contains(&needle))
-    }
-
-    fn matches_updated(&self, task: &TaskSnapshot) -> bool {
-        self.updated
-            .as_ref()
-            .is_none_or(|filter| filter.matches(task.updated_at()))
     }
 }
 
