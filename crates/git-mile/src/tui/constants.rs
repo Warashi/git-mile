@@ -32,3 +32,17 @@ pub const COMMENT_VIEWER_HEIGHT_PERCENT: u16 = 80;
 pub const COMMENT_VIEWER_MIN_WIDTH: u16 = 40;
 /// Minimum height for the comment viewer popup.
 pub const COMMENT_VIEWER_MIN_HEIGHT: u16 = 10;
+/// Height reserved for the breadcrumb row showing ancestors.
+pub const DETAIL_BREADCRUMB_HEIGHT: u16 = 3;
+/// Minimum height dedicated to the primary detail section.
+pub const DETAIL_SECTION_MIN_HEIGHT: u16 = 5;
+/// Maximum number of child rows rendered before scrolling is required.
+pub const DETAIL_CHILD_LIST_MAX_ROWS: u16 = 10;
+/// Additional padding rows to give the child list breathing room.
+pub const DETAIL_CHILD_LIST_PADDING_ROWS: u16 = 2;
+/// Maximum character width for ancestor titles rendered in the breadcrumb.
+pub const DETAIL_BREADCRUMB_TITLE_MAX_CHARS: usize = 20;
+/// Maximum character width for parent titles listed in the metadata section.
+pub const DETAIL_PARENT_TITLE_MAX_CHARS: usize = 15;
+/// Marker displayed at the start of each child entry in the detail pane.
+pub const DETAIL_CHILD_ENTRY_MARKER: &str = "▸";
