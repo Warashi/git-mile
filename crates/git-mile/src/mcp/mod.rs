@@ -132,8 +132,13 @@ impl GitMileServer {
         &self,
         params: Parameters<UpdateCommentParams>,
     ) -> Result<CallToolResult, McpError> {
-        tools::update_comment::handle_update_comment(self.store.clone(), self.repository.clone(), params)
-            .await
+        tools::update_comment::handle_update_comment(
+            self.store.clone(),
+            self.repository.clone(),
+            self.base_dir.clone(),
+            params,
+        )
+        .await
     }
 
     /// Add a comment to a task.

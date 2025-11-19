@@ -3,12 +3,14 @@
 use crate::mcp::params::UpdateCommentParams;
 use crate::mcp::tools::common::with_store;
 use git_mile_app::AsyncTaskRepository;
-use git_mile_core::event::{Actor, Event, EventKind};
+use git_mile_app::actor_from_params_or_default;
+use git_mile_core::event::{Event, EventKind};
 use git_mile_core::id::{EventId, TaskId};
 use git_mile_store_git::GitStore;
 use rmcp::ErrorData as McpError;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content};
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -16,6 +18,7 @@ use tokio::sync::Mutex;
 pub async fn handle_update_comment(
     store: Arc<Mutex<GitStore>>,
     repository: Arc<AsyncTaskRepository<Arc<Mutex<GitStore>>>>,
+    base_dir: std::path::PathBuf,
     Parameters(params): Parameters<UpdateCommentParams>,
 ) -> Result<CallToolResult, McpError> {
     // Parse task ID
@@ -45,10 +48,12 @@ pub async fn handle_update_comment(
         ));
     }
 
-    let actor = Actor {
-        name: params.actor_name,
-        email: params.actor_email,
-    };
+    let repo_hint = base_dir.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    let actor = actor_from_params_or_default(
+        params.actor_name.as_deref(),
+        params.actor_email.as_deref(),
+        &repo_hint,
+    );
     let body_md = params.body_md;
 
     with_store(store, move |cloned_store| {

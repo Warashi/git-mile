@@ -2,14 +2,15 @@
 
 use crate::mcp::params::CreateTaskParams;
 use crate::mcp::tools::common::with_store;
+use git_mile_app::actor_from_params_or_default;
 use git_mile_app::{AsyncTaskRepository, WorkflowConfig};
 use git_mile_app::{CreateTaskRequest, TaskWriteError, TaskWriter};
-use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
 use git_mile_store_git::GitStore;
 use rmcp::ErrorData as McpError;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content};
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -73,6 +74,8 @@ pub async fn handle_create_task(
     } = params;
 
     let parents = parse_task_ids(parents, "parent task ID")?;
+    let repo_hint = base_dir.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    let actor = actor_from_params_or_default(actor_name.as_deref(), actor_email.as_deref(), &repo_hint);
     let request = CreateTaskRequest {
         title,
         state,
@@ -80,10 +83,7 @@ pub async fn handle_create_task(
         assignees,
         description,
         parents,
-        actor: Actor {
-            name: actor_name,
-            email: actor_email,
-        },
+        actor,
     };
 
     let workflow_clone = workflow.clone();
