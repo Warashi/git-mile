@@ -1,5 +1,5 @@
-use std::env;
 use std::io::{self, Stdout};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -9,17 +9,16 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use git_mile_core::event::Actor;
 use git_mile_store_git::GitStore;
-use git2::Config;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use tracing::subscriber::NoSubscriber;
 
 use git_mile_app::TaskRepository;
-use git_mile_app::WorkflowConfig;
+use git_mile_app::{WorkflowConfig, default_actor};
 
 mod app;
 mod clipboard;
+pub mod constants;
 mod editor;
 mod handlers;
 mod task_visibility;
@@ -29,6 +28,7 @@ mod view;
 mod widgets;
 
 use self::app::App;
+use self::constants::TUI_TICK_RATE_MS;
 use self::handlers::handle_ui_action;
 use self::view::Ui;
 
@@ -65,16 +65,19 @@ fn run_event_loop(
     hooks_config: git_mile_app::HooksConfig,
     base_dir: std::path::PathBuf,
 ) -> Result<()> {
-    let actor = resolve_actor();
     let store_arc = Arc::new(store);
     let store_arc_clone = Arc::clone(&store_arc);
     let store_arc_for_repo = Arc::new(store_arc_clone);
     let repository = TaskRepository::new(store_arc_for_repo);
+    let repo_root = base_dir
+        .parent()
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+    let actor = default_actor(&repo_root);
     let app = App::new(store_arc, Arc::new(repository), workflow, hooks_config, base_dir)?;
     let mut ui = Ui::new(app, actor);
 
     let mut last_tick = Instant::now();
-    let tick_rate = Duration::from_millis(200);
+    let tick_rate = Duration::from_millis(TUI_TICK_RATE_MS);
 
     loop {
         terminal.draw(|f| ui.draw(f))?;
@@ -101,26 +104,6 @@ fn run_event_loop(
     }
 
     Ok(())
-}
-
-fn resolve_actor() -> Actor {
-    let name = env::var("GIT_MILE_ACTOR_NAME")
-        .or_else(|_| env::var("GIT_AUTHOR_NAME"))
-        .or_else(|_| {
-            Config::open_default()
-                .and_then(|config| config.get_string("user.name"))
-                .map_err(|_| env::VarError::NotPresent)
-        })
-        .unwrap_or_else(|_| "git-mile".to_owned());
-    let email = env::var("GIT_MILE_ACTOR_EMAIL")
-        .or_else(|_| env::var("GIT_AUTHOR_EMAIL"))
-        .or_else(|_| {
-            Config::open_default()
-                .and_then(|config| config.get_string("user.email"))
-                .map_err(|_| env::VarError::NotPresent)
-        })
-        .unwrap_or_else(|_| "git-mile@example.invalid".to_owned());
-    Actor { name, email }
 }
 
 #[cfg(test)]

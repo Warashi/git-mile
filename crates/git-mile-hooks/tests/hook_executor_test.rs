@@ -1,7 +1,8 @@
-//! Integration tests for HookExecutor.
+//! Integration tests for `HookExecutor`.
+#![allow(clippy::unwrap_used)]
 
-use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::StateKind;
+use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_hooks::{HookContext, HookError, HookExecutor, HookKind, HooksConfig};
 use std::path::PathBuf;
 
@@ -27,7 +28,7 @@ fn create_test_event() -> Event {
 }
 
 #[test]
-#[ignore] // Requires filesystem setup and executable scripts
+#[ignore = "Requires filesystem setup and executable scripts"]
 fn test_execute_success() {
     let config = HooksConfig {
         enabled: true,
@@ -65,7 +66,7 @@ fn test_execute_success() {
 }
 
 #[test]
-#[ignore] // Requires filesystem setup and executable scripts
+#[ignore = "Requires filesystem setup and executable scripts"]
 fn test_execute_failure() {
     let config = HooksConfig {
         enabled: true,
@@ -105,7 +106,7 @@ fn test_execute_failure() {
 }
 
 #[test]
-#[ignore] // Requires filesystem setup and executable scripts
+#[ignore = "Requires filesystem setup and executable scripts"]
 fn test_execute_timeout() {
     let config = HooksConfig {
         enabled: true,
@@ -137,7 +138,7 @@ fn test_execute_timeout() {
 
     match result {
         Err(HookError::Timeout(_)) => (),
-        _ => panic!("Expected HookError::Timeout, got {:?}", result),
+        _ => panic!("Expected HookError::Timeout, got {result:?}"),
     }
 }
 
@@ -159,7 +160,7 @@ fn test_execute_not_found() {
 
     match result {
         Err(HookError::NotFound(_)) => (),
-        _ => panic!("Expected HookError::NotFound, got {:?}", result),
+        _ => panic!("Expected HookError::NotFound, got {result:?}"),
     }
 }
 

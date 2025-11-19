@@ -51,10 +51,7 @@ impl<S: TaskStore> Ui<S> {
             }
             DetailFocus::TreeView => "j/k:移動 h:閉じる l:開く ↵:ジャンプ q/Esc:閉じる".to_string(),
             DetailFocus::StatePicker => "j/k:移動 ↵:決定 q/Esc:キャンセル".to_string(),
-            DetailFocus::CommentViewer => {
-                "j/k:スクロール Ctrl-d/Ctrl-u:半画面スクロール q/Esc:閉じる".to_string()
-            }
-            DetailFocus::DescriptionViewer => {
+            DetailFocus::CommentViewer | DetailFocus::DescriptionViewer => {
                 "j/k:スクロール Ctrl-d/Ctrl-u:半画面スクロール q/Esc:閉じる".to_string()
             }
         }

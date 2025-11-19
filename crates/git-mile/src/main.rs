@@ -1,7 +1,10 @@
+#![warn(missing_docs)]
+
 //! CLI entry point for git-mile.
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
+use std::path::Path;
 use std::sync::Arc;
 use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
 
@@ -45,10 +48,10 @@ enum Command {
         description: Option<String>,
         #[arg(short = 'p', long = "parent")]
         parents: Vec<String>,
-        #[arg(long, default_value = "git-mile")]
-        actor_name: String,
-        #[arg(long, default_value = "git-mile@example.invalid")]
-        actor_email: String,
+        #[arg(long)]
+        actor_name: Option<String>,
+        #[arg(long)]
+        actor_email: Option<String>,
     },
 
     /// Add a comment to an existing task.
@@ -57,10 +60,10 @@ enum Command {
         task: String,
         #[arg(long)]
         message: String,
-        #[arg(long, default_value = "git-mile")]
-        actor_name: String,
-        #[arg(long, default_value = "git-mile@example.invalid")]
-        actor_email: String,
+        #[arg(long)]
+        actor_name: Option<String>,
+        #[arg(long)]
+        actor_email: Option<String>,
     },
 
     /// Show a materialized snapshot of a task.
@@ -167,7 +170,7 @@ fn execute_command(repo_path: &str, command: Command) -> Result<()> {
             let store_for_repo = Arc::new(Arc::clone(&store));
             let repository = git_mile_app::TaskRepository::new(store_for_repo);
             let service = TaskService::new(store, workflow, hooks, base_dir);
-            commands::run(other, &service, &repository)
+            commands::run(other, &service, &repository, Path::new(repo_path))
         }
     }
 }
@@ -214,12 +217,16 @@ mod tests {
                 state,
                 labels,
                 assignees,
+                actor_name,
+                actor_email,
                 ..
             } => {
                 assert_eq!(title, "Improve docs");
                 assert_eq!(state.as_deref(), Some("state/todo"));
                 assert_eq!(labels, vec!["type/docs"]);
                 assert_eq!(assignees, vec!["alice"]);
+                assert!(actor_name.is_none());
+                assert!(actor_email.is_none());
             }
             _ => panic!("expected new command"),
         }
@@ -237,9 +244,17 @@ mod tests {
         ]);
 
         match cli.cmd {
-            Command::Comment { task, message, .. } => {
+            Command::Comment {
+                task,
+                message,
+                actor_name,
+                actor_email,
+                ..
+            } => {
                 assert_eq!(task, "01J9Q2S4C8M7X0ABCDEF123456");
                 assert_eq!(message, "Looks good");
+                assert!(actor_name.is_none());
+                assert!(actor_email.is_none());
             }
             _ => panic!("expected comment command"),
         }

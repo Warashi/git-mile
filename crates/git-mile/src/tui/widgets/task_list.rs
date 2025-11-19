@@ -8,6 +8,7 @@ use ratatui::{
 
 use git_mile_app::TaskStore;
 
+use super::super::constants::TASK_LIST_HIGHLIGHT_SYMBOL;
 use super::super::view::Ui;
 
 impl<S: TaskStore> Ui<S> {
@@ -41,7 +42,7 @@ impl<S: TaskStore> Ui<S> {
         let list = List::new(items)
             .block(Block::default().title("タスクリスト").borders(Borders::ALL))
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-            .highlight_symbol("▶ ");
+            .highlight_symbol(TASK_LIST_HIGHLIGHT_SYMBOL);
         let mut state = ListState::default();
         if visibility.has_visible_tasks() {
             state.select(Some(visibility.selected_index()));

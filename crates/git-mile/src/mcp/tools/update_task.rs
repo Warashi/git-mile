@@ -1,15 +1,16 @@
 //! Update task tool implementation.
 
 use crate::mcp::params::UpdateTaskParams;
-use git_mile_app::WorkflowConfig;
+use crate::mcp::tools::common::with_store;
+use git_mile_app::actor_from_params_or_default;
+use git_mile_app::{AsyncTaskRepository, WorkflowConfig};
 use git_mile_app::{DescriptionPatch, SetDiff, StatePatch, TaskUpdate, TaskWriteError, TaskWriter};
-use git_mile_core::TaskSnapshot;
-use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
 use git_mile_store_git::GitStore;
 use rmcp::ErrorData as McpError;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content};
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -52,18 +53,10 @@ fn map_task_write_error(err: TaskWriteError) -> McpError {
     }
 }
 
-async fn load_snapshot(store: Arc<Mutex<GitStore>>, task: TaskId) -> Result<TaskSnapshot, McpError> {
-    let store_guard = store.lock().await;
-    let events = store_guard
-        .load_events(task)
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-    drop(store_guard);
-    Ok(TaskSnapshot::replay(&events))
-}
-
 /// Update an existing task's title, description, state, labels, assignees, or parent tasks.
 pub async fn handle_update_task(
     store: Arc<Mutex<GitStore>>,
+    repository: Arc<AsyncTaskRepository<Arc<Mutex<GitStore>>>>,
     workflow: WorkflowConfig,
     hooks_config: git_mile_app::HooksConfig,
     base_dir: std::path::PathBuf,
@@ -111,16 +104,17 @@ pub async fn handle_update_task(
         },
     };
 
-    let actor = Actor {
-        name: actor_name,
-        email: actor_email,
-    };
+    let repo_hint = base_dir.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    let actor = actor_from_params_or_default(actor_name.as_deref(), actor_email.as_deref(), &repo_hint);
 
     let link_parent_ids = parse_task_ids(link_parents, "parent task ID")?;
     let unlink_parent_ids = parse_task_ids(unlink_parents, "parent task ID")?;
 
-    {
-        let writer = TaskWriter::new(store.lock().await, workflow, hooks_config, base_dir);
+    let workflow_clone = workflow.clone();
+    let hooks_clone = hooks_config.clone();
+    let base_dir_clone = base_dir.clone();
+    with_store(store.clone(), move |cloned_store| {
+        let writer = TaskWriter::new(cloned_store, workflow_clone, hooks_clone, base_dir_clone);
 
         writer
             .update_task(task, update, &actor)
@@ -137,9 +131,14 @@ pub async fn handle_update_task(
                 .unlink_parents(task, &unlink_parent_ids, &actor)
                 .map_err(map_task_write_error)?;
         }
-    }
+        Ok(())
+    })
+    .await?;
 
-    let snapshot = load_snapshot(store, task).await?;
+    let snapshot = repository
+        .get_snapshot(task)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
     let json_str =
         serde_json::to_string_pretty(&snapshot).map_err(|e| McpError::internal_error(e.to_string(), None))?;
 

@@ -24,18 +24,27 @@ pub struct ProjectConfig {
 
 impl ProjectConfig {
     /// Load configuration by discovering the nearest Git repository from `cwd_or_repo`.
+    ///
+    /// # Errors
+    /// Returns an error if the repository discovery or configuration parsing fails.
     pub fn load(cwd_or_repo: impl AsRef<Path>) -> Result<Self> {
         let repo = Repository::discover(cwd_or_repo)?;
         Self::from_repository(&repo)
     }
 
     /// Load configuration using an opened repository reference.
+    ///
+    /// # Errors
+    /// Returns an error if the repository has no working directory or configuration parsing fails.
     pub fn from_repository(repo: &Repository) -> Result<Self> {
         let workdir = repo_workdir(repo)?;
         Self::from_workdir(workdir)
     }
 
     /// Load configuration from a known working tree directory.
+    ///
+    /// # Errors
+    /// Returns an error when reading or parsing the configuration fails.
     pub fn from_workdir(workdir: impl AsRef<Path>) -> Result<Self> {
         let config_path = workdir.as_ref().join(CONFIG_DIR).join(CONFIG_FILE);
         if !config_path.exists() {
@@ -88,6 +97,7 @@ impl Default for WorkflowConfig {
 
 impl WorkflowConfig {
     /// Configuration without workflow restrictions (used mainly in tests).
+    #[must_use]
     pub const fn unrestricted() -> Self {
         Self {
             states: Vec::new(),
@@ -116,6 +126,7 @@ impl WorkflowConfig {
     }
 
     /// Construct a workflow configuration from explicit states.
+    #[must_use]
     pub const fn from_states(states: Vec<WorkflowState>) -> Self {
         Self {
             states,
@@ -132,26 +143,31 @@ impl WorkflowConfig {
     }
 
     /// Returns true when states are restricted to a configured set.
+    #[must_use]
     pub const fn is_restricted(&self) -> bool {
         !self.states.is_empty()
     }
 
     /// Iterate over allowed workflow states (if any).
+    #[must_use]
     pub fn states(&self) -> &[WorkflowState] {
         &self.states
     }
 
     /// Retrieve configured default state (if any).
+    #[must_use]
     pub fn default_state(&self) -> Option<&str> {
         self.default_state.as_deref()
     }
 
     /// Find a workflow state by its value.
+    #[must_use]
     pub fn find_state(&self, value: &str) -> Option<&WorkflowState> {
         self.states.iter().find(|state| state.value() == value)
     }
 
     /// Get display label for a state value, using label if available, otherwise the value itself.
+    #[must_use]
     pub fn display_label<'a>(&'a self, value: Option<&'a str>) -> &'a str {
         value
             .and_then(|v| self.find_state(v).and_then(|state| state.label()).or(Some(v)))
@@ -159,6 +175,9 @@ impl WorkflowConfig {
     }
 
     /// Validate that the provided state (if any) is part of the configured set.
+    ///
+    /// # Errors
+    /// Returns an error when the provided state is not allowed.
     pub fn validate_state(&self, candidate: Option<&str>) -> Result<()> {
         let Some(value) = candidate else {
             return Ok(());
@@ -177,6 +196,7 @@ impl WorkflowConfig {
     }
 
     /// Human-readable hint string for editor templates / error messages.
+    #[must_use]
     pub fn state_hint(&self) -> Option<String> {
         if self.states.is_empty() {
             None
@@ -215,6 +235,7 @@ impl WorkflowConfig {
     }
 
     /// Resolve the configured state kind (if any) for the provided workflow state.
+    #[must_use]
     pub fn resolve_state_kind(&self, value: Option<&str>) -> Option<StateKind> {
         value.and_then(|state| self.find_state(state).and_then(WorkflowState::kind))
     }
@@ -232,6 +253,7 @@ pub struct WorkflowState {
 
 impl WorkflowState {
     /// Create a workflow state with the given wire value.
+    #[must_use]
     pub fn new(value: impl Into<String>) -> Self {
         Self {
             value: value.into(),
@@ -241,16 +263,19 @@ impl WorkflowState {
     }
 
     /// Get the state value.
+    #[must_use]
     pub fn value(&self) -> &str {
         &self.value
     }
 
     /// Optional human-friendly label.
+    #[must_use]
     pub fn label(&self) -> Option<&str> {
         self.label.as_deref()
     }
 
     /// Optional state classification.
+    #[must_use]
     pub const fn kind(&self) -> Option<StateKind> {
         self.kind
     }

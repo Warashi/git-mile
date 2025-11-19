@@ -1,15 +1,16 @@
 //! Create task tool implementation.
 
 use crate::mcp::params::CreateTaskParams;
-use git_mile_app::WorkflowConfig;
+use crate::mcp::tools::common::with_store;
+use git_mile_app::actor_from_params_or_default;
+use git_mile_app::{AsyncTaskRepository, WorkflowConfig};
 use git_mile_app::{CreateTaskRequest, TaskWriteError, TaskWriter};
-use git_mile_core::TaskSnapshot;
-use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
 use git_mile_store_git::GitStore;
 use rmcp::ErrorData as McpError;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content};
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -52,18 +53,10 @@ fn map_task_write_error(err: TaskWriteError) -> McpError {
     }
 }
 
-async fn load_snapshot(store: Arc<Mutex<GitStore>>, task: TaskId) -> Result<TaskSnapshot, McpError> {
-    let store_guard = store.lock().await;
-    let events = store_guard
-        .load_events(task)
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-    drop(store_guard);
-    Ok(TaskSnapshot::replay(&events))
-}
-
 /// Create a new task with title, labels, assignees, description, state, and parent tasks.
 pub async fn handle_create_task(
     store: Arc<Mutex<GitStore>>,
+    repository: Arc<AsyncTaskRepository<Arc<Mutex<GitStore>>>>,
     workflow: WorkflowConfig,
     hooks_config: git_mile_app::HooksConfig,
     base_dir: std::path::PathBuf,
@@ -81,24 +74,34 @@ pub async fn handle_create_task(
     } = params;
 
     let parents = parse_task_ids(parents, "parent task ID")?;
-    let task = {
-        let writer = TaskWriter::new(store.lock().await, workflow, hooks_config, base_dir);
-        let request = CreateTaskRequest {
-            title,
-            state,
-            labels,
-            assignees,
-            description,
-            parents,
-            actor: Actor {
-                name: actor_name,
-                email: actor_email,
-            },
-        };
-
-        writer.create_task(request).map_err(map_task_write_error)?.task
+    let repo_hint = base_dir.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    let actor = actor_from_params_or_default(actor_name.as_deref(), actor_email.as_deref(), &repo_hint);
+    let request = CreateTaskRequest {
+        title,
+        state,
+        labels,
+        assignees,
+        description,
+        parents,
+        actor,
     };
-    let snapshot = load_snapshot(store, task).await?;
+
+    let workflow_clone = workflow.clone();
+    let hooks_clone = hooks_config.clone();
+    let base_dir_clone = base_dir.clone();
+    let task = with_store(store.clone(), move |cloned_store| {
+        let writer = TaskWriter::new(cloned_store, workflow_clone, hooks_clone, base_dir_clone);
+        writer
+            .create_task(request)
+            .map(|res| res.task)
+            .map_err(map_task_write_error)
+    })
+    .await?;
+
+    let snapshot = repository
+        .get_snapshot(task)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
     let json_str =
         serde_json::to_string_pretty(&snapshot).map_err(|e| McpError::internal_error(e.to_string(), None))?;

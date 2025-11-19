@@ -10,7 +10,7 @@ use std::sync::Arc;
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
 
-use crate::task_cache::TaskCache;
+use crate::task_cache::{TaskCache, TaskView};
 
 /// Async storage trait for use with `tokio::sync::Mutex`.
 ///
@@ -150,32 +150,73 @@ impl<S: AsyncTaskStore> AsyncTaskRepository<S> {
 
     /// Refresh the cache if stale.
     async fn refresh_if_stale(&self) -> Result<()> {
-        let mut state = self.cache.lock().await;
+        enum RefreshPlan {
+            Full,
+            Incremental(OffsetDateTime),
+        }
 
-        // For now, always do a full reload
-        let loaded_cache = self.load_cache().await?;
+        let plan = {
+            let state = self.cache.lock().await;
+            state
+                .last_refresh
+                .map_or(RefreshPlan::Full, RefreshPlan::Incremental)
+        };
 
-        state.cache = loaded_cache;
-        state.last_refresh = Some(OffsetDateTime::now_utc());
-        drop(state);
+        match plan {
+            RefreshPlan::Full => {
+                let cache = self.load_cache().await?;
+                let mut state = self.cache.lock().await;
+                let latest_ts = cache
+                    .tasks
+                    .first()
+                    .and_then(|view| view.last_updated)
+                    .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+                state.cache = cache;
+                state.last_refresh = Some(latest_ts);
+            }
+            RefreshPlan::Incremental(last_refresh) => {
+                let modified = self.list_modified_since(last_refresh).await?;
+                if modified.is_empty() {
+                    return Ok(());
+                }
+                let updated_views = self.load_task_views(&modified).await?;
+                let latest_seen = updated_views
+                    .iter()
+                    .filter_map(|view| view.last_updated)
+                    .max()
+                    .unwrap_or(last_refresh);
+                let mut state = self.cache.lock().await;
+                state.cache.upsert_views(updated_views);
+                let previous = state.last_refresh.unwrap_or(last_refresh);
+                state.last_refresh = Some(previous.max(latest_seen));
+            }
+        }
+
         Ok(())
+    }
+
+    async fn list_modified_since(&self, since: OffsetDateTime) -> Result<Vec<TaskId>> {
+        self.store
+            .list_tasks_modified_since(since)
+            .await
+            .map_err(|e| anyhow!("Failed to list modified tasks: {}", e.into()))
     }
 
     /// Load all tasks and build a `TaskCache`.
     async fn load_cache(&self) -> Result<TaskCache> {
-        use crate::task_cache::TaskView;
-        use std::cmp::Ordering;
-
-        // List all task IDs
         let task_ids = self
             .store
             .list_tasks()
             .await
             .map_err(|e| anyhow!("Failed to list tasks: {}", e.into()))?;
 
-        // Load events for each task and build TaskView
-        let mut views = Vec::new();
-        for task_id in task_ids {
+        let views = self.load_task_views(&task_ids).await?;
+        Ok(TaskCache::from_views(views))
+    }
+
+    async fn load_task_views(&self, task_ids: &[TaskId]) -> Result<Vec<TaskView>> {
+        let mut views = Vec::with_capacity(task_ids.len());
+        for &task_id in task_ids {
             let events = self
                 .store
                 .load_events(task_id)
@@ -183,17 +224,7 @@ impl<S: AsyncTaskStore> AsyncTaskRepository<S> {
                 .map_err(|e| anyhow!("Failed to load events for task {}: {}", task_id, e.into()))?;
             views.push(TaskView::from_events(&events));
         }
-
-        // Sort by last_updated descending
-        views.sort_by(|a, b| match (a.last_updated, b.last_updated) {
-            (Some(a_ts), Some(b_ts)) => b_ts.cmp(&a_ts),
-            (Some(_), None) => Ordering::Less,
-            (None, Some(_)) => Ordering::Greater,
-            (None, None) => a.snapshot.id.cmp(&b.snapshot.id),
-        });
-
-        // Build cache with indexes
-        Ok(TaskCache::from_views(views))
+        Ok(views)
     }
 
     /// List task snapshots with optional filter.
@@ -217,5 +248,52 @@ impl<S: AsyncTaskStore> AsyncTaskRepository<S> {
         self.refresh_if_stale().await?;
         let state = self.cache.lock().await;
         Ok(state.cache.clone())
+    }
+
+    /// Fetch a snapshot for a specific task.
+    ///
+    /// # Errors
+    /// Returns an error if refreshing the cache fails or the task is missing.
+    pub async fn get_snapshot(&self, task_id: TaskId) -> Result<TaskSnapshot> {
+        self.get_view(task_id).await.map(|view| view.snapshot)
+    }
+
+    /// Fetch a [`TaskView`] (snapshot + comments) for a specific task.
+    ///
+    /// # Errors
+    /// Returns an error if refreshing the cache fails or the task is missing.
+    pub async fn get_view(&self, task_id: TaskId) -> Result<TaskView> {
+        self.refresh_if_stale().await?;
+        let state = self.cache.lock().await;
+        state
+            .cache
+            .view(task_id)
+            .ok_or_else(|| anyhow!("Task not found: {task_id}"))
+    }
+
+    /// List children for a task.
+    ///
+    /// # Errors
+    /// Returns an error if refreshing the cache fails.
+    pub async fn list_children(&self, task_id: TaskId) -> Result<Vec<TaskId>> {
+        self.refresh_if_stale().await?;
+        let state = self.cache.lock().await;
+        if !state.cache.task_index.contains_key(&task_id) {
+            return Err(anyhow!("Task not found: {task_id}"));
+        }
+        Ok(state.cache.children_of(task_id))
+    }
+
+    /// List parents for a task.
+    ///
+    /// # Errors
+    /// Returns an error if refreshing the cache fails.
+    pub async fn list_parents(&self, task_id: TaskId) -> Result<Vec<TaskId>> {
+        self.refresh_if_stale().await?;
+        let state = self.cache.lock().await;
+        if !state.cache.task_index.contains_key(&task_id) {
+            return Err(anyhow!("Task not found: {task_id}"));
+        }
+        Ok(state.cache.parents_of(task_id))
     }
 }

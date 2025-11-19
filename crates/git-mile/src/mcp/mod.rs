@@ -16,9 +16,14 @@ use rmcp::model::{
 };
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{ErrorData as McpError, tool, tool_router};
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::time::Duration;
+use tokio::{sync::Mutex, time::timeout};
+
+/// Default timeout applied to MCP tool executions in seconds.
+const TOOL_CALL_TIMEOUT_SECS: u64 = 30;
 
 /// MCP server for git-mile.
 #[derive(Clone)]
@@ -68,7 +73,7 @@ impl GitMileServer {
     /// Fetch a single task snapshot by ID.
     #[tool(description = "Fetch a single task snapshot by ID")]
     async fn get_task(&self, params: Parameters<GetTaskParams>) -> Result<CallToolResult, McpError> {
-        tools::get_task::handle_get_task(self.store.clone(), params).await
+        tools::get_task::handle_get_task(self.repository.clone(), params).await
     }
 
     /// List comments recorded on a task.
@@ -77,7 +82,7 @@ impl GitMileServer {
         &self,
         params: Parameters<ListCommentsParams>,
     ) -> Result<CallToolResult, McpError> {
-        tools::list_comments::handle_list_comments(self.store.clone(), params).await
+        tools::list_comments::handle_list_comments(self.repository.clone(), params).await
     }
 
     /// List all subtasks of a parent task.
@@ -86,7 +91,7 @@ impl GitMileServer {
         &self,
         params: Parameters<ListSubtasksParams>,
     ) -> Result<CallToolResult, McpError> {
-        tools::list_subtasks::handle_list_subtasks(self.store.clone(), params).await
+        tools::list_subtasks::handle_list_subtasks(self.repository.clone(), params).await
     }
 
     /// Create a new task.
@@ -96,6 +101,7 @@ impl GitMileServer {
     async fn create_task(&self, params: Parameters<CreateTaskParams>) -> Result<CallToolResult, McpError> {
         tools::create_task::handle_create_task(
             self.store.clone(),
+            self.repository.clone(),
             self.workflow.clone(),
             self.hooks_config.clone(),
             self.base_dir.clone(),
@@ -111,6 +117,7 @@ impl GitMileServer {
     async fn update_task(&self, params: Parameters<UpdateTaskParams>) -> Result<CallToolResult, McpError> {
         tools::update_task::handle_update_task(
             self.store.clone(),
+            self.repository.clone(),
             self.workflow.clone(),
             self.hooks_config.clone(),
             self.base_dir.clone(),
@@ -125,7 +132,13 @@ impl GitMileServer {
         &self,
         params: Parameters<UpdateCommentParams>,
     ) -> Result<CallToolResult, McpError> {
-        tools::update_comment::handle_update_comment(self.store.clone(), params).await
+        tools::update_comment::handle_update_comment(
+            self.store.clone(),
+            self.repository.clone(),
+            self.base_dir.clone(),
+            params,
+        )
+        .await
     }
 
     /// Add a comment to a task.
@@ -180,6 +193,52 @@ impl ServerHandler for GitMileServer {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let tool_context = ToolCallContext::new(self, request, context);
-        self.tool_router.call(tool_context).await
+        await_tool_call(
+            self.tool_router.call(tool_context),
+            Duration::from_secs(TOOL_CALL_TIMEOUT_SECS),
+        )
+        .await
+    }
+}
+
+async fn await_tool_call<F, T>(future: F, deadline: Duration) -> Result<T, McpError>
+where
+    F: Future<Output = Result<T, McpError>>,
+{
+    timeout(deadline, future)
+        .await
+        .map_err(|_| McpError::internal_error("Tool call timed out", None))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rmcp::model::ErrorCode;
+    use tokio::time::sleep;
+
+    #[tokio::test]
+    async fn await_tool_call_propagates_success() {
+        let Ok(result) = await_tool_call(async { Ok::<_, McpError>("ok") }, Duration::from_millis(5)).await
+        else {
+            panic!("call must succeed");
+        };
+        assert_eq!(result, "ok");
+    }
+
+    #[tokio::test]
+    async fn await_tool_call_returns_timeout_error() {
+        let Err(error) = await_tool_call(
+            async {
+                sleep(Duration::from_millis(10)).await;
+                Ok::<_, McpError>("never reached")
+            },
+            Duration::from_millis(1),
+        )
+        .await
+        else {
+            panic!("call should time out");
+        };
+        assert_eq!(error.code, ErrorCode::INTERNAL_ERROR);
+        assert!(error.message.contains("timed out"));
     }
 }

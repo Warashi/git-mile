@@ -1,8 +1,11 @@
+#![allow(missing_docs)]
+
 //! Application layer logic for git-mile.
 //!
 //! This crate provides high-level services, caching, configuration, and utilities
 //! shared across CLI, TUI, and MCP interfaces.
 
+pub mod actor;
 pub mod async_store;
 pub mod config;
 pub mod filter_util;
@@ -13,6 +16,10 @@ pub mod task_repository;
 pub mod task_writer;
 
 // Re-exports for convenience
+pub use actor::{
+    DEFAULT_ACTOR_EMAIL, DEFAULT_ACTOR_NAME, ENV_ACTOR_EMAIL, ENV_ACTOR_NAME, actor_from_env,
+    actor_from_git_config, actor_from_params_or_default, default_actor,
+};
 pub use async_store::{AsyncTaskRepository, AsyncTaskStore};
 pub use config::{HooksConfig, ProjectConfig, StateKind, WorkflowConfig, WorkflowState};
 pub use filter_util::{FilterBuildError, TaskFilterBuilder, normalize_timestamp, parse_timestamp};

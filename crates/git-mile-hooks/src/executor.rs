@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+/// Interval in milliseconds between polling attempts when waiting on hooks.
+const HOOK_POLL_INTERVAL_MS: u64 = 100;
+
 /// Executor for running hook scripts
 #[derive(Debug)]
 pub struct HookExecutor {
@@ -124,7 +127,7 @@ fn wait_with_timeout(child: &mut std::process::Child, timeout: Duration) -> Resu
     // For simplicity, we'll use a polling approach
     // In a real implementation, you might want to use tokio or a platform-specific API
     let start = std::time::Instant::now();
-    let poll_interval = Duration::from_millis(100);
+    let poll_interval = Duration::from_millis(HOOK_POLL_INTERVAL_MS);
 
     loop {
         match child.try_wait() {

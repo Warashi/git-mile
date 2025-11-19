@@ -1,7 +1,9 @@
 use std::fmt::{self, Display};
 
 use git_mile_core::id::TaskId;
-use git_mile_core::{StateKind, TaskFilter, TaskFilterBuilder as CoreTaskFilterBuilder, UpdatedFilter};
+use git_mile_core::{
+    FilterValidationError, StateKind, TaskFilter, TaskFilterBuilder as CoreTaskFilterBuilder, UpdatedFilter,
+};
 use thiserror::Error;
 use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 
@@ -16,6 +18,8 @@ pub enum FilterBuildError {
         #[source]
         source: time::error::Parse,
     },
+    #[error("{message}")]
+    InvalidTextQuery { message: String },
 }
 
 /// Result alias for filter construction helpers.
@@ -79,6 +83,9 @@ impl TaskFilterBuilder {
     }
 
     /// Configure state kind include/exclude clauses.
+    ///
+    /// # Errors
+    /// Returns an error if any of the provided tokens cannot be mapped to a known state kind.
     pub fn with_state_kinds(mut self, include: &[String], exclude: &[String]) -> FilterBuildResult<Self> {
         self.include_state_kinds.extend(parse_state_kind_tokens(include)?);
         self.exclude_state_kinds.extend(parse_state_kind_tokens(exclude)?);
@@ -96,6 +103,9 @@ impl TaskFilterBuilder {
     }
 
     /// Configure the updated timestamp bounds using RFC3339 strings.
+    ///
+    /// # Errors
+    /// Returns an error if either timestamp fails to parse.
     pub fn with_time_range(
         mut self,
         since: Option<String>,
@@ -119,7 +129,10 @@ impl TaskFilterBuilder {
     }
 
     /// Build the final [`TaskFilter`].
-    pub fn build(self) -> TaskFilter {
+    ///
+    /// # Errors
+    /// Returns [`FilterBuildError::InvalidTextQuery`] when the text filter violates length limits.
+    pub fn build(self) -> FilterBuildResult<TaskFilter> {
         let mut builder = CoreTaskFilterBuilder::new()
             .states(self.states)
             .labels(self.labels)
@@ -140,11 +153,16 @@ impl TaskFilterBuilder {
             });
         }
 
-        builder.build()
+        let filter = builder.build();
+        filter.validate().map_err(FilterBuildError::from)?;
+        Ok(filter)
     }
 }
 
 /// Convert arbitrary tokens into [`StateKind`] values.
+///
+/// # Errors
+/// Returns an error if any token does not match a valid state kind.
 pub fn parse_state_kind_tokens(tokens: &[String]) -> FilterBuildResult<Vec<StateKind>> {
     tokens
         .iter()
@@ -165,6 +183,9 @@ pub fn parse_state_kind_tokens(tokens: &[String]) -> FilterBuildResult<Vec<State
 }
 
 /// Parse an RFC3339 timestamp string.
+///
+/// # Errors
+/// Returns an error if the string does not conform to RFC3339.
 pub fn parse_timestamp(s: &str) -> Result<OffsetDateTime, time::error::Parse> {
     OffsetDateTime::parse(s.trim(), &Rfc3339)
 }
@@ -200,6 +221,20 @@ impl FilterBuildError {
             Self::InvalidTimestamp { field, .. } => {
                 format!("{field} の時刻フォーマットが不正です (RFC3339 必須)")
             }
+            Self::InvalidTextQuery { message } => format!("テキストフィルターが不正です: {message}"),
+        }
+    }
+}
+
+impl From<FilterValidationError> for FilterBuildError {
+    fn from(err: FilterValidationError) -> Self {
+        match err {
+            FilterValidationError::TextTooShort { min, actual } => Self::InvalidTextQuery {
+                message: format!("最低 {min} 文字以上で入力してください (現在 {actual} 文字)"),
+            },
+            FilterValidationError::TextTooLong { max, actual } => Self::InvalidTextQuery {
+                message: format!("最大 {max} 文字までです (現在 {actual} 文字)"),
+            },
         }
     }
 }
@@ -292,21 +327,24 @@ mod tests {
         let children = vec![child];
         let include_kinds = vec!["todo".into()];
         let exclude_kinds = vec!["done".into()];
-        let filter = TaskFilterBuilder::new()
-            .with_states(&states)
-            .with_labels(&labels)
-            .with_assignees(&assignees)
-            .with_parents(&parents)
-            .with_children(&children)
-            .with_state_kinds(&include_kinds, &exclude_kinds)
-            .unwrap_or_else(|err| panic!("state kinds parse: {err}"))
-            .with_text(Some(" Panic ".into()))
-            .with_time_range(
-                Some("2025-01-01T00:00:00Z".into()),
-                Some("2025-01-02T00:00:00Z".into()),
-            )
-            .unwrap_or_else(|err| panic!("time range parse: {err}"))
-            .build();
+        let filter = ok(
+            TaskFilterBuilder::new()
+                .with_states(&states)
+                .with_labels(&labels)
+                .with_assignees(&assignees)
+                .with_parents(&parents)
+                .with_children(&children)
+                .with_state_kinds(&include_kinds, &exclude_kinds)
+                .unwrap_or_else(|err| panic!("state kinds parse: {err}"))
+                .with_text(Some(" Panic ".into()))
+                .with_time_range(
+                    Some("2025-01-01T00:00:00Z".into()),
+                    Some("2025-01-02T00:00:00Z".into()),
+                )
+                .unwrap_or_else(|err| panic!("time range parse: {err}"))
+                .build(),
+            "build filter",
+        );
 
         assert!(filter.states.contains("state/todo"));
         assert!(filter.labels.contains("type/doc"));

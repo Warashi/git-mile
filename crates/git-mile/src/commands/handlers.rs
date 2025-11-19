@@ -1,11 +1,12 @@
+use std::path::Path;
 use std::str::FromStr;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use git_mile_core::TaskFilter;
-use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
 
 use crate::{Command, LsFormat};
+use git_mile_app::actor_from_params_or_default;
 use git_mile_app::{
     CommentInput, CreateTaskInput, TaskFilterBuilder, TaskRepository, TaskService, TaskStore, WorkflowConfig,
 };
@@ -14,6 +15,7 @@ pub fn run<S: TaskStore, R: TaskStore>(
     command: Command,
     service: &TaskService<S>,
     repository: &TaskRepository<R>,
+    repo_root: &Path,
 ) -> Result<()> {
     match command {
         Command::New {
@@ -33,15 +35,23 @@ pub fn run<S: TaskStore, R: TaskStore>(
             assignees,
             description,
             parents,
-            actor_name,
-            actor_email,
+            actor_name.as_deref(),
+            actor_email.as_deref(),
+            repo_root,
         ),
         Command::Comment {
             task,
             message,
             actor_name,
             actor_email,
-        } => handle_comment(service, &task, message, actor_name, actor_email),
+        } => handle_comment(
+            service,
+            &task,
+            message,
+            actor_name.as_deref(),
+            actor_email.as_deref(),
+            repo_root,
+        ),
         Command::Show { task } => handle_show(service, &task),
         Command::Ls {
             states,
@@ -83,14 +93,12 @@ fn handle_new<S: TaskStore>(
     assignees: Vec<String>,
     description: Option<String>,
     parents: Vec<String>,
-    actor_name: String,
-    actor_email: String,
+    actor_name: Option<&str>,
+    actor_email: Option<&str>,
+    repo_root: &Path,
 ) -> Result<()> {
     let parent_ids = parse_task_ids(parents)?;
-    let actor = Actor {
-        name: actor_name,
-        email: actor_email,
-    };
+    let actor = actor_from_params_or_default(actor_name, actor_email, repo_root);
     let output = service.create_with_parents(CreateTaskInput {
         title,
         state,
@@ -112,14 +120,12 @@ fn handle_comment<S: TaskStore>(
     service: &TaskService<S>,
     task: &str,
     message: String,
-    actor_name: String,
-    actor_email: String,
+    actor_name: Option<&str>,
+    actor_email: Option<&str>,
+    repo_root: &Path,
 ) -> Result<()> {
     let task = parse_task_id(task)?;
-    let actor = Actor {
-        name: actor_name,
-        email: actor_email,
-    };
+    let actor = actor_from_params_or_default(actor_name, actor_email, repo_root);
     let output = service.add_comment(CommentInput { task, message, actor })?;
     println!("commented: {} ({})", output.task, output.oid);
     Ok(())
@@ -225,7 +231,7 @@ fn build_filter(args: CliFilterArgs) -> Result<TaskFilter> {
     builder = builder.with_text(text);
     builder = builder.with_time_range(updated_since, updated_until)?;
 
-    Ok(builder.build())
+    builder.build().map_err(|err| anyhow!(err))
 }
 
 fn render_task_table(tasks: &[git_mile_core::TaskSnapshot], workflow: &WorkflowConfig) {
@@ -519,11 +525,12 @@ mod tests {
                 assignees: vec![],
                 description: None,
                 parents: vec![],
-                actor_name: "run".into(),
-                actor_email: "run@example.invalid".into(),
+                actor_name: Some("run".into()),
+                actor_email: Some("run@example.invalid".into()),
             },
             &service,
             &repository,
+            Path::new("."),
         )?;
 
         let events = store.appended();
@@ -545,11 +552,12 @@ mod tests {
                 assignees: vec![],
                 description: None,
                 parents: vec![],
-                actor_name: "alice".into(),
-                actor_email: "alice@example.invalid".into(),
+                actor_name: Some("alice".into()),
+                actor_email: Some("alice@example.invalid".into()),
             },
             &service,
             &repository,
+            Path::new("."),
         )?;
 
         // Get the created task ID
@@ -561,11 +569,12 @@ mod tests {
             Command::Comment {
                 task: task.to_string(),
                 message: "from run".into(),
-                actor_name: "alice".into(),
-                actor_email: "alice@example.invalid".into(),
+                actor_name: Some("alice".into()),
+                actor_email: Some("alice@example.invalid".into()),
             },
             &service,
             &repository,
+            Path::new("."),
         )?;
 
         let events = store.appended();
@@ -596,6 +605,7 @@ mod tests {
             },
             &service,
             &repository,
+            Path::new("."),
         )?;
         assert_eq!(store.list_calls(), 1);
         assert_eq!(store.load_calls(), vec![task]);
@@ -612,6 +622,7 @@ mod tests {
             },
             &service,
             &repository,
+            Path::new("."),
         )?;
 
         let calls = store.load_calls();

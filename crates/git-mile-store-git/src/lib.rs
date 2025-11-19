@@ -1,3 +1,5 @@
+#![warn(missing_docs)]
+
 //! Git-backed storage implementation for git-mile.
 
 mod error;
@@ -9,24 +11,26 @@ use git_mile_core::event::Event;
 use git_mile_core::id::TaskId;
 use git2::{Commit, Oid, Repository, Signature, Sort};
 use lru::LruCache;
-use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::{env, num::NonZeroUsize};
 use tracing::{debug, info};
 
-const EVENT_CACHE_CAPACITY: usize = 256;
-
-// SAFETY: 256 is non-zero
-const EVENT_CACHE_CAPACITY_NONZERO: NonZeroUsize = match NonZeroUsize::new(EVENT_CACHE_CAPACITY) {
-    Some(n) => n,
-    None => unreachable!(),
-};
+/// Default capacity for the event cache when no override is provided.
+const DEFAULT_EVENT_CACHE_CAPACITY: usize = 256;
+/// Environment variable controlling the `GitStore` event cache capacity.
+const EVENT_CACHE_CAPACITY_ENV_VAR: &str = "GIT_MILE_CACHE_CAPACITY";
+/// Prefix placed ahead of every git-mile event commit message.
+const EVENT_COMMIT_PREFIX: &str = "git-mile-event: ";
+/// Canonical OID of Git's empty tree object.
+const EMPTY_TREE_OID_HEX: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 /// Storage based on git refs under `refs/git-mile/tasks/*`.
 pub struct GitStore {
     repo: Repository,
     repo_path: PathBuf,
-    event_cache: Arc<Mutex<LruCache<Oid, Event>>>,
+    event_cache: Arc<Mutex<LruCache<TaskId, Vec<Event>>>>,
+    empty_tree_oid: Oid,
 }
 
 impl GitStore {
@@ -37,11 +41,13 @@ impl GitStore {
     pub fn open(cwd_or_repo: impl AsRef<Path>) -> Result<Self> {
         let repo = Repository::discover(cwd_or_repo).context("Failed to discover .git")?;
         let repo_path = repo.path().to_path_buf();
-        let cache = LruCache::new(EVENT_CACHE_CAPACITY_NONZERO);
+        let cache = LruCache::new(Self::event_cache_capacity());
+        let empty_tree_oid = Self::ensure_empty_tree(&repo)?;
         Ok(Self {
             repo,
             repo_path,
             event_cache: Arc::new(Mutex::new(cache)),
+            empty_tree_oid,
         })
     }
 
@@ -50,28 +56,49 @@ impl GitStore {
         format!("refs/git-mile/tasks/{task}")
     }
 
-    fn cached_event(&self, oid: Oid) -> Option<Event> {
+    fn task_id_from_refname(name: &str) -> Option<TaskId> {
+        name.strip_prefix("refs/git-mile/tasks/")?.parse().ok()
+    }
+
+    fn event_cache_capacity() -> NonZeroUsize {
+        let env_value = env::var(EVENT_CACHE_CAPACITY_ENV_VAR).ok();
+        Self::cache_capacity_from_override(env_value).unwrap_or_else(Self::default_cache_capacity)
+    }
+
+    fn default_cache_capacity() -> NonZeroUsize {
+        NonZeroUsize::new(DEFAULT_EVENT_CACHE_CAPACITY).map_or_else(
+            || unreachable!("DEFAULT_EVENT_CACHE_CAPACITY must be non-zero"),
+            |value| value,
+        )
+    }
+
+    fn cache_capacity_from_override(raw: Option<String>) -> Option<NonZeroUsize> {
+        raw?.parse::<usize>().ok().and_then(NonZeroUsize::new)
+    }
+
+    fn cached_events(&self, task: TaskId) -> Option<Vec<Event>> {
         self.event_cache
             .lock()
             .ok()
-            .and_then(|mut cache| cache.get(&oid).cloned())
+            .and_then(|mut cache| cache.get(&task).cloned())
     }
 
-    fn cache_event(&self, oid: Oid, event: Event) {
+    fn cache_events(&self, task: TaskId, events: &[Event]) {
         if let Ok(mut cache) = self.event_cache.lock() {
-            cache.put(oid, event);
+            cache.put(task, events.to_vec());
         }
     }
 
-    fn cached_or_decode_event(&self, oid: Oid) -> Result<Option<Event>> {
-        if let Some(ev) = self.cached_event(oid) {
-            return Ok(Some(ev));
+    fn invalidate_cached_events(&self, task: TaskId) {
+        if let Ok(mut cache) = self.event_cache.lock() {
+            cache.pop(&task);
         }
-        let Some(ev) = self.decode_event_from_commit(oid)? else {
-            return Ok(None);
-        };
-        self.cache_event(oid, ev.clone());
-        Ok(Some(ev))
+    }
+
+    fn ensure_empty_tree(repo: &Repository) -> Result<Oid> {
+        let mut idx = repo.index()?;
+        idx.clear()?;
+        Ok(idx.write_tree()?)
     }
 
     fn decode_event_from_commit(&self, oid: Oid) -> Result<Option<Event>> {
@@ -89,7 +116,7 @@ impl GitStore {
         let Some((head, body)) = message.split_once("\n\n") else {
             return Ok(None);
         };
-        if !head.starts_with("git-mile-event: ") {
+        if !head.starts_with(EVENT_COMMIT_PREFIX) {
             return Ok(None);
         }
 
@@ -109,13 +136,12 @@ impl GitStore {
         let sig = Signature::now(&ev.actor.name, &ev.actor.email)
             .with_context(|| format!("Invalid signature: {} <{}>", ev.actor.name, ev.actor.email))?;
 
-        // Empty tree
-        let tree_oid = {
-            let mut idx = self.repo.index()?;
-            idx.clear()?;
-            idx.write_tree()?
-        };
-        let tree = self.repo.find_tree(tree_oid)?;
+        debug_assert_eq!(
+            self.empty_tree_oid.to_string(),
+            EMPTY_TREE_OID_HEX,
+            "empty tree OID should remain stable"
+        );
+        let tree = self.repo.find_tree(self.empty_tree_oid)?;
 
         // Parent (if ref exists)
         let parents: Vec<Commit<'_>> = match self.repo.find_reference(&refname) {
@@ -129,7 +155,7 @@ impl GitStore {
 
         // Commit message: first line + blank + pretty JSON
         let body = serde_json::to_string_pretty(ev)?;
-        let msg = format!("git-mile-event: {}\n\n{}", ev.id, body);
+        let msg = format!("{EVENT_COMMIT_PREFIX}{}\n\n{}", ev.id, body);
 
         let parent_refs: Vec<&Commit<'_>> = parents.iter().collect();
         let oid = self
@@ -137,6 +163,7 @@ impl GitStore {
             .commit(Some(&refname), &sig, &sig, &msg, &tree, &parent_refs)?;
 
         info!(%oid, %refname, "Appended event");
+        self.invalidate_cached_events(ev.task);
         Ok(oid)
     }
 
@@ -145,13 +172,51 @@ impl GitStore {
     /// # Errors
     /// Returns an error if the task ref is missing or commit history cannot be traversed.
     pub fn load_events(&self, task: TaskId) -> Result<Vec<Event>> {
+        if let Some(events) = self.cached_events(task) {
+            return Ok(events);
+        }
         let refname = Self::refname(&task);
         let reference = self
             .repo
             .find_reference(&refname)
             .with_context(|| format!("Task not found: {refname}"))?;
-        let tip = reference.target().ok_or_else(|| anyhow!("Ref has no target"))?;
+        let events = self.load_events_from_reference(task, &reference)?;
+        self.cache_events(task, &events);
+        Ok(events)
+    }
 
+    /// Load events for every known task reference.
+    ///
+    /// # Errors
+    /// Returns an error if reference enumeration fails.
+    pub fn load_all_task_events(&self) -> Result<Vec<(TaskId, Vec<Event>)>> {
+        let mut results = Vec::new();
+        let references = self.repo.references_glob("refs/git-mile/tasks/*")?;
+        for reference in references {
+            let reference = reference?;
+            let Some(name) = reference.name() else {
+                continue;
+            };
+            let Some(task_id) = Self::task_id_from_refname(name) else {
+                continue;
+            };
+            let events = self.load_events_from_reference(task_id, &reference)?;
+            self.cache_events(task_id, &events);
+            results.push((task_id, events));
+        }
+        Ok(results)
+    }
+
+    fn load_events_from_reference(
+        &self,
+        task: TaskId,
+        reference: &git2::Reference<'_>,
+    ) -> Result<Vec<Event>> {
+        let tip = reference.target().ok_or_else(|| anyhow!("Ref has no target"))?;
+        self.load_events_from_tip(task, tip)
+    }
+
+    fn load_events_from_tip(&self, task: TaskId, tip: Oid) -> Result<Vec<Event>> {
         let mut rev = self.repo.revwalk()?;
         rev.set_sorting(Sort::TIME | Sort::REVERSE)?;
         rev.push(tip)?;
@@ -159,7 +224,7 @@ impl GitStore {
         let mut out = Vec::new();
         for oid in rev {
             let oid = oid?;
-            if let Some(ev) = self.cached_or_decode_event(oid)? {
+            if let Some(ev) = self.decode_event_from_commit(oid)? {
                 if ev.task == task {
                     out.push(ev);
                 } else {
@@ -180,9 +245,7 @@ impl GitStore {
         for r in self.repo.references_glob("refs/git-mile/tasks/*")? {
             let r = r?;
             let name = r.name().ok_or_else(|| anyhow!("Invalid ref name"))?;
-            if let Some(id_str) = name.strip_prefix("refs/git-mile/tasks/")
-                && let Ok(id) = id_str.parse()
-            {
+            if let Some(id) = Self::task_id_from_refname(name) {
                 ids.push(id);
             }
         }
@@ -215,10 +278,7 @@ impl GitStore {
             let Some(name) = reference.name() else {
                 continue;
             };
-            let Some(id_str) = name.strip_prefix("refs/git-mile/tasks/") else {
-                continue;
-            };
-            let Ok(task_id) = id_str.parse() else {
+            let Some(task_id) = Self::task_id_from_refname(name) else {
                 continue;
             };
 
@@ -252,6 +312,7 @@ impl Clone for GitStore {
             repo,
             repo_path: self.repo_path.clone(),
             event_cache: Arc::clone(&self.event_cache),
+            empty_tree_oid: self.empty_tree_oid,
         }
     }
 }
@@ -402,7 +463,7 @@ mod tests {
         }
         let body = serde_json::to_string_pretty(&legacy_value)?;
         let refname = GitStore::refname(&task);
-        let msg = format!("git-mile-event: {}\n\n{}", legacy_event.id, body);
+        let msg = format!("{EVENT_COMMIT_PREFIX}{}\n\n{}", legacy_event.id, body);
         let sig = Signature::now(&actor.name, &actor.email)?;
         let mut idx = repo.index()?;
         idx.clear()?;
@@ -421,6 +482,88 @@ mod tests {
             }
             other => panic!("unexpected event kind: {other:?}"),
         }
+
+        fs::remove_dir_all(&base)?;
+        Ok(())
+    }
+
+    #[test]
+    fn load_events_cache_is_invalidated_after_append() -> Result<()> {
+        let base = temp_repo_path()?;
+        Repository::init(&base)?;
+
+        let store = GitStore::open(&base)?;
+        let task = TaskId::new();
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+
+        let created = Event::new(
+            task,
+            &actor,
+            EventKind::TaskCreated {
+                title: "Initial".into(),
+                labels: vec![],
+                assignees: vec![],
+                description: None,
+                state: None,
+                state_kind: None,
+            },
+        );
+        store.append_event(&created)?;
+        assert_eq!(store.load_events(task)?.len(), 1);
+
+        let updated = Event::new(
+            task,
+            &actor,
+            EventKind::TaskTitleSet {
+                title: "Updated".into(),
+            },
+        );
+        store.append_event(&updated)?;
+
+        let events = store.load_events(task)?;
+        assert_eq!(events.len(), 2, "cache must be invalidated after append");
+
+        fs::remove_dir_all(&base)?;
+        Ok(())
+    }
+
+    #[test]
+    fn load_all_events_returns_every_task() -> Result<()> {
+        let base = temp_repo_path()?;
+        Repository::init(&base)?;
+
+        let store = GitStore::open(&base)?;
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+
+        let first = TaskId::new();
+        let second = TaskId::new();
+
+        for (task, title) in [(first, "First"), (second, "Second")] {
+            store.append_event(&Event::new(
+                task,
+                &actor,
+                EventKind::TaskCreated {
+                    title: title.into(),
+                    labels: vec![],
+                    assignees: vec![],
+                    description: None,
+                    state: None,
+                    state_kind: None,
+                },
+            ))?;
+        }
+
+        let mut all = store.load_all_task_events()?;
+        all.sort_by_key(|(task, _)| *task);
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].0, first);
+        assert_eq!(all[1].0, second);
 
         fs::remove_dir_all(&base)?;
         Ok(())
@@ -475,6 +618,22 @@ mod tests {
 
         fs::remove_dir_all(&base)?;
         Ok(())
+    }
+
+    #[test]
+    fn capacity_override_accepts_valid_numbers() {
+        if let Some(override_value) = GitStore::cache_capacity_from_override(Some("512".into())) {
+            assert_eq!(override_value.get(), 512);
+        } else {
+            panic!("override must accept positive numbers");
+        }
+    }
+
+    #[test]
+    fn capacity_override_rejects_invalid_values() {
+        assert!(GitStore::cache_capacity_from_override(Some("abc".into())).is_none());
+        assert!(GitStore::cache_capacity_from_override(Some("0".into())).is_none());
+        assert!(GitStore::cache_capacity_from_override(None).is_none());
     }
 
     fn temp_repo_path() -> Result<PathBuf> {

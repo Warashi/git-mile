@@ -12,6 +12,11 @@ use ratatui::{
 use git_mile_app::TaskStore;
 use git_mile_app::TaskView;
 
+use super::super::constants::{
+    DETAIL_BREADCRUMB_HEIGHT, DETAIL_BREADCRUMB_TITLE_MAX_CHARS, DETAIL_CHILD_ENTRY_MARKER,
+    DETAIL_CHILD_LIST_MAX_ROWS, DETAIL_CHILD_LIST_PADDING_ROWS, DETAIL_PARENT_TITLE_MAX_CHARS,
+    DETAIL_SECTION_MIN_HEIGHT,
+};
 use super::super::view::Ui;
 use super::util::{state_kind_marker, truncate_with_ellipsis};
 
@@ -24,12 +29,12 @@ impl<S: TaskStore> Ui<S> {
 
             let mut constraints = Vec::new();
             if has_parents {
-                constraints.push(Constraint::Length(3));
+                constraints.push(Constraint::Length(DETAIL_BREADCRUMB_HEIGHT));
             }
-            constraints.push(Constraint::Min(5));
+            constraints.push(Constraint::Min(DETAIL_SECTION_MIN_HEIGHT));
             if has_children {
                 let child_rows = u16::try_from(children.len()).unwrap_or(u16::MAX);
-                let height = child_rows.min(10) + 2;
+                let height = child_rows.min(DETAIL_CHILD_LIST_MAX_ROWS) + DETAIL_CHILD_LIST_PADDING_ROWS;
                 constraints.push(Constraint::Length(height));
             }
 
@@ -68,7 +73,10 @@ impl<S: TaskStore> Ui<S> {
 
         for ancestor in &ancestors {
             breadcrumb_items.push(Span::raw(" > "));
-            let ancestor_title = truncate_with_ellipsis(ancestor.snapshot.title.as_str(), 20);
+            let ancestor_title = truncate_with_ellipsis(
+                ancestor.snapshot.title.as_str(),
+                DETAIL_BREADCRUMB_TITLE_MAX_CHARS,
+            );
             breadcrumb_items.push(Span::raw(ancestor_title));
         }
 
@@ -125,7 +133,7 @@ impl<S: TaskStore> Ui<S> {
             } else {
                 let parent_titles: Vec<_> = parents
                     .iter()
-                    .map(|p| truncate_with_ellipsis(p.snapshot.title.as_str(), 15))
+                    .map(|p| truncate_with_ellipsis(p.snapshot.title.as_str(), DETAIL_PARENT_TITLE_MAX_CHARS))
                     .collect();
                 let joined = parent_titles
                     .iter()
@@ -175,7 +183,10 @@ impl<S: TaskStore> Ui<S> {
                 let state_marker = state_kind_marker(child.snapshot.state_kind);
                 let state_label = workflow.display_label(state_value);
 
-                let text = format!("▸ {} [{}]{}", child.snapshot.title, state_label, state_marker);
+                let text = format!(
+                    "{DETAIL_CHILD_ENTRY_MARKER} {} [{}]{}",
+                    child.snapshot.title, state_label, state_marker
+                );
 
                 ListItem::new(text)
             })
@@ -202,7 +213,7 @@ impl<S: TaskStore> Ui<S> {
                 for comment in &task.comments {
                     let header = format!(
                         "{} <{}> [{}]",
-                        comment.actor.name, comment.actor.email, comment.ts
+                        comment.actor.name, comment.actor.email, comment.created_at
                     );
                     lines.push(Line::from(Span::styled(
                         header,
