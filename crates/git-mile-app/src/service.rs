@@ -34,6 +34,10 @@ impl<S> TaskService<S> {
 }
 
 impl<S: TaskStore> TaskService<S> {
+    /// Create a task and optionally link parents.
+    ///
+    /// # Errors
+    /// Returns an error if validation fails or emitting events is unsuccessful.
     pub fn create_with_parents(&self, input: CreateTaskInput) -> Result<CreateTaskOutput> {
         let CreateTaskInput {
             title,
@@ -75,6 +79,10 @@ impl<S: TaskStore> TaskService<S> {
         })
     }
 
+    /// Append a comment to the specified task.
+    ///
+    /// # Errors
+    /// Returns an error if the task cannot be loaded or the event append fails.
     pub fn add_comment(&self, input: CommentInput) -> Result<CommentOutput> {
         let CommentInput {
             task, message, actor, ..
@@ -93,6 +101,10 @@ impl<S: TaskStore> TaskService<S> {
         Ok(CommentOutput { task, oid })
     }
 
+    /// Build a [`TaskSnapshot`] for the given task by replaying events.
+    ///
+    /// # Errors
+    /// Returns an error if event loading fails.
     pub fn materialize(&self, task: TaskId) -> Result<TaskSnapshot> {
         let events = self.store().load_events(task).map_err(Into::into)?;
         Ok(TaskSnapshot::replay(&events))

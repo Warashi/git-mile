@@ -79,6 +79,9 @@ impl TaskFilterBuilder {
     }
 
     /// Configure state kind include/exclude clauses.
+    ///
+    /// # Errors
+    /// Returns an error if any of the provided tokens cannot be mapped to a known state kind.
     pub fn with_state_kinds(mut self, include: &[String], exclude: &[String]) -> FilterBuildResult<Self> {
         self.include_state_kinds.extend(parse_state_kind_tokens(include)?);
         self.exclude_state_kinds.extend(parse_state_kind_tokens(exclude)?);
@@ -96,6 +99,9 @@ impl TaskFilterBuilder {
     }
 
     /// Configure the updated timestamp bounds using RFC3339 strings.
+    ///
+    /// # Errors
+    /// Returns an error if either timestamp fails to parse.
     pub fn with_time_range(
         mut self,
         since: Option<String>,
@@ -119,6 +125,7 @@ impl TaskFilterBuilder {
     }
 
     /// Build the final [`TaskFilter`].
+    #[must_use]
     pub fn build(self) -> TaskFilter {
         let mut builder = CoreTaskFilterBuilder::new()
             .states(self.states)
@@ -145,6 +152,9 @@ impl TaskFilterBuilder {
 }
 
 /// Convert arbitrary tokens into [`StateKind`] values.
+///
+/// # Errors
+/// Returns an error if any token does not match a valid state kind.
 pub fn parse_state_kind_tokens(tokens: &[String]) -> FilterBuildResult<Vec<StateKind>> {
     tokens
         .iter()
@@ -165,6 +175,9 @@ pub fn parse_state_kind_tokens(tokens: &[String]) -> FilterBuildResult<Vec<State
 }
 
 /// Parse an RFC3339 timestamp string.
+///
+/// # Errors
+/// Returns an error if the string does not conform to RFC3339.
 pub fn parse_timestamp(s: &str) -> Result<OffsetDateTime, time::error::Parse> {
     OffsetDateTime::parse(s.trim(), &Rfc3339)
 }

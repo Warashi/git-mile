@@ -93,20 +93,14 @@ impl TaskCache {
             views.push(TaskView::from_events(&events));
         }
 
-        views.sort_by(|a, b| match (a.last_updated, b.last_updated) {
-            (Some(a_ts), Some(b_ts)) => b_ts.cmp(&a_ts),
-            (Some(_), None) => Ordering::Less,
-            (None, Some(_)) => Ordering::Greater,
-            (None, None) => a.snapshot.id.cmp(&b.snapshot.id),
-        });
-
         Ok(Self::from_views(views))
     }
 
     /// Create a `TaskCache` from pre-built `TaskViews`.
     ///
     /// Used by async cache loading to avoid requiring `TaskStore` trait bounds.
-    pub(crate) fn from_views(views: Vec<TaskView>) -> Self {
+    pub(crate) fn from_views(mut views: Vec<TaskView>) -> Self {
+        Self::sort_views(&mut views);
         let mut cache = Self {
             tasks: views,
             task_index: HashMap::new(),
@@ -115,6 +109,37 @@ impl TaskCache {
         };
         cache.rebuild_indexes();
         cache
+    }
+
+    pub(crate) fn sort_views(views: &mut [TaskView]) {
+        views.sort_by(Self::compare_views);
+    }
+
+    fn compare_views(a: &TaskView, b: &TaskView) -> Ordering {
+        match (a.last_updated, b.last_updated) {
+            (Some(a_ts), Some(b_ts)) => b_ts.cmp(&a_ts),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => a.snapshot.id.cmp(&b.snapshot.id),
+        }
+    }
+
+    /// Upsert task views, reusing cached state when possible.
+    pub fn upsert_views(&mut self, views: Vec<TaskView>) {
+        if views.is_empty() {
+            return;
+        }
+
+        for view in views {
+            if let Some(&idx) = self.task_index.get(&view.snapshot.id) {
+                self.tasks[idx] = view;
+            } else {
+                self.tasks.push(view);
+            }
+        }
+
+        Self::sort_views(&mut self.tasks);
+        self.rebuild_indexes();
     }
 
     fn rebuild_indexes(&mut self) {
@@ -153,10 +178,33 @@ impl TaskCache {
             .map(|view| view.snapshot.clone())
             .collect()
     }
+
+    /// Fetch a full [`TaskView`] for a task id.
+    #[must_use]
+    pub fn view(&self, task_id: TaskId) -> Option<TaskView> {
+        self.task_index
+            .get(&task_id)
+            .and_then(|&idx| self.tasks.get(idx))
+            .cloned()
+    }
+
+    /// Return parent ids for the given task.
+    #[must_use]
+    pub fn parents_of(&self, task_id: TaskId) -> Vec<TaskId> {
+        self.parents_index.get(&task_id).cloned().unwrap_or_default()
+    }
+
+    /// Return child ids for the given task.
+    #[must_use]
+    pub fn children_of(&self, task_id: TaskId) -> Vec<TaskId> {
+        self.children_index.get(&task_id).cloned().unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
     use super::*;
     use crate::task_writer::TaskStore as CoreTaskStore;
     use git_mile_core::TaskFilter;
@@ -313,5 +361,33 @@ mod tests {
         let filtered = cache.filtered_snapshots(&filter);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].id, done);
+    }
+
+    #[test]
+    fn view_returns_cloned_snapshot() {
+        let task = fixed_task_id(32);
+        let store = MockStore::default().with_task(task, vec![created(task, 5, "single")]);
+        let cache = TaskCache::load(&store).unwrap_or_else(|err| panic!("must load cache: {err}"));
+
+        let view = cache.view(task).expect("task should exist");
+        assert_eq!(view.snapshot.title, "single");
+    }
+
+    #[test]
+    fn upsert_views_updates_existing_entries() {
+        let first = fixed_task_id(40);
+        let second = fixed_task_id(41);
+        let store = MockStore::default()
+            .with_task(first, vec![created(first, 5, "first")])
+            .with_task(second, vec![created(second, 6, "second")]);
+        let mut cache = TaskCache::load(&store).unwrap_or_else(|err| panic!("must load cache: {err}"));
+
+        let mut updated_event = created(first, 10, "first-updated");
+        updated_event.ts = ts(10);
+        let updated_view = TaskView::from_events(&[updated_event]);
+
+        cache.upsert_views(vec![updated_view]);
+        let view = cache.view(first).expect("must have view");
+        assert_eq!(view.snapshot.title, "first-updated");
     }
 }
