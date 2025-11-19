@@ -1,3 +1,5 @@
+#![warn(missing_docs)]
+
 //! CLI entry point for git-mile.
 
 use anyhow::Result;

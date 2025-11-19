@@ -1,4 +1,4 @@
-//! Helper utilities for resolving [`Actor`](git_mile_core::event::Actor) from
+//! Helper utilities for resolving [`Actor`] from
 //! environment variables or Git configuration.
 
 use std::env;

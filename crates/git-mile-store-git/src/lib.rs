@@ -1,3 +1,5 @@
+#![warn(missing_docs)]
+
 //! Git-backed storage implementation for git-mile.
 
 mod error;

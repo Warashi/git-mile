@@ -1,3 +1,5 @@
+#![warn(missing_docs)]
+
 //! Domain types & replay logic for git-mile events.
 
 /// Event payload definitions.
