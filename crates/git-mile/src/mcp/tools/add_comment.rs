@@ -1,6 +1,7 @@
 //! Add comment tool implementation.
 
 use crate::mcp::params::AddCommentParams;
+use crate::mcp::tools::common::with_store;
 use git_mile_app::WorkflowConfig;
 use git_mile_app::{CommentRequest, TaskWriteError, TaskWriter};
 use git_mile_core::event::Actor;
@@ -60,21 +61,28 @@ pub async fn handle_add_comment(
         .parse()
         .map_err(|e| McpError::invalid_params(format!("Invalid task ID: {e}"), None))?;
 
-    let comment_id = TaskWriter::new(store.lock().await, workflow, hooks_config, base_dir)
-        .add_comment(
-            task,
-            CommentRequest {
-                body_md,
-                actor: Actor {
-                    name: actor_name,
-                    email: actor_email,
+    let workflow_clone = workflow.clone();
+    let hooks_clone = hooks_config.clone();
+    let base_dir_clone = base_dir.clone();
+
+    let comment_id = with_store(store, move |cloned_store| {
+        TaskWriter::new(cloned_store, workflow_clone, hooks_clone, base_dir_clone)
+            .add_comment(
+                task,
+                CommentRequest {
+                    body_md,
+                    actor: Actor {
+                        name: actor_name,
+                        email: actor_email,
+                    },
                 },
-            },
-        )
-        .map_err(map_task_write_error)?
-        .comment_id
-        .map(|id| id.to_string())
-        .ok_or_else(|| McpError::internal_error("TaskWriter returned no comment ID", None))?;
+            )
+            .map_err(map_task_write_error)?
+            .comment_id
+            .map(|id| id.to_string())
+            .ok_or_else(|| McpError::internal_error("TaskWriter returned no comment ID", None))
+    })
+    .await?;
 
     let response = serde_json::json!({
         "task_id": task.to_string(),

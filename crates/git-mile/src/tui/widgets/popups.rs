@@ -206,7 +206,7 @@ impl<S: TaskStore> Ui<S> {
                 for comment in &task.comments {
                     let header = format!(
                         "{} <{}> [{}]",
-                        comment.actor.name, comment.actor.email, comment.ts
+                        comment.actor.name, comment.actor.email, comment.created_at
                     );
                     lines.push(Line::from(Span::styled(
                         header,

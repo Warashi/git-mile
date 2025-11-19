@@ -5,19 +5,23 @@ use std::collections::HashMap;
 
 use crate::task_writer::TaskStore;
 use git_mile_core::event::{Actor, Event, EventKind};
-use git_mile_core::id::TaskId;
+use git_mile_core::id::{EventId, TaskId};
 use git_mile_core::{OrderedEvents, TaskFilter, TaskSnapshot};
 use time::OffsetDateTime;
 
 /// Actor-written comment on a task.
 #[derive(Debug, Clone)]
 pub struct TaskComment {
+    /// Unique identifier for the comment event.
+    pub id: EventId,
     /// Actor who authored the comment.
     pub actor: Actor,
     /// Comment body in Markdown.
     pub body: String,
-    /// Event timestamp in UTC.
-    pub ts: OffsetDateTime,
+    /// Timestamp when the comment was created.
+    pub created_at: OffsetDateTime,
+    /// Timestamp when the comment was last updated.
+    pub updated_at: Option<OffsetDateTime>,
 }
 
 /// Materialized view combining snapshot + comments.
@@ -38,20 +42,33 @@ impl TaskView {
         let ordered = OrderedEvents::from(events);
         let snapshot = TaskSnapshot::replay_ordered(&ordered);
 
-        let comments = ordered
-            .iter()
-            .filter_map(|ev| {
-                if let EventKind::CommentAdded { body_md, .. } = &ev.kind {
-                    Some(TaskComment {
+        let mut comments = Vec::new();
+        let mut comment_index = HashMap::new();
+
+        for ev in ordered.iter() {
+            match &ev.kind {
+                EventKind::CommentAdded { comment_id, body_md } => {
+                    let entry = TaskComment {
+                        id: *comment_id,
                         actor: ev.actor.clone(),
                         body: body_md.clone(),
-                        ts: ev.ts,
-                    })
-                } else {
-                    None
+                        created_at: ev.ts,
+                        updated_at: None,
+                    };
+                    comment_index.insert(*comment_id, comments.len());
+                    comments.push(entry);
                 }
-            })
-            .collect();
+                EventKind::CommentUpdated { comment_id, body_md } => {
+                    if let Some(&position) = comment_index.get(comment_id)
+                        && let Some(entry) = comments.get_mut(position)
+                    {
+                        entry.body.clone_from(body_md);
+                        entry.updated_at = Some(ev.ts);
+                    }
+                }
+                _ => {}
+            }
+        }
 
         let last_updated = ordered.latest().map(|ev| ev.ts);
 

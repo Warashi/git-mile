@@ -68,7 +68,7 @@ impl GitMileServer {
     /// Fetch a single task snapshot by ID.
     #[tool(description = "Fetch a single task snapshot by ID")]
     async fn get_task(&self, params: Parameters<GetTaskParams>) -> Result<CallToolResult, McpError> {
-        tools::get_task::handle_get_task(self.store.clone(), params).await
+        tools::get_task::handle_get_task(self.repository.clone(), params).await
     }
 
     /// List comments recorded on a task.
@@ -77,7 +77,7 @@ impl GitMileServer {
         &self,
         params: Parameters<ListCommentsParams>,
     ) -> Result<CallToolResult, McpError> {
-        tools::list_comments::handle_list_comments(self.store.clone(), params).await
+        tools::list_comments::handle_list_comments(self.repository.clone(), params).await
     }
 
     /// List all subtasks of a parent task.
@@ -86,7 +86,7 @@ impl GitMileServer {
         &self,
         params: Parameters<ListSubtasksParams>,
     ) -> Result<CallToolResult, McpError> {
-        tools::list_subtasks::handle_list_subtasks(self.store.clone(), params).await
+        tools::list_subtasks::handle_list_subtasks(self.repository.clone(), params).await
     }
 
     /// Create a new task.
@@ -96,6 +96,7 @@ impl GitMileServer {
     async fn create_task(&self, params: Parameters<CreateTaskParams>) -> Result<CallToolResult, McpError> {
         tools::create_task::handle_create_task(
             self.store.clone(),
+            self.repository.clone(),
             self.workflow.clone(),
             self.hooks_config.clone(),
             self.base_dir.clone(),
@@ -111,6 +112,7 @@ impl GitMileServer {
     async fn update_task(&self, params: Parameters<UpdateTaskParams>) -> Result<CallToolResult, McpError> {
         tools::update_task::handle_update_task(
             self.store.clone(),
+            self.repository.clone(),
             self.workflow.clone(),
             self.hooks_config.clone(),
             self.base_dir.clone(),
@@ -125,7 +127,8 @@ impl GitMileServer {
         &self,
         params: Parameters<UpdateCommentParams>,
     ) -> Result<CallToolResult, McpError> {
-        tools::update_comment::handle_update_comment(self.store.clone(), params).await
+        tools::update_comment::handle_update_comment(self.store.clone(), self.repository.clone(), params)
+            .await
     }
 
     /// Add a comment to a task.

@@ -137,6 +137,9 @@ impl<S: TaskStore> TaskRepository<S> {
     pub fn list_children(&self, task_id: TaskId) -> Result<Vec<TaskId>> {
         self.refresh_if_stale()?;
         let state = self.cache.read().map_err(|_| anyhow!("Failed to lock cache"))?;
+        if !state.cache.task_index.contains_key(&task_id) {
+            return Err(anyhow!("Task not found: {task_id}"));
+        }
         Ok(state.cache.children_of(task_id))
     }
 
@@ -147,6 +150,9 @@ impl<S: TaskStore> TaskRepository<S> {
     pub fn list_parents(&self, task_id: TaskId) -> Result<Vec<TaskId>> {
         self.refresh_if_stale()?;
         let state = self.cache.read().map_err(|_| anyhow!("Failed to lock cache"))?;
+        if !state.cache.task_index.contains_key(&task_id) {
+            return Err(anyhow!("Task not found: {task_id}"));
+        }
         Ok(state.cache.parents_of(task_id))
     }
 

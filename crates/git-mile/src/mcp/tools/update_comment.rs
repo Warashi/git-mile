@@ -1,6 +1,8 @@
 //! Update comment tool implementation.
 
 use crate::mcp::params::UpdateCommentParams;
+use crate::mcp::tools::common::with_store;
+use git_mile_app::AsyncTaskRepository;
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::{EventId, TaskId};
 use git_mile_store_git::GitStore;
@@ -13,10 +15,9 @@ use tokio::sync::Mutex;
 /// Update an existing comment's body.
 pub async fn handle_update_comment(
     store: Arc<Mutex<GitStore>>,
+    repository: Arc<AsyncTaskRepository<Arc<Mutex<GitStore>>>>,
     Parameters(params): Parameters<UpdateCommentParams>,
 ) -> Result<CallToolResult, McpError> {
-    let store_guard = store.lock().await;
-
     // Parse task ID
     let task: TaskId = params
         .task_id
@@ -29,14 +30,13 @@ pub async fn handle_update_comment(
         .parse()
         .map_err(|e| McpError::invalid_params(format!("Invalid comment ID: {e}"), None))?;
 
-    // Load events and verify comment exists
-    let events = store_guard
-        .load_events(task)
-        .map_err(|e| McpError::invalid_params(format!("Task not found: {e}"), None))?;
+    // Ensure target comment exists
+    let view = repository
+        .get_view(task)
+        .await
+        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
 
-    let comment_exists = events
-        .iter()
-        .any(|ev| matches!(&ev.kind, EventKind::CommentAdded { comment_id: cid, .. } if *cid == comment_id));
+    let comment_exists = view.comments.iter().any(|comment| comment.id == comment_id);
 
     if !comment_exists {
         return Err(McpError::invalid_params(
@@ -60,11 +60,13 @@ pub async fn handle_update_comment(
         },
     );
 
-    store_guard
-        .append_event(&event)
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-    drop(store_guard);
+    with_store(store, move |cloned_store| {
+        cloned_store
+            .append_event(&event)
+            .map(|_| ())
+            .map_err(|e| McpError::internal_error(e.to_string(), None))
+    })
+    .await?;
 
     // Return success with the updated comment info
     let result = serde_json::json!({

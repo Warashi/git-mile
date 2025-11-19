@@ -1,6 +1,7 @@
 //! MCP tool implementations.
 
 pub mod add_comment;
+pub mod common;
 pub mod create_task;
 pub mod get_task;
 pub mod list_comments;
