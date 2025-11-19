@@ -734,12 +734,13 @@ where
     M: Clone + Eq + Hash,
     I: IntoIterator<Item = M>,
 {
-    let collected: Vec<M> = members.into_iter().collect();
-    if collected.is_empty() {
+    let mut members = members.into_iter();
+    let Some(first) = members.next() else {
         return;
-    }
+    };
     let ctx = set.read_ctx().derive_add_ctx(actor);
-    set.apply(set.add_all(collected, ctx));
+    let stream = std::iter::once(first).chain(members);
+    set.apply(set.add_all(stream, ctx));
 }
 
 fn remove_all<M, I>(set: &mut Orswot<M, EventId>, members: I)
@@ -747,14 +748,13 @@ where
     M: Clone + Eq + Hash,
     I: IntoIterator<Item = M>,
 {
-    for member in members {
-        let read = set.contains(&member);
-        let (present, ctx) = read.split();
-        if present {
-            let rm_ctx = ctx.derive_rm_ctx();
-            set.apply(set.rm(member, rm_ctx));
-        }
-    }
+    let mut members = members.into_iter();
+    let Some(first) = members.next() else {
+        return;
+    };
+    let ctx = set.read_ctx().derive_rm_ctx();
+    let stream = std::iter::once(first).chain(members);
+    set.apply(set.rm_all(stream, ctx));
 }
 
 fn orswot_to_set<M>(set: &Orswot<M, EventId>) -> BTreeSet<M>
@@ -872,6 +872,43 @@ mod tests {
         assert_eq!(filter.assignees.len(), 2);
         assert!(filter.states.contains("state/todo"));
         assert!(filter.labels.contains("type/bug"));
+    }
+
+    #[test]
+    fn orswot_add_all_ignores_empty_iterators() {
+        let mut set: Orswot<String, EventId> = Orswot::new();
+        let actor = EventId::new();
+
+        add_all(&mut set, std::iter::empty(), actor);
+        assert!(set.read().val.is_empty(), "set must stay empty");
+
+        add_all(&mut set, ["alpha".to_owned(), "beta".to_owned()], EventId::new());
+        let members = set.read().val;
+        assert!(members.contains("alpha"));
+        assert!(members.contains("beta"));
+    }
+
+    #[test]
+    fn orswot_remove_all_handles_missing_members() {
+        let mut set: Orswot<String, EventId> = Orswot::new();
+        let actor = EventId::new();
+        add_all(
+            &mut set,
+            ["alpha".to_owned(), "beta".to_owned(), "gamma".to_owned()],
+            actor,
+        );
+
+        // Removing a non-existent member should be a no-op.
+        remove_all(&mut set, std::iter::once("delta".to_owned()));
+        let members = set.read().val;
+        assert_eq!(members.len(), 3);
+
+        // Removing the existing members should clear the set.
+        remove_all(
+            &mut set,
+            ["alpha".to_owned(), "beta".to_owned(), "gamma".to_owned()],
+        );
+        assert!(set.read().val.is_empty());
     }
 
     #[test]
