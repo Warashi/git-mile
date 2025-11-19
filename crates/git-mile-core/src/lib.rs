@@ -539,6 +539,16 @@ struct TaskCrdt {
     updated: Option<EventStamp>,
 }
 
+#[derive(Clone, Copy)]
+struct TaskCreatedData<'a> {
+    title: &'a str,
+    description: Option<&'a String>,
+    labels: &'a [String],
+    assignees: &'a [String],
+    state: Option<&'a String>,
+    state_kind: Option<StateKind>,
+}
+
 impl TaskCrdt {
     fn apply(&mut self, ev: &Event) {
         self.id = Some(ev.task);
@@ -554,78 +564,139 @@ impl TaskCrdt {
                 state,
                 state_kind,
             } => {
-                self.title.update(title.clone(), stamp);
-                self.description
-                    .update(description.clone().unwrap_or_default(), stamp);
-                if let Some(st) = state {
-                    self.state.update(Some(st.clone()), stamp);
-                }
-                self.state_kind.update(*state_kind, stamp);
-                add_all(&mut self.labels, labels.iter().cloned(), ev.id);
-                add_all(&mut self.assignees, assignees.iter().cloned(), ev.id);
+                let data = TaskCreatedData {
+                    title,
+                    description: description.as_ref(),
+                    labels,
+                    assignees,
+                    state: state.as_ref(),
+                    state_kind: *state_kind,
+                };
+                self.apply_task_created(stamp, ev.id, &data);
             }
             EventKind::TaskStateSet { state, state_kind } => {
-                self.state.update(Some(state.clone()), stamp);
-                self.state_kind.update(*state_kind, stamp);
+                self.apply_task_state_set(stamp, state, *state_kind);
             }
             EventKind::TaskStateCleared => {
-                self.state.update(None, stamp);
-                self.state_kind.update(None, stamp);
+                self.apply_task_state_cleared(stamp);
             }
             EventKind::TaskTitleSet { title } => {
-                self.title.update(title.clone(), stamp);
+                self.apply_task_title_set(stamp, title);
             }
             EventKind::TaskDescriptionSet { description } => {
-                self.description
-                    .update(description.clone().unwrap_or_default(), stamp);
+                self.apply_task_description_set(stamp, description.as_ref());
             }
             EventKind::LabelsAdded { labels } => {
-                add_all(&mut self.labels, labels.iter().cloned(), ev.id);
+                self.apply_labels_added(ev.id, labels);
             }
             EventKind::LabelsRemoved { labels } => {
-                remove_all(&mut self.labels, labels.iter().cloned());
+                self.apply_labels_removed(labels);
             }
             EventKind::AssigneesAdded { assignees } => {
-                add_all(&mut self.assignees, assignees.iter().cloned(), ev.id);
+                self.apply_assignees_added(ev.id, assignees);
             }
             EventKind::AssigneesRemoved { assignees } => {
-                remove_all(&mut self.assignees, assignees.iter().cloned());
+                self.apply_assignees_removed(assignees);
             }
             EventKind::CommentAdded { .. } | EventKind::CommentUpdated { .. } => {
                 // Snapshot ignores comment bodies; updated timestamp handled above.
             }
             EventKind::ChildLinked { parent, child } => {
-                if ev.task == *parent {
-                    add_single(&mut self.children, *child, ev.id);
-                }
-                if ev.task == *child {
-                    add_single(&mut self.parents, *parent, ev.id);
-                }
+                self.apply_child_linked(ev.task, *parent, *child, ev.id);
             }
             EventKind::ChildUnlinked { parent, child } => {
-                if ev.task == *parent {
-                    remove_all(&mut self.children, std::iter::once(*child));
-                }
-                if ev.task == *child {
-                    remove_all(&mut self.parents, std::iter::once(*parent));
-                }
+                self.apply_child_unlinked(ev.task, *parent, *child);
             }
             EventKind::RelationAdded { kind, target } => {
-                let entry = self.relations.entry(kind.clone()).or_default();
-                add_single(entry, *target, ev.id);
+                self.apply_relation_added(kind, *target, ev.id);
             }
             EventKind::RelationRemoved { kind, target } => {
-                if let Some(entry) = self.relations.get_mut(kind) {
-                    remove_all(entry, std::iter::once(*target));
-                }
-                if self
-                    .relations
-                    .get(kind)
-                    .is_some_and(|entry| entry.read().val.is_empty())
-                {
-                    self.relations.remove(kind);
-                }
+                self.apply_relation_removed(kind, *target);
             }
+        }
+    }
+
+    fn apply_task_created(&mut self, stamp: EventStamp, event_id: EventId, data: &TaskCreatedData<'_>) {
+        self.title.update(data.title.to_owned(), stamp);
+        self.description
+            .update(data.description.cloned().unwrap_or_default(), stamp);
+        if let Some(value) = data.state {
+            self.state.update(Some(value.clone()), stamp);
+        }
+        self.state_kind.update(data.state_kind, stamp);
+        self.apply_labels_added(event_id, data.labels);
+        self.apply_assignees_added(event_id, data.assignees);
+    }
+
+    fn apply_task_state_set(&mut self, stamp: EventStamp, state: &str, state_kind: Option<StateKind>) {
+        self.state.update(Some(state.to_owned()), stamp);
+        self.state_kind.update(state_kind, stamp);
+    }
+
+    fn apply_task_state_cleared(&mut self, stamp: EventStamp) {
+        self.state.update(None, stamp);
+        self.state_kind.update(None, stamp);
+    }
+
+    fn apply_task_title_set(&mut self, stamp: EventStamp, title: &str) {
+        self.title.update(title.to_owned(), stamp);
+    }
+
+    fn apply_task_description_set(&mut self, stamp: EventStamp, description: Option<&String>) {
+        self.description
+            .update(description.cloned().unwrap_or_default(), stamp);
+    }
+
+    fn apply_labels_added(&mut self, event_id: EventId, labels: &[String]) {
+        add_all(&mut self.labels, labels.iter().cloned(), event_id);
+    }
+
+    fn apply_labels_removed(&mut self, labels: &[String]) {
+        remove_all(&mut self.labels, labels.iter().cloned());
+    }
+
+    fn apply_assignees_added(&mut self, event_id: EventId, assignees: &[String]) {
+        add_all(&mut self.assignees, assignees.iter().cloned(), event_id);
+    }
+
+    fn apply_assignees_removed(&mut self, assignees: &[String]) {
+        remove_all(&mut self.assignees, assignees.iter().cloned());
+    }
+
+    fn apply_child_linked(&mut self, task: TaskId, parent: TaskId, child: TaskId, event_id: EventId) {
+        if task == parent {
+            add_single(&mut self.children, child, event_id);
+        }
+        if task == child {
+            add_single(&mut self.parents, parent, event_id);
+        }
+    }
+
+    fn apply_child_unlinked(&mut self, task: TaskId, parent: TaskId, child: TaskId) {
+        if task == parent {
+            remove_all(&mut self.children, std::iter::once(child));
+        }
+        if task == child {
+            remove_all(&mut self.parents, std::iter::once(parent));
+        }
+    }
+
+    fn apply_relation_added(&mut self, kind: &str, target: TaskId, event_id: EventId) {
+        let entry = self.relations.entry(kind.to_owned()).or_default();
+        add_single(entry, target, event_id);
+    }
+
+    fn apply_relation_removed(&mut self, kind: &str, target: TaskId) {
+        if let Some(entry) = self.relations.get_mut(kind) {
+            remove_all(entry, std::iter::once(target));
+        }
+
+        if self
+            .relations
+            .get(kind)
+            .is_some_and(|entry| entry.read().val.is_empty())
+        {
+            self.relations.remove(kind);
         }
     }
 }
@@ -1000,6 +1071,243 @@ mod tests {
         assert_eq!(via_apply.parents, via_replay.parents);
         assert_eq!(via_apply.relates, via_replay.relates);
         assert_eq!(via_apply.updated_rfc3339, via_replay.updated_rfc3339);
+    }
+
+    #[test]
+    fn task_created_event_populates_snapshot_fields() {
+        let task = TaskId::new();
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+
+        let created = Event::new(
+            task,
+            &actor,
+            EventKind::TaskCreated {
+                title: "Initial".into(),
+                labels: vec!["type/bug".into(), "priority/high".into()],
+                assignees: vec!["alice".into()],
+                description: Some("desc".into()),
+                state: Some("state/in-progress".into()),
+                state_kind: Some(StateKind::InProgress),
+            },
+        );
+
+        let mut snapshot = TaskSnapshot::default();
+        snapshot.apply(&created);
+
+        assert_eq!(snapshot.id, task);
+        assert_eq!(snapshot.title, "Initial");
+        assert_eq!(snapshot.description, "desc");
+        assert_eq!(snapshot.state.as_deref(), Some("state/in-progress"));
+        assert_eq!(snapshot.state_kind, Some(StateKind::InProgress));
+        assert!(snapshot.labels.contains("type/bug"));
+        assert!(snapshot.labels.contains("priority/high"));
+        assert!(snapshot.assignees.contains("alice"));
+    }
+
+    #[test]
+    fn task_state_events_set_and_clear_state() {
+        let task = TaskId::new();
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+
+        let state_set = Event::new(
+            task,
+            &actor,
+            EventKind::TaskStateSet {
+                state: "state/done".into(),
+                state_kind: Some(StateKind::Done),
+            },
+        );
+        let state_cleared = Event::new(task, &actor, EventKind::TaskStateCleared);
+
+        let mut snapshot = TaskSnapshot::default();
+        snapshot.apply(&state_set);
+        assert_eq!(snapshot.state.as_deref(), Some("state/done"));
+        assert_eq!(snapshot.state_kind, Some(StateKind::Done));
+
+        snapshot.apply(&state_cleared);
+        assert!(snapshot.state.is_none());
+        assert!(snapshot.state_kind.is_none());
+    }
+
+    #[test]
+    fn task_title_updates_follow_last_write_wins() {
+        let task = TaskId::new();
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+        let older_ts = OffsetDateTime::now_utc();
+        let newer_ts = older_ts + Duration::seconds(10);
+
+        let mut older = Event::new(task, &actor, EventKind::TaskTitleSet { title: "Old".into() });
+        older.ts = older_ts;
+
+        let mut newer = Event::new(task, &actor, EventKind::TaskTitleSet { title: "New".into() });
+        newer.ts = newer_ts;
+
+        let mut snapshot = TaskSnapshot::default();
+        snapshot.apply(&newer);
+        snapshot.apply(&older);
+        assert_eq!(snapshot.title, "New");
+
+        snapshot.apply(&older);
+        snapshot.apply(&newer);
+        assert_eq!(snapshot.title, "New");
+    }
+
+    #[test]
+    fn task_description_event_handles_none() {
+        let task = TaskId::new();
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+
+        let description_event = Event::new(task, &actor, EventKind::TaskDescriptionSet { description: None });
+
+        let mut snapshot = TaskSnapshot::default();
+        snapshot.apply(&description_event);
+        assert_eq!(snapshot.description, "");
+    }
+
+    #[test]
+    fn labels_events_manage_membership() {
+        let task = TaskId::new();
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+
+        let added = Event::new(
+            task,
+            &actor,
+            EventKind::LabelsAdded {
+                labels: vec!["type/bug".into(), "priority/high".into()],
+            },
+        );
+        let removed = Event::new(
+            task,
+            &actor,
+            EventKind::LabelsRemoved {
+                labels: vec!["type/bug".into()],
+            },
+        );
+
+        let mut snapshot = TaskSnapshot::default();
+        snapshot.apply(&added);
+        assert!(snapshot.labels.contains("type/bug"));
+        assert!(snapshot.labels.contains("priority/high"));
+
+        snapshot.apply(&removed);
+        assert!(!snapshot.labels.contains("type/bug"));
+        assert!(snapshot.labels.contains("priority/high"));
+    }
+
+    #[test]
+    fn assignee_events_manage_membership() {
+        let task = TaskId::new();
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+
+        let added = Event::new(
+            task,
+            &actor,
+            EventKind::AssigneesAdded {
+                assignees: vec!["alice".into(), "bob".into()],
+            },
+        );
+        let removed = Event::new(
+            task,
+            &actor,
+            EventKind::AssigneesRemoved {
+                assignees: vec!["alice".into()],
+            },
+        );
+
+        let mut snapshot = TaskSnapshot::default();
+        snapshot.apply(&added);
+        assert!(snapshot.assignees.contains("alice"));
+        assert!(snapshot.assignees.contains("bob"));
+
+        snapshot.apply(&removed);
+        assert!(!snapshot.assignees.contains("alice"));
+        assert!(snapshot.assignees.contains("bob"));
+    }
+
+    #[test]
+    fn child_link_events_update_relationships() {
+        let parent = TaskId::new();
+        let child = TaskId::new();
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+
+        let link_from_parent = Event::new(parent, &actor, EventKind::ChildLinked { parent, child });
+        let unlink_from_parent = Event::new(parent, &actor, EventKind::ChildUnlinked { parent, child });
+
+        let mut parent_snapshot = TaskSnapshot::default();
+        parent_snapshot.apply(&link_from_parent);
+        assert!(parent_snapshot.children.contains(&child));
+        parent_snapshot.apply(&unlink_from_parent);
+        assert!(!parent_snapshot.children.contains(&child));
+
+        let link_from_child = Event::new(child, &actor, EventKind::ChildLinked { parent, child });
+        let unlink_from_child = Event::new(child, &actor, EventKind::ChildUnlinked { parent, child });
+
+        let mut child_snapshot = TaskSnapshot::default();
+        child_snapshot.apply(&link_from_child);
+        assert!(child_snapshot.parents.contains(&parent));
+        child_snapshot.apply(&unlink_from_child);
+        assert!(!child_snapshot.parents.contains(&parent));
+    }
+
+    #[test]
+    fn relation_events_manage_membership() {
+        let task = TaskId::new();
+        let related = TaskId::new();
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+        let kind = "relatesTo";
+
+        let add_relation = Event::new(
+            task,
+            &actor,
+            EventKind::RelationAdded {
+                kind: kind.to_owned(),
+                target: related,
+            },
+        );
+        let remove_relation = Event::new(
+            task,
+            &actor,
+            EventKind::RelationRemoved {
+                kind: kind.to_owned(),
+                target: related,
+            },
+        );
+
+        let mut snapshot = TaskSnapshot::default();
+        snapshot.apply(&add_relation);
+        assert!(
+            snapshot
+                .relates
+                .get(kind)
+                .is_some_and(|targets| targets.contains(&related))
+        );
+
+        snapshot.apply(&remove_relation);
+        assert!(!snapshot.relates.contains_key(kind));
     }
 
     #[test]
