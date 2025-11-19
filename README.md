@@ -2,6 +2,20 @@
 
 **git-mile** is a Git-backed task tracker that stores task events as commits under `refs/git-mile/tasks/*`. It provides a conflict-free, offline-first approach to task management using event sourcing and CRDTs (Conflict-free Replicated Data Types).
 
+## Status
+
+**⚠️ Active Development**: This project is under active development. Features and APIs may change. Currently implemented:
+- Core CRDT-based task tracking with Git storage
+- CLI commands for task creation, updates, and queries
+- Interactive TUI with multi-panel interface
+- MCP server for AI integration
+- Hook system (Phase 1: task creation hooks)
+
+Coming soon:
+- Full hook integration for all event types
+- Enhanced TUI features
+- Additional MCP capabilities
+
 ## Key Features
 
 - **Git-native storage**: Tasks stored as immutable events in Git commits, never touching your working tree
@@ -10,13 +24,16 @@
 - **Terminal UI**: Interactive multi-panel interface for browsing and editing tasks
 - **MCP integration**: Model Context Protocol server for AI/Claude integration
 - **Rich task model**: Titles, states, labels, assignees, descriptions, comments, and hierarchical relationships
+- **Hooks system**: Execute custom scripts before/after task operations for validation, notifications, and automation (see [docs/hooks.md](docs/hooks.md))
 
 ## Architecture
 
-The workspace consists of three crates:
+The workspace consists of five crates:
 
 - **`git-mile-core`**: Domain logic for task IDs, events, snapshots, and CRDT operations
 - **`git-mile-store-git`**: Git repository persistence layer
+- **`git-mile-hooks`**: Hook system for custom script execution
+- **`git-mile-app`**: Application layer integrating core, store, and hooks
 - **`git-mile`**: CLI entry point with commands, TUI, and MCP server
 
 ## Data Model
@@ -234,6 +251,30 @@ states = [
 ]
 default_state = "state/todo"
 ```
+
+**Hooks** (optional):
+- Configure hook behavior in `.git-mile/config.toml`
+- Create executable scripts in `.git-mile/hooks/` directory
+- Pre-hooks can reject operations by exiting with non-zero status
+- Post-hooks run after operations complete (cannot cancel them)
+- See [docs/hooks.md](docs/hooks.md) for detailed hook documentation
+
+```toml
+[hooks]
+enabled = true
+disabled = []
+timeout = 30
+```
+
+Available hook types:
+- `pre-task-create`, `post-task-create` - Around task creation
+- `pre-task-update`, `post-task-update` - Around task updates
+- `pre-state-change`, `post-state-change` - Around state transitions
+- `pre-comment-add`, `post-comment-add` - Around comment additions
+- `pre-relation-change`, `post-relation-change` - Around parent/child links
+- `pre-event`, `post-event` - Around any event
+
+**Note**: Currently only `pre-task-create` and `post-task-create` are fully integrated (Phase 1). Other hooks will be implemented in future releases.
 
 ## Development
 
