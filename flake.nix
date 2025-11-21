@@ -107,14 +107,14 @@
               ];
               devshell = {
                 packages = [
-                  cargo-llvm-cov
                   clang
                   just
                   llvmPackages.libclang
                   nixfmt
                   tombi
                   (rust-bin.fromRustupToolchainFile ./rust-toolchain.toml)
-                ];
+                ]
+                ++ (lib.optional stdenv.hostPlatform.isLinux cargo-llvm-cov);
                 startup = {
                   pre-commit = {
                     text = config.pre-commit.installationScript;
