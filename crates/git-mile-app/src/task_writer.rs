@@ -241,6 +241,51 @@ impl<S> TaskWriter<S> {
         // Post-hooks should not fail the operation, so we ignore errors
         let _ = executor.execute(kind, &context);
     }
+
+    /// Append an event to the store with hook execution
+    ///
+    /// This method wraps the store's `append_event` and ensures that `PreEvent` and `PostEvent`
+    /// hooks are executed for all events, along with any specific hooks.
+    ///
+    /// # Hook Execution Order
+    /// 1. `PreEvent` (global)
+    /// 2. Specific pre-hook (if provided)
+    /// 3. Store `append_event`
+    /// 4. Specific post-hook (if provided)
+    /// 5. `PostEvent` (global)
+    ///
+    /// # Errors
+    /// Returns [`TaskWriteError`] if `PreEvent`, specific pre-hook, or store operation fails.
+    fn append_event_with_hooks(
+        &self,
+        event: &Event,
+        specific_pre_hook: Option<HookKind>,
+        specific_post_hook: Option<HookKind>,
+    ) -> Result<Oid, TaskWriteError>
+    where
+        S: TaskStore,
+    {
+        // 1. PreEvent (global)
+        self.execute_pre_hook(HookKind::PreEvent, event)?;
+
+        // 2. Specific pre-hook (e.g., PreTaskUpdate)
+        if let Some(hook_kind) = specific_pre_hook {
+            self.execute_pre_hook(hook_kind, event)?;
+        }
+
+        // 3. Persist to store
+        let oid = self.store.append_event(event).map_err(Self::store_error)?;
+
+        // 4. Specific post-hook
+        if let Some(hook_kind) = specific_post_hook {
+            self.execute_post_hook(hook_kind, event);
+        }
+
+        // 5. PostEvent (global)
+        self.execute_post_hook(HookKind::PostEvent, event);
+
+        Ok(oid)
+    }
 }
 
 impl<S> TaskWriter<S>
@@ -287,17 +332,12 @@ where
         );
         lamports.assign(&mut created_event)?;
 
-        // Execute pre-task-create hook
-        self.execute_pre_hook(HookKind::PreTaskCreate, &created_event)?;
-
-        let created_oid = self
-            .store
-            .append_event(&created_event)
-            .map_err(Self::store_error)?;
+        let created_oid = self.append_event_with_hooks(
+            &created_event,
+            Some(HookKind::PreTaskCreate),
+            Some(HookKind::PostTaskCreate),
+        )?;
         events.push(created_oid);
-
-        // Execute post-task-create hook
-        self.execute_post_hook(HookKind::PostTaskCreate, &created_event);
 
         for parent in parents {
             self.ensure_task_exists(parent)
@@ -305,15 +345,20 @@ where
 
             let mut child_event = Event::new(task, &actor, EventKind::ChildLinked { parent, child: task });
             lamports.assign(&mut child_event)?;
-            let child_oid = self.store.append_event(&child_event).map_err(Self::store_error)?;
+            let child_oid = self.append_event_with_hooks(
+                &child_event,
+                Some(HookKind::PreRelationChange),
+                Some(HookKind::PostRelationChange),
+            )?;
             events.push(child_oid);
 
             let mut parent_event = Event::new(parent, &actor, EventKind::ChildLinked { parent, child: task });
             lamports.assign(&mut parent_event)?;
-            let parent_oid = self
-                .store
-                .append_event(&parent_event)
-                .map_err(Self::store_error)?;
+            let parent_oid = self.append_event_with_hooks(
+                &parent_event,
+                Some(HookKind::PreRelationChange),
+                Some(HookKind::PostRelationChange),
+            )?;
             events.push(parent_oid);
 
             parent_links.push(ParentLinkResult {
@@ -442,7 +487,26 @@ where
         let mut oids = Vec::new();
         for mut event in events {
             lamports.assign(&mut event)?;
-            let oid = self.store.append_event(&event).map_err(Self::store_error)?;
+
+            // Determine specific hooks based on event kind
+            let (pre_hook, post_hook) = match &event.kind {
+                EventKind::TaskStateSet { .. } | EventKind::TaskStateCleared => {
+                    // State change events get state-specific hooks
+                    (Some(HookKind::PreStateChange), Some(HookKind::PostStateChange))
+                }
+                EventKind::TaskTitleSet { .. }
+                | EventKind::TaskDescriptionSet { .. }
+                | EventKind::LabelsAdded { .. }
+                | EventKind::LabelsRemoved { .. }
+                | EventKind::AssigneesAdded { .. }
+                | EventKind::AssigneesRemoved { .. } => {
+                    // Other task update events get task-update hooks
+                    (Some(HookKind::PreTaskUpdate), Some(HookKind::PostTaskUpdate))
+                }
+                _ => (None, None),
+            };
+
+            let oid = self.append_event_with_hooks(&event, pre_hook, post_hook)?;
             oids.push(oid);
         }
 
@@ -489,7 +553,11 @@ where
         let mut lamports = LamportTracker::new(&self.store);
         let mut event = Event::new(task, &actor, EventKind::CommentAdded { comment_id, body_md });
         lamports.assign(&mut event)?;
-        let oid = self.store.append_event(&event).map_err(Self::store_error)?;
+        let oid = self.append_event_with_hooks(
+            &event,
+            Some(HookKind::PreCommentAdd),
+            Some(HookKind::PostCommentAdd),
+        )?;
 
         Ok(TaskWriteResult {
             task,
@@ -528,7 +596,11 @@ where
                 },
             );
             lamports.assign(&mut child_event)?;
-            events.push(self.store.append_event(&child_event).map_err(Self::store_error)?);
+            events.push(self.append_event_with_hooks(
+                &child_event,
+                Some(HookKind::PreRelationChange),
+                Some(HookKind::PostRelationChange),
+            )?);
 
             let mut parent_event = Event::new(
                 *parent,
@@ -539,11 +611,11 @@ where
                 },
             );
             lamports.assign(&mut parent_event)?;
-            events.push(
-                self.store
-                    .append_event(&parent_event)
-                    .map_err(Self::store_error)?,
-            );
+            events.push(self.append_event_with_hooks(
+                &parent_event,
+                Some(HookKind::PreRelationChange),
+                Some(HookKind::PostRelationChange),
+            )?);
         }
 
         Ok(TaskWriteResult {
@@ -577,7 +649,11 @@ where
                 },
             );
             lamports.assign(&mut child_event)?;
-            events.push(self.store.append_event(&child_event).map_err(Self::store_error)?);
+            events.push(self.append_event_with_hooks(
+                &child_event,
+                Some(HookKind::PreRelationChange),
+                Some(HookKind::PostRelationChange),
+            )?);
 
             let mut parent_event = Event::new(
                 *parent,
@@ -588,11 +664,11 @@ where
                 },
             );
             lamports.assign(&mut parent_event)?;
-            events.push(
-                self.store
-                    .append_event(&parent_event)
-                    .map_err(Self::store_error)?,
-            );
+            events.push(self.append_event_with_hooks(
+                &parent_event,
+                Some(HookKind::PreRelationChange),
+                Some(HookKind::PostRelationChange),
+            )?);
         }
 
         Ok(TaskWriteResult {
