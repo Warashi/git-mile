@@ -115,6 +115,26 @@ enum Command {
 
     /// Start MCP server.
     Mcp,
+
+    /// Configuration management.
+    Config {
+        #[command(subcommand)]
+        subcommand: ConfigSubcommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ConfigSubcommand {
+    /// Initialize keybindings configuration file with defaults.
+    InitKeybindings {
+        /// Output path (defaults to ~/.config/git-mile/config.toml).
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+
+        /// Force overwrite if file exists.
+        #[arg(short, long)]
+        force: bool,
+    },
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -148,6 +168,12 @@ fn execute_command(repo_path: &str, command: Command) -> Result<()> {
             let store = GitStore::open(repo_path)?;
             tui::run(store, workflow, hooks, base_dir)
         }
+
+        (Command::Config { subcommand }, _, _, _) => match subcommand {
+            ConfigSubcommand::InitKeybindings { output, force } => {
+                config::init_keybindings(output.as_deref(), force)
+            }
+        },
 
         (Command::Mcp, workflow, hooks, base_dir) => {
             let store = GitStore::open(repo_path)?;

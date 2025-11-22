@@ -372,6 +372,7 @@ mod tests {
     use super::*;
     use crate::tui::app::App;
     use anyhow::Error;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use git_mile_app::TaskRepository;
     use git_mile_app::TaskView;
     use git_mile_app::WorkflowConfig;

@@ -2,7 +2,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -13,7 +13,7 @@ macro_rules! vec_of_strings {
 }
 
 /// Keybindings configuration for all TUI views.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyBindingsConfig {
     /// Keybindings for the task list view.
     pub task_list: TaskListKeyBindings,
@@ -28,7 +28,7 @@ pub struct KeyBindingsConfig {
 }
 
 /// Keybindings for the task list view.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskListKeyBindings {
     /// Quit the application.
     pub quit: Vec<String>,
@@ -63,7 +63,7 @@ pub struct TaskListKeyBindings {
 }
 
 /// Keybindings for the tree view.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TreeViewKeyBindings {
     /// Close tree view.
     pub close: Vec<String>,
@@ -80,7 +80,7 @@ pub struct TreeViewKeyBindings {
 }
 
 /// Keybindings for the state picker.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatePickerKeyBindings {
     /// Close state picker.
     pub close: Vec<String>,
@@ -93,7 +93,7 @@ pub struct StatePickerKeyBindings {
 }
 
 /// Keybindings for viewers (comments and description).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ViewerKeyBindings {
     /// Close viewer.
     pub close: Vec<String>,
@@ -196,6 +196,35 @@ pub fn ensure_config_dir() -> Result<PathBuf> {
     }
 
     Ok(path)
+}
+
+/// Generate default keybindings configuration as TOML string.
+pub fn generate_default_keybindings_toml() -> Result<String> {
+    let config = KeyBindingsConfig::default();
+
+    // Serialize to TOML
+    let toml_str = toml::to_string_pretty(&config)
+        .context("デフォルトキーバインドのシリアライズに失敗しました")?;
+
+    // Add header comment
+    let header = r#"# git-mile Keybindings Configuration
+#
+# This file allows you to customize keybindings for the git-mile TUI.
+# Each action can have multiple key bindings.
+#
+# Supported key formats:
+# - Single characters: "j", "k", "a", "1"
+# - Special keys: "Enter", "Esc", "Tab", "Backspace", "Delete"
+# - Arrow keys: "Up", "Down", "Left", "Right"
+# - Navigation keys: "Home", "End", "PageUp", "PageDown"
+# - Modified keys: "Ctrl+d", "Alt+k", "Shift+Up"
+#
+# Note: When this file exists, ALL default keybindings are disabled.
+# Make sure to define all actions you need.
+
+"#;
+
+    Ok(format!("{}{}", header, toml_str))
 }
 
 /// Load keybindings configuration from a TOML file.
