@@ -5,7 +5,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Repository Guidelines
 
 ### Project Structure & Module Organization
-The workspace is orchestrated from the root `Cargo.toml` and split into three crates under `crates/`. `git-mile` houses the CLI entrypoint, `git-mile-core` provides the task and event domain logic, and `git-mile-store-git` implements Git-backed persistence. Shared configuration files such as `rustfmt.toml`, `clippy.toml`, and `deny.toml` live at the repository root so formatting, linting, and dependency policies stay consistent across the workspace.
+The workspace is orchestrated from the root `Cargo.toml` and split into five crates under `crates/`:
+- **`git-mile-core`**: Domain logic for task identifiers, event types, CRDT snapshot computation, and filtering—no I/O
+- **`git-mile-store-git`**: Git-backed persistence layer wrapping `git2`, providing event storage and retrieval
+- **`git-mile-hooks`**: Hook system for executing custom scripts before/after task operations
+- **`git-mile-app`**: Application layer integrating core, store, and hooks with TaskWriter/TaskReader
+- **`git-mile`**: CLI entrypoint with commands, TUI (ratatui), and MCP server
+
+Shared configuration files such as `rustfmt.toml`, `clippy.toml`, and `deny.toml` live at the repository root so formatting, linting, and dependency policies stay consistent across the workspace.
 
 ### Build, Test, and Development Commands
 Use `cargo fmt` to apply the repository formatting rules before every commit. `cargo clippy --workspace --all-targets --all-features` enforces lint expectations across every crate, including binaries, libraries, and examples. Run `cargo test --workspace --all-features` to execute unit and integration tests and verify cross-crate behavior. For local experimentation, `cargo run --package git-mile -- --help` prints the CLI usage summary without mutating the store.
@@ -62,6 +69,10 @@ Parent commits form a chain representing the event history. Actor information is
 
 **git-mile-store-git**: Persistence layer wrapping `git2`. Provides `GitStore::append_event()` to commit new events and `GitStore::load_events()` to reconstruct event history. Includes an LRU cache (capacity 256) to optimize repeated event decoding.
 
+**git-mile-hooks**: Hook execution system that runs custom scripts before/after task operations. Pre-hooks can reject operations by returning non-zero exit codes. Hooks receive event data as JSON on stdin and can optionally modify events by writing to stdout. Configuration lives in `.git-mile/config.toml` with options for enabling/disabling hooks, setting timeouts, and specifying which hooks to skip.
+
+**git-mile-app**: Orchestration layer providing `TaskWriter` and `TaskReader` that integrate core, store, and hooks. TaskWriter handles event creation and hook execution, while TaskReader provides filtered snapshot views. This layer ensures hooks run at the correct lifecycle points and manages error handling/rollback.
+
 **git-mile**: Application layer with three interfaces:
 1. CLI commands (`new`, `comment`, `show`, `ls`) for scripting and automation
 2. TUI (`tui` command) with ratatui-based interactive interface for browsing/editing tasks
@@ -78,6 +89,34 @@ All three interfaces share the same `TaskFilter` logic and operate on identical 
 **Workflow state classification**: States have configurable `kind` values (`todo`, `in_progress`, `blocked`, `done`, `backlog`) embedded in events, allowing semantic filtering without inference.
 
 **Zero unsafe code**: The workspace forbids `unsafe_code` and bans `unwrap_used`/`expect_used` to enforce exhaustive error handling via `Result` types.
+
+### Configuration
+
+**`.git-mile/config.toml`** (optional) configures workflow states and hooks:
+
+```toml
+[workflow]
+# Define allowed states with semantic kinds for filtering/rendering
+states = [
+  { value = "state/todo", label = "Todo", kind = "todo" },
+  { value = "state/in-progress", label = "In Progress", kind = "in_progress" },
+  { value = "state/done", label = "Done", kind = "done" }
+]
+# Automatically apply this state when creating tasks without --state
+default_state = "state/todo"
+
+[hooks]
+# Master switch for all hooks
+enabled = true
+# List specific hooks to skip even when enabled=true
+disabled = []
+# Maximum execution time in seconds before killing hook
+timeout = 30
+```
+
+**Workflow state kinds** (`todo`, `in_progress`, `blocked`, `done`, `backlog`) are embedded into `TaskCreated` and `TaskStateSet` events so clients never need to infer them. The TUI/CLI validate state values against this config and show hints when states are misconfigured.
+
+**Hook scripts** must be executable files in `.git-mile/hooks/` named after the hook type (e.g., `pre-task-create`). They receive JSON event data on stdin and can reject operations (pre-hooks) by exiting non-zero. See `docs/hooks.md` for detailed hook documentation and examples. Current implementation (Phase 1) only integrates `pre-task-create` and `post-task-create` hooks; other hooks are defined but not yet called.
 
 ## Common Workflows
 
@@ -97,3 +136,13 @@ When changing event replay logic or CRDT operations, add tests that apply events
 
 ### Validating Git storage round-trips
 Integration tests in `git-mile-store-git` verify that events committed via `append_event()` can be loaded via `load_events()` and produce identical deserialized structures.
+
+### Working with hooks
+When adding or modifying hook functionality:
+1. Define hook types in `git-mile-hooks/src/lib.rs` using the `HookKind` enum
+2. Implement hook execution logic in the hooks crate (runner, context, input/output)
+3. Integrate hooks into `TaskWriter` in `git-mile-app/src/lib.rs` at the appropriate lifecycle points
+4. Add integration tests in `git-mile-app/tests/` to verify hook execution and error handling
+5. Update `docs/hooks.md` with examples and behavior documentation
+
+Hook integration follows a phased approach. Phase 1 (completed) integrated task creation hooks. Phase 2 will add hooks for updates, comments, state changes, and parent/child links.
