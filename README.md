@@ -184,6 +184,47 @@ git-mile tui
 - `updated_since` / `updated_until` accept RFC3339 timestamps (e.g., `2025-01-01T09:00:00+09:00`) to create date windows.
 - The editor also includes a free-form `text` field for case-insensitive substring searches across titles, descriptions, states, labels, and assignees.
 
+### `config` - Configuration Management
+
+Manage git-mile configuration.
+
+#### `config init-keybindings` - Generate Keybindings Configuration
+
+Generate a default keybindings configuration file for the TUI:
+
+```bash
+# Generate configuration at default location (~/.config/git-mile/config.toml)
+git-mile config init-keybindings
+
+# Generate configuration at a custom location
+git-mile config init-keybindings --output ./my-config.toml
+
+# Force overwrite existing file
+git-mile config init-keybindings --force
+```
+
+**Customizing TUI Keybindings**:
+
+You can customize all TUI keybindings by creating a configuration file. The configuration file uses TOML format and allows you to map multiple keys to each action:
+
+```bash
+# Generate default configuration with all current keybindings
+git-mile config init-keybindings
+
+# Edit the configuration file
+$EDITOR ~/.config/git-mile/config.toml
+```
+
+The generated file includes:
+- All default keybindings with documentation
+- Support for multiple keys per action
+- Modifier keys (Ctrl, Alt, Shift)
+- Special keys (Enter, Esc, arrows, etc.)
+
+See [docs/keybindings.md](docs/keybindings.md) for detailed configuration guide and examples.
+
+**Note**: When a configuration file exists, ALL default keybindings are replaced. Make sure your configuration includes all actions you need.
+
 ### `mcp` - Model Context Protocol Server
 
 Start an MCP server exposing task operations to AI tools:

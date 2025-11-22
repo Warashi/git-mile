@@ -1177,4 +1177,474 @@ mod tests {
             "↓/↑"
         );
     }
+
+    // Additional deserialization tests
+    #[test]
+    fn test_deserialize_partial_config_fails() {
+        let toml = r#"
+            [task_list]
+            quit = ["q"]
+            # down フィールドが欠けている
+        "#;
+
+        let result: Result<KeyBindingsConfig, _> = toml::from_str(toml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deserialize_invalid_value() {
+        let toml = r#"
+            [task_list]
+            quit = "not_an_array"
+            down = ["j"]
+            up = ["k"]
+            open_tree = ["Enter"]
+            jump_to_parent = ["p"]
+            refresh = ["r"]
+            add_comment = ["c"]
+            edit_task = ["e"]
+            create_task = ["n"]
+            create_subtask = ["s"]
+            copy_task_id = ["y"]
+            open_state_picker = ["t"]
+            open_comment_viewer = ["v"]
+            open_description_viewer = ["d"]
+            edit_filter = ["f"]
+        "#;
+
+        let result: Result<KeyBindingsConfig, _> = toml::from_str(toml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_serialize_deserialize_roundtrip() {
+        let config = KeyBindingsConfig::default();
+        let toml_str = toml::to_string(&config).unwrap();
+        let deserialized: KeyBindingsConfig = toml::from_str(&toml_str).unwrap();
+
+        assert_eq!(config.task_list.quit, deserialized.task_list.quit);
+        assert_eq!(config.task_list.down, deserialized.task_list.down);
+        assert_eq!(config.tree_view.close, deserialized.tree_view.close);
+        assert_eq!(config.state_picker.select, deserialized.state_picker.select);
+        assert_eq!(config.comment_viewer.close, deserialized.comment_viewer.close);
+    }
+
+    // Key parsing tests
+    #[test]
+    fn test_parse_all_special_keys() {
+        let special_keys = vec![
+            "Enter", "Esc", "Tab", "Backspace", "Delete",
+            "Up", "Down", "Left", "Right",
+            "Home", "End", "PageUp", "PageDown", "Insert",
+        ];
+
+        for key_str in special_keys {
+            let result = parse_key(key_str);
+            assert!(result.is_ok(), "Failed to parse: {}", key_str);
+        }
+    }
+
+    #[test]
+    fn test_parse_modified_keys_comprehensive() {
+        let test_cases = vec![
+            ("Ctrl+d", KeyModifiers::CONTROL, KeyCode::Char('d')),
+            ("Alt+k", KeyModifiers::ALT, KeyCode::Char('k')),
+            ("Shift+Up", KeyModifiers::SHIFT, KeyCode::Up),
+            ("Control+Enter", KeyModifiers::CONTROL, KeyCode::Enter),
+        ];
+
+        for (key_str, expected_mod, expected_code) in test_cases {
+            let key = parse_key(key_str).unwrap();
+            assert_eq!(key.modifiers, expected_mod, "Modifier mismatch for {}", key_str);
+            assert_eq!(key.code, expected_code, "Code mismatch for {}", key_str);
+        }
+    }
+
+    #[test]
+    fn test_parse_arrow_keys() {
+        let arrows = vec![
+            ("Up", KeyCode::Up),
+            ("Down", KeyCode::Down),
+            ("Left", KeyCode::Left),
+            ("Right", KeyCode::Right),
+        ];
+
+        for (key_str, expected_code) in arrows {
+            let key = parse_key(key_str).unwrap();
+            assert_eq!(key.code, expected_code);
+            assert_eq!(key.modifiers, KeyModifiers::NONE);
+        }
+    }
+
+    // Key matching tests
+    #[test]
+    fn test_matches_single_key() {
+        let mut config = KeyBindingsConfig::default();
+        config.task_list.quit = vec!["q".to_string()];
+
+        let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+        assert!(config.matches(ViewType::TaskList, Action::Quit, &key));
+
+        let other_key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+        assert!(!config.matches(ViewType::TaskList, Action::Quit, &other_key));
+    }
+
+    #[test]
+    fn test_matches_multiple_keys() {
+        let config = KeyBindingsConfig::default();
+
+        // デフォルトでは quit は ["q", "Q", "Esc"]
+        let q_key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+        let big_q_key = KeyEvent::new(KeyCode::Char('Q'), KeyModifiers::NONE);
+        let esc_key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+
+        assert!(config.matches(ViewType::TaskList, Action::Quit, &q_key));
+        assert!(config.matches(ViewType::TaskList, Action::Quit, &big_q_key));
+        assert!(config.matches(ViewType::TaskList, Action::Quit, &esc_key));
+    }
+
+    #[test]
+    fn test_matches_modified_keys() {
+        let config = KeyBindingsConfig::default();
+
+        // デフォルトでは scroll_down_fast は ["Ctrl+d"]
+        let ctrl_d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
+        assert!(config.matches(ViewType::CommentViewer, Action::ScrollDownFast, &ctrl_d));
+
+        // Ctrl なしの 'd' は一致しない
+        let plain_d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE);
+        assert!(!config.matches(ViewType::CommentViewer, Action::ScrollDownFast, &plain_d));
+    }
+
+    #[test]
+    fn test_matches_wrong_view() {
+        let config = KeyBindingsConfig::default();
+
+        let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+
+        // TaskList の quit キーは TreeView の Close とは異なるアクション
+        assert!(config.matches(ViewType::TaskList, Action::Quit, &key));
+        // 同じキーでも異なるビューとアクションの組み合わせ
+        assert!(config.matches(ViewType::TreeView, Action::Close, &key));
+    }
+
+    // Validation tests
+    #[test]
+    fn test_validate_default_config() {
+        let config = KeyBindingsConfig::default();
+        let result = validate_config(&config);
+        assert!(result.is_ok(), "Default config should be valid");
+    }
+
+    #[test]
+    fn test_detect_key_conflict_in_same_view() {
+        let mut config = KeyBindingsConfig::default();
+        config.task_list.quit = vec!["j".to_string()];
+        config.task_list.down = vec!["j".to_string()]; // 衝突
+
+        let result = validate_keybindings(&config);
+        assert!(result.is_err());
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("multiple actions") || err_msg.contains("j"));
+    }
+
+    #[test]
+    fn test_no_conflict_across_views() {
+        let mut config = KeyBindingsConfig::default();
+        config.task_list.quit = vec!["q".to_string()];
+        config.tree_view.close = vec!["q".to_string()]; // 異なるビューなので OK
+
+        let result = validate_keybindings(&config);
+        assert!(result.is_ok(), "Same key in different views should not conflict");
+    }
+
+    #[test]
+    fn test_empty_binding_validation() {
+        let mut config = KeyBindingsConfig::default();
+        config.task_list.quit = vec![];
+
+        let result = validate_non_empty_bindings(&config);
+        assert!(result.is_err());
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("task_list.quit"));
+    }
+
+    #[test]
+    fn test_invalid_key_expression() {
+        let mut config = KeyBindingsConfig::default();
+        config.task_list.quit = vec!["InvalidKey123".to_string()];
+
+        let result = validate_key_expressions(&config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_all_keys_parseable() {
+        let config = KeyBindingsConfig::default();
+        let result = validate_key_expressions(&config);
+        assert!(result.is_ok(), "All default keys should be parseable");
+    }
+
+    #[test]
+    fn test_config_with_multiple_conflicts() {
+        let mut config = KeyBindingsConfig::default();
+        config.task_list.quit = vec!["x".to_string()];
+        config.task_list.down = vec!["x".to_string()];
+        config.task_list.up = vec!["x".to_string()];
+
+        let result = validate_keybindings(&config);
+        assert!(result.is_err(), "Multiple conflicts should be detected");
+    }
+
+    // File loading tests
+    #[test]
+    fn test_load_nonexistent_config() {
+        // 存在しないパスからの読み込み
+        let result = load_keybindings_config(Some(std::path::Path::new(
+            "/nonexistent/path/config.toml",
+        )))
+        .unwrap();
+
+        // ファイルが存在しない場合は None が返される
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_load_valid_custom_config_from_file() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+
+        // カスタム設定を作成（全フィールド定義）
+        let custom_config = r#"
+[task_list]
+quit = ["x", "X"]
+down = ["n"]
+up = ["p"]
+open_tree = ["Enter"]
+jump_to_parent = ["g"]
+refresh = ["r"]
+add_comment = ["c"]
+edit_task = ["e"]
+create_task = ["t"]
+create_subtask = ["s"]
+copy_task_id = ["y"]
+open_state_picker = ["w"]
+open_comment_viewer = ["v"]
+open_description_viewer = ["d"]
+edit_filter = ["f"]
+
+[tree_view]
+close = ["q"]
+down = ["j"]
+up = ["k"]
+collapse = ["h"]
+expand = ["l"]
+jump = ["Enter"]
+
+[state_picker]
+close = ["q"]
+down = ["j"]
+up = ["k"]
+select = ["Enter"]
+
+[comment_viewer]
+close = ["q"]
+scroll_down = ["j"]
+scroll_up = ["k"]
+scroll_down_fast = ["Ctrl+d"]
+scroll_up_fast = ["Ctrl+u"]
+
+[description_viewer]
+close = ["q"]
+scroll_down = ["j"]
+scroll_up = ["k"]
+scroll_down_fast = ["Ctrl+d"]
+scroll_up_fast = ["Ctrl+u"]
+"#;
+
+        temp_file.write_all(custom_config.as_bytes()).unwrap();
+        temp_file.flush().unwrap();
+
+        // 設定を読み込んで検証
+        let config = load_keybindings_config(Some(temp_file.path()))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(config.task_list.quit, vec!["x", "X"]);
+        assert_eq!(config.task_list.down, vec!["n"]);
+        assert_eq!(config.task_list.up, vec!["p"]);
+        assert_eq!(config.task_list.jump_to_parent, vec!["g"]);
+    }
+
+    #[test]
+    fn test_load_invalid_toml_syntax() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+
+        // 不正な TOML 構文
+        let invalid_toml = r#"
+[task_list
+quit = ["q"]
+"#;
+
+        temp_file.write_all(invalid_toml.as_bytes()).unwrap();
+        temp_file.flush().unwrap();
+
+        // パースエラーが返される
+        let result = load_keybindings_config(Some(temp_file.path()));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_config_missing_required_fields() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+
+        // 必須フィールドが欠けている
+        let incomplete_config = r#"
+[task_list]
+quit = ["q"]
+down = ["j"]
+"#;
+
+        temp_file
+            .write_all(incomplete_config.as_bytes())
+            .unwrap();
+        temp_file.flush().unwrap();
+
+        // デシリアライズエラーが返される
+        let result = load_keybindings_config(Some(temp_file.path()));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_generate_default_toml_is_valid() {
+        let toml = generate_default_keybindings_toml().unwrap();
+
+        // ヘッダーコメントが含まれている
+        assert!(toml.contains("git-mile Keybindings Configuration"));
+        assert!(toml.contains("Supported key formats"));
+
+        // セクションが含まれている
+        assert!(toml.contains("[task_list]"));
+        assert!(toml.contains("[tree_view]"));
+        assert!(toml.contains("[state_picker]"));
+        assert!(toml.contains("[comment_viewer]"));
+        assert!(toml.contains("[description_viewer]"));
+
+        // 生成された TOML がパース可能であること
+        let parsed: KeyBindingsConfig = toml::from_str(&toml).unwrap();
+        assert_eq!(parsed.task_list.quit, vec!["q", "Q", "Esc"]);
+
+        // バリデーションが通ること
+        assert!(validate_config(&parsed).is_ok());
+    }
+
+    #[test]
+    fn test_config_file_roundtrip() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+
+        // デフォルト設定を生成してファイルに書き込む
+        let toml = generate_default_keybindings_toml().unwrap();
+        temp_file.write_all(toml.as_bytes()).unwrap();
+        temp_file.flush().unwrap();
+
+        // ファイルから読み込む
+        let loaded_config = load_keybindings_config(Some(temp_file.path()))
+            .unwrap()
+            .unwrap();
+
+        // デフォルト設定と一致すること
+        let default_config = KeyBindingsConfig::default();
+        assert_eq!(loaded_config.task_list.quit, default_config.task_list.quit);
+        assert_eq!(loaded_config.task_list.down, default_config.task_list.down);
+        assert_eq!(
+            loaded_config.tree_view.close,
+            default_config.tree_view.close
+        );
+        assert_eq!(
+            loaded_config.state_picker.select,
+            default_config.state_picker.select
+        );
+    }
+
+    #[test]
+    fn test_validate_config_from_file_with_conflicts() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+
+        // キーの衝突がある設定
+        let conflicting_config = r#"
+[task_list]
+quit = ["j"]
+down = ["j"]
+up = ["k"]
+open_tree = ["Enter"]
+jump_to_parent = ["p"]
+refresh = ["r"]
+add_comment = ["c"]
+edit_task = ["e"]
+create_task = ["n"]
+create_subtask = ["s"]
+copy_task_id = ["y"]
+open_state_picker = ["t"]
+open_comment_viewer = ["v"]
+open_description_viewer = ["d"]
+edit_filter = ["f"]
+
+[tree_view]
+close = ["q"]
+down = ["j"]
+up = ["k"]
+collapse = ["h"]
+expand = ["l"]
+jump = ["Enter"]
+
+[state_picker]
+close = ["q"]
+down = ["j"]
+up = ["k"]
+select = ["Enter"]
+
+[comment_viewer]
+close = ["q"]
+scroll_down = ["j"]
+scroll_up = ["k"]
+scroll_down_fast = ["Ctrl+d"]
+scroll_up_fast = ["Ctrl+u"]
+
+[description_viewer]
+close = ["q"]
+scroll_down = ["j"]
+scroll_up = ["k"]
+scroll_down_fast = ["Ctrl+d"]
+scroll_up_fast = ["Ctrl+u"]
+"#;
+
+        temp_file
+            .write_all(conflicting_config.as_bytes())
+            .unwrap();
+        temp_file.flush().unwrap();
+
+        // 設定は読み込めるが、バリデーションで失敗する
+        let config = load_keybindings_config(Some(temp_file.path()))
+            .unwrap()
+            .unwrap();
+        let result = validate_config(&config);
+
+        assert!(result.is_err());
+    }
 }
