@@ -2,4 +2,4 @@
 
 pub mod keybindings;
 
-pub use keybindings::KeyBindingsConfig;
+pub use keybindings::{Action, KeyBindingsConfig, ViewType};

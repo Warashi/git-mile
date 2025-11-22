@@ -5,28 +5,40 @@ use crossterm::event::{KeyCode, KeyEvent};
 use git_mile_app::TaskStore;
 
 use super::super::view::{DetailFocus, StatePickerOption, StatePickerState, Ui, UiAction};
+use crate::config::{Action, ViewType};
 
 impl<S: TaskStore> Ui<S> {
     pub(in crate::tui) fn handle_state_picker_key(&mut self, key: KeyEvent) -> Option<UiAction> {
-        match key.code {
-            KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
-                self.close_state_picker();
-                None
-            }
-            KeyCode::Down | KeyCode::Char('j' | 'J') => {
-                self.state_picker_down();
-                None
-            }
-            KeyCode::Up | KeyCode::Char('k' | 'K') => {
-                self.state_picker_up();
-                None
-            }
-            KeyCode::Enter => {
-                self.apply_state_picker_selection();
-                None
-            }
-            _ => None,
+        if self
+            .keybindings
+            .matches(ViewType::StatePicker, Action::Close, &key)
+        {
+            self.close_state_picker();
+            return None;
         }
+
+        if self
+            .keybindings
+            .matches(ViewType::StatePicker, Action::Down, &key)
+        {
+            self.state_picker_down();
+            return None;
+        }
+
+        if self.keybindings.matches(ViewType::StatePicker, Action::Up, &key) {
+            self.state_picker_up();
+            return None;
+        }
+
+        if self
+            .keybindings
+            .matches(ViewType::StatePicker, Action::Select, &key)
+        {
+            self.apply_state_picker_selection();
+            return None;
+        }
+
+        None
     }
 
     pub(in crate::tui) fn open_state_picker(&mut self) {

@@ -614,6 +614,167 @@ fn collect_description_viewer_bindings(
     bindings
 }
 
+/// View type for keybinding context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewType {
+    /// Task list view.
+    TaskList,
+    /// Tree view.
+    TreeView,
+    /// State picker.
+    StatePicker,
+    /// Comment viewer.
+    CommentViewer,
+    /// Description viewer.
+    DescriptionViewer,
+}
+
+/// Action that can be performed in a view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    // Common actions
+    /// Quit or close.
+    Quit,
+    /// Move down.
+    Down,
+    /// Move up.
+    Up,
+    /// Close (for popups).
+    Close,
+
+    // TaskList specific
+    /// Open tree view.
+    OpenTree,
+    /// Jump to parent task.
+    JumpToParent,
+    /// Refresh task list.
+    Refresh,
+    /// Add comment.
+    AddComment,
+    /// Edit task.
+    EditTask,
+    /// Create new task.
+    CreateTask,
+    /// Create subtask.
+    CreateSubtask,
+    /// Copy task ID.
+    CopyTaskId,
+    /// Open state picker.
+    OpenStatePicker,
+    /// Open comment viewer.
+    OpenCommentViewer,
+    /// Open description viewer.
+    OpenDescriptionViewer,
+    /// Edit filter.
+    EditFilter,
+
+    // TreeView specific
+    /// Collapse tree node.
+    Collapse,
+    /// Expand tree node.
+    Expand,
+    /// Jump to selected task.
+    Jump,
+
+    // StatePicker specific
+    /// Select state.
+    Select,
+
+    // Viewer specific
+    /// Scroll down.
+    ScrollDown,
+    /// Scroll up.
+    ScrollUp,
+    /// Scroll down fast.
+    ScrollDownFast,
+    /// Scroll up fast.
+    ScrollUpFast,
+}
+
+impl KeyBindingsConfig {
+    /// Check if a key event matches a configured action in a view.
+    ///
+    /// # Arguments
+    /// * `view` - The view type
+    /// * `action` - The action to check
+    /// * `key` - The key event to match
+    ///
+    /// # Returns
+    /// `true` if the key matches any configured binding for this action
+    pub fn matches(&self, view: ViewType, action: Action, key: &KeyEvent) -> bool {
+        let keys = self.get_keys(view, action);
+
+        for key_str in keys {
+            if let Ok(expected) = parse_key(key_str) {
+                if Self::key_event_matches(&expected, key) {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    fn key_event_matches(expected: &KeyEvent, actual: &KeyEvent) -> bool {
+        expected.code == actual.code && expected.modifiers == actual.modifiers
+    }
+
+    fn get_keys(&self, view: ViewType, action: Action) -> &[String] {
+        use Action::*;
+        use ViewType::*;
+
+        match (view, action) {
+            // TaskList
+            (TaskList, Quit) => &self.task_list.quit,
+            (TaskList, Down) => &self.task_list.down,
+            (TaskList, Up) => &self.task_list.up,
+            (TaskList, OpenTree) => &self.task_list.open_tree,
+            (TaskList, JumpToParent) => &self.task_list.jump_to_parent,
+            (TaskList, Refresh) => &self.task_list.refresh,
+            (TaskList, AddComment) => &self.task_list.add_comment,
+            (TaskList, EditTask) => &self.task_list.edit_task,
+            (TaskList, CreateTask) => &self.task_list.create_task,
+            (TaskList, CreateSubtask) => &self.task_list.create_subtask,
+            (TaskList, CopyTaskId) => &self.task_list.copy_task_id,
+            (TaskList, OpenStatePicker) => &self.task_list.open_state_picker,
+            (TaskList, OpenCommentViewer) => &self.task_list.open_comment_viewer,
+            (TaskList, OpenDescriptionViewer) => &self.task_list.open_description_viewer,
+            (TaskList, EditFilter) => &self.task_list.edit_filter,
+
+            // TreeView
+            (TreeView, Close) => &self.tree_view.close,
+            (TreeView, Down) => &self.tree_view.down,
+            (TreeView, Up) => &self.tree_view.up,
+            (TreeView, Collapse) => &self.tree_view.collapse,
+            (TreeView, Expand) => &self.tree_view.expand,
+            (TreeView, Jump) => &self.tree_view.jump,
+
+            // StatePicker
+            (StatePicker, Close) => &self.state_picker.close,
+            (StatePicker, Down) => &self.state_picker.down,
+            (StatePicker, Up) => &self.state_picker.up,
+            (StatePicker, Select) => &self.state_picker.select,
+
+            // CommentViewer
+            (CommentViewer, Close) => &self.comment_viewer.close,
+            (CommentViewer, ScrollDown) => &self.comment_viewer.scroll_down,
+            (CommentViewer, ScrollUp) => &self.comment_viewer.scroll_up,
+            (CommentViewer, ScrollDownFast) => &self.comment_viewer.scroll_down_fast,
+            (CommentViewer, ScrollUpFast) => &self.comment_viewer.scroll_up_fast,
+
+            // DescriptionViewer
+            (DescriptionViewer, Close) => &self.description_viewer.close,
+            (DescriptionViewer, ScrollDown) => &self.description_viewer.scroll_down,
+            (DescriptionViewer, ScrollUp) => &self.description_viewer.scroll_up,
+            (DescriptionViewer, ScrollDownFast) => &self.description_viewer.scroll_down_fast,
+            (DescriptionViewer, ScrollUpFast) => &self.description_viewer.scroll_up_fast,
+
+            // Invalid combinations
+            _ => &[],
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
