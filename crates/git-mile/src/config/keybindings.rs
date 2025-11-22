@@ -3,7 +3,8 @@
 use anyhow::{anyhow, bail, Context, Result};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 macro_rules! vec_of_strings {
     ($($s:expr),* $(,)?) => {
@@ -196,6 +197,39 @@ pub fn ensure_config_dir() -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Load keybindings configuration from a TOML file.
+///
+/// # Arguments
+/// - `path`: Optional path to the config file. If `None`, uses the default path.
+///
+/// # Returns
+/// - `Ok(Some(config))` if the file exists and was successfully parsed
+/// - `Ok(None)` if the file does not exist
+/// - `Err(_)` if there was an error reading or parsing the file
+pub fn load_keybindings_config(path: Option<&Path>) -> Result<Option<KeyBindingsConfig>> {
+    let config_path = match path {
+        Some(p) => p.to_path_buf(),
+        None => match default_config_path() {
+            Some(p) => p,
+            None => return Ok(None),
+        },
+    };
+
+    // ファイルが存在しない場合は None を返す
+    if !config_path.exists() {
+        return Ok(None);
+    }
+
+    // ファイルを読み込んでパース
+    let content = std::fs::read_to_string(&config_path)
+        .with_context(|| format!("Failed to read config file: {}", config_path.display()))?;
+
+    let config: KeyBindingsConfig = toml::from_str(&content)
+        .with_context(|| format!("Failed to parse config file: {}", config_path.display()))?;
+
+    Ok(Some(config))
+}
+
 /// Parse a key string into a KeyEvent.
 ///
 /// # Examples
@@ -252,6 +286,332 @@ fn parse_key_code(s: &str) -> Result<KeyCode> {
         }
         other => bail!("Unknown key: {}", other),
     }
+}
+
+/// Validate the keybindings configuration.
+///
+/// Checks for:
+/// - Key conflicts within each view
+/// - Invalid key expressions
+/// - Empty key bindings
+pub fn validate_config(config: &KeyBindingsConfig) -> Result<()> {
+    validate_non_empty_bindings(config)?;
+    validate_key_expressions(config)?;
+    validate_keybindings(config)?;
+    Ok(())
+}
+
+/// Validate that all keybinding fields have at least one key.
+fn validate_non_empty_bindings(config: &KeyBindingsConfig) -> Result<()> {
+    macro_rules! check_non_empty {
+        ($field:expr, $name:expr) => {
+            if $field.is_empty() {
+                bail!("{} must have at least one key binding", $name);
+            }
+        };
+    }
+
+    // TaskList
+    check_non_empty!(config.task_list.quit, "task_list.quit");
+    check_non_empty!(config.task_list.down, "task_list.down");
+    check_non_empty!(config.task_list.up, "task_list.up");
+    check_non_empty!(config.task_list.open_tree, "task_list.open_tree");
+    check_non_empty!(config.task_list.jump_to_parent, "task_list.jump_to_parent");
+    check_non_empty!(config.task_list.refresh, "task_list.refresh");
+    check_non_empty!(config.task_list.add_comment, "task_list.add_comment");
+    check_non_empty!(config.task_list.edit_task, "task_list.edit_task");
+    check_non_empty!(config.task_list.create_task, "task_list.create_task");
+    check_non_empty!(config.task_list.create_subtask, "task_list.create_subtask");
+    check_non_empty!(config.task_list.copy_task_id, "task_list.copy_task_id");
+    check_non_empty!(config.task_list.open_state_picker, "task_list.open_state_picker");
+    check_non_empty!(config.task_list.open_comment_viewer, "task_list.open_comment_viewer");
+    check_non_empty!(
+        config.task_list.open_description_viewer,
+        "task_list.open_description_viewer"
+    );
+    check_non_empty!(config.task_list.edit_filter, "task_list.edit_filter");
+
+    // TreeView
+    check_non_empty!(config.tree_view.close, "tree_view.close");
+    check_non_empty!(config.tree_view.down, "tree_view.down");
+    check_non_empty!(config.tree_view.up, "tree_view.up");
+    check_non_empty!(config.tree_view.collapse, "tree_view.collapse");
+    check_non_empty!(config.tree_view.expand, "tree_view.expand");
+    check_non_empty!(config.tree_view.jump, "tree_view.jump");
+
+    // StatePicker
+    check_non_empty!(config.state_picker.close, "state_picker.close");
+    check_non_empty!(config.state_picker.down, "state_picker.down");
+    check_non_empty!(config.state_picker.up, "state_picker.up");
+    check_non_empty!(config.state_picker.select, "state_picker.select");
+
+    // Viewers
+    check_non_empty!(config.comment_viewer.close, "comment_viewer.close");
+    check_non_empty!(config.comment_viewer.scroll_down, "comment_viewer.scroll_down");
+    check_non_empty!(config.comment_viewer.scroll_up, "comment_viewer.scroll_up");
+    check_non_empty!(
+        config.comment_viewer.scroll_down_fast,
+        "comment_viewer.scroll_down_fast"
+    );
+    check_non_empty!(
+        config.comment_viewer.scroll_up_fast,
+        "comment_viewer.scroll_up_fast"
+    );
+
+    check_non_empty!(config.description_viewer.close, "description_viewer.close");
+    check_non_empty!(
+        config.description_viewer.scroll_down,
+        "description_viewer.scroll_down"
+    );
+    check_non_empty!(config.description_viewer.scroll_up, "description_viewer.scroll_up");
+    check_non_empty!(
+        config.description_viewer.scroll_down_fast,
+        "description_viewer.scroll_down_fast"
+    );
+    check_non_empty!(
+        config.description_viewer.scroll_up_fast,
+        "description_viewer.scroll_up_fast"
+    );
+
+    Ok(())
+}
+
+/// Validate that all key expressions can be parsed.
+fn validate_key_expressions(config: &KeyBindingsConfig) -> Result<()> {
+    macro_rules! validate_keys {
+        ($field:expr, $name:expr) => {
+            for key in $field {
+                parse_key(key)
+                    .with_context(|| format!("Invalid key '{}' in {}", key, $name))?;
+            }
+        };
+    }
+
+    // TaskList
+    validate_keys!(&config.task_list.quit, "task_list.quit");
+    validate_keys!(&config.task_list.down, "task_list.down");
+    validate_keys!(&config.task_list.up, "task_list.up");
+    validate_keys!(&config.task_list.open_tree, "task_list.open_tree");
+    validate_keys!(&config.task_list.jump_to_parent, "task_list.jump_to_parent");
+    validate_keys!(&config.task_list.refresh, "task_list.refresh");
+    validate_keys!(&config.task_list.add_comment, "task_list.add_comment");
+    validate_keys!(&config.task_list.edit_task, "task_list.edit_task");
+    validate_keys!(&config.task_list.create_task, "task_list.create_task");
+    validate_keys!(&config.task_list.create_subtask, "task_list.create_subtask");
+    validate_keys!(&config.task_list.copy_task_id, "task_list.copy_task_id");
+    validate_keys!(
+        &config.task_list.open_state_picker,
+        "task_list.open_state_picker"
+    );
+    validate_keys!(
+        &config.task_list.open_comment_viewer,
+        "task_list.open_comment_viewer"
+    );
+    validate_keys!(
+        &config.task_list.open_description_viewer,
+        "task_list.open_description_viewer"
+    );
+    validate_keys!(&config.task_list.edit_filter, "task_list.edit_filter");
+
+    // TreeView
+    validate_keys!(&config.tree_view.close, "tree_view.close");
+    validate_keys!(&config.tree_view.down, "tree_view.down");
+    validate_keys!(&config.tree_view.up, "tree_view.up");
+    validate_keys!(&config.tree_view.collapse, "tree_view.collapse");
+    validate_keys!(&config.tree_view.expand, "tree_view.expand");
+    validate_keys!(&config.tree_view.jump, "tree_view.jump");
+
+    // StatePicker
+    validate_keys!(&config.state_picker.close, "state_picker.close");
+    validate_keys!(&config.state_picker.down, "state_picker.down");
+    validate_keys!(&config.state_picker.up, "state_picker.up");
+    validate_keys!(&config.state_picker.select, "state_picker.select");
+
+    // Viewers
+    validate_keys!(&config.comment_viewer.close, "comment_viewer.close");
+    validate_keys!(&config.comment_viewer.scroll_down, "comment_viewer.scroll_down");
+    validate_keys!(&config.comment_viewer.scroll_up, "comment_viewer.scroll_up");
+    validate_keys!(
+        &config.comment_viewer.scroll_down_fast,
+        "comment_viewer.scroll_down_fast"
+    );
+    validate_keys!(
+        &config.comment_viewer.scroll_up_fast,
+        "comment_viewer.scroll_up_fast"
+    );
+
+    validate_keys!(&config.description_viewer.close, "description_viewer.close");
+    validate_keys!(
+        &config.description_viewer.scroll_down,
+        "description_viewer.scroll_down"
+    );
+    validate_keys!(&config.description_viewer.scroll_up, "description_viewer.scroll_up");
+    validate_keys!(
+        &config.description_viewer.scroll_down_fast,
+        "description_viewer.scroll_down_fast"
+    );
+    validate_keys!(
+        &config.description_viewer.scroll_up_fast,
+        "description_viewer.scroll_up_fast"
+    );
+
+    Ok(())
+}
+
+/// Validate that there are no key conflicts within each view.
+fn validate_keybindings(config: &KeyBindingsConfig) -> Result<()> {
+    validate_view_keybindings("task_list", collect_task_list_bindings(config))?;
+    validate_view_keybindings("tree_view", collect_tree_view_bindings(config))?;
+    validate_view_keybindings("state_picker", collect_state_picker_bindings(config))?;
+    validate_view_keybindings("comment_viewer", collect_comment_viewer_bindings(config))?;
+    validate_view_keybindings(
+        "description_viewer",
+        collect_description_viewer_bindings(config),
+    )?;
+    Ok(())
+}
+
+fn validate_view_keybindings(
+    view_name: &str,
+    bindings: HashMap<String, Vec<String>>,
+) -> Result<()> {
+    let mut key_to_actions: HashMap<String, Vec<String>> = HashMap::new();
+
+    for (action, keys) in bindings {
+        for key in keys {
+            key_to_actions
+                .entry(key.clone())
+                .or_default()
+                .push(action.clone());
+        }
+    }
+
+    // 衝突をチェック
+    for (key, actions) in key_to_actions {
+        if actions.len() > 1 {
+            bail!(
+                "Key '{}' is bound to multiple actions in {}: {:?}",
+                key,
+                view_name,
+                actions
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn collect_task_list_bindings(config: &KeyBindingsConfig) -> HashMap<String, Vec<String>> {
+    let mut bindings = HashMap::new();
+    bindings.insert("quit".to_string(), config.task_list.quit.clone());
+    bindings.insert("down".to_string(), config.task_list.down.clone());
+    bindings.insert("up".to_string(), config.task_list.up.clone());
+    bindings.insert("open_tree".to_string(), config.task_list.open_tree.clone());
+    bindings.insert(
+        "jump_to_parent".to_string(),
+        config.task_list.jump_to_parent.clone(),
+    );
+    bindings.insert("refresh".to_string(), config.task_list.refresh.clone());
+    bindings.insert(
+        "add_comment".to_string(),
+        config.task_list.add_comment.clone(),
+    );
+    bindings.insert("edit_task".to_string(), config.task_list.edit_task.clone());
+    bindings.insert(
+        "create_task".to_string(),
+        config.task_list.create_task.clone(),
+    );
+    bindings.insert(
+        "create_subtask".to_string(),
+        config.task_list.create_subtask.clone(),
+    );
+    bindings.insert(
+        "copy_task_id".to_string(),
+        config.task_list.copy_task_id.clone(),
+    );
+    bindings.insert(
+        "open_state_picker".to_string(),
+        config.task_list.open_state_picker.clone(),
+    );
+    bindings.insert(
+        "open_comment_viewer".to_string(),
+        config.task_list.open_comment_viewer.clone(),
+    );
+    bindings.insert(
+        "open_description_viewer".to_string(),
+        config.task_list.open_description_viewer.clone(),
+    );
+    bindings.insert(
+        "edit_filter".to_string(),
+        config.task_list.edit_filter.clone(),
+    );
+    bindings
+}
+
+fn collect_tree_view_bindings(config: &KeyBindingsConfig) -> HashMap<String, Vec<String>> {
+    let mut bindings = HashMap::new();
+    bindings.insert("close".to_string(), config.tree_view.close.clone());
+    bindings.insert("down".to_string(), config.tree_view.down.clone());
+    bindings.insert("up".to_string(), config.tree_view.up.clone());
+    bindings.insert("collapse".to_string(), config.tree_view.collapse.clone());
+    bindings.insert("expand".to_string(), config.tree_view.expand.clone());
+    bindings.insert("jump".to_string(), config.tree_view.jump.clone());
+    bindings
+}
+
+fn collect_state_picker_bindings(config: &KeyBindingsConfig) -> HashMap<String, Vec<String>> {
+    let mut bindings = HashMap::new();
+    bindings.insert("close".to_string(), config.state_picker.close.clone());
+    bindings.insert("down".to_string(), config.state_picker.down.clone());
+    bindings.insert("up".to_string(), config.state_picker.up.clone());
+    bindings.insert("select".to_string(), config.state_picker.select.clone());
+    bindings
+}
+
+fn collect_comment_viewer_bindings(config: &KeyBindingsConfig) -> HashMap<String, Vec<String>> {
+    let mut bindings = HashMap::new();
+    bindings.insert("close".to_string(), config.comment_viewer.close.clone());
+    bindings.insert(
+        "scroll_down".to_string(),
+        config.comment_viewer.scroll_down.clone(),
+    );
+    bindings.insert(
+        "scroll_up".to_string(),
+        config.comment_viewer.scroll_up.clone(),
+    );
+    bindings.insert(
+        "scroll_down_fast".to_string(),
+        config.comment_viewer.scroll_down_fast.clone(),
+    );
+    bindings.insert(
+        "scroll_up_fast".to_string(),
+        config.comment_viewer.scroll_up_fast.clone(),
+    );
+    bindings
+}
+
+fn collect_description_viewer_bindings(
+    config: &KeyBindingsConfig,
+) -> HashMap<String, Vec<String>> {
+    let mut bindings = HashMap::new();
+    bindings.insert("close".to_string(), config.description_viewer.close.clone());
+    bindings.insert(
+        "scroll_down".to_string(),
+        config.description_viewer.scroll_down.clone(),
+    );
+    bindings.insert(
+        "scroll_up".to_string(),
+        config.description_viewer.scroll_up.clone(),
+    );
+    bindings.insert(
+        "scroll_down_fast".to_string(),
+        config.description_viewer.scroll_down_fast.clone(),
+    );
+    bindings.insert(
+        "scroll_up_fast".to_string(),
+        config.description_viewer.scroll_up_fast.clone(),
+    );
+    bindings
 }
 
 #[cfg(test)]
