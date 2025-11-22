@@ -13,6 +13,7 @@ use git_mile_store_git::GitStore;
 use rmcp::ServiceExt;
 
 mod commands;
+mod config;
 mod mcp;
 mod tui;
 
