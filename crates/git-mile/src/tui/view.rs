@@ -18,6 +18,7 @@ use super::app::App;
 use super::clipboard::{ClipboardSink, default_clipboard};
 use super::constants::UI_MESSAGE_TTL_SECS;
 use super::tree_view::TreeViewState;
+use crate::config::KeyBindingsConfig;
 
 #[derive(Debug, Clone)]
 pub(super) struct StatePickerOption {
@@ -87,6 +88,8 @@ pub(super) struct Ui<S: TaskStore> {
     /// Description viewer popup state.
     pub(super) description_viewer: Option<DescriptionViewerState>,
     pub(super) clipboard: Box<dyn ClipboardSink>,
+    /// Keybindings configuration.
+    pub(super) keybindings: KeyBindingsConfig,
 }
 
 impl<S: TaskStore> Ui<S> {
@@ -115,6 +118,7 @@ impl<S: TaskStore> Ui<S> {
             comment_viewer: None,
             description_viewer: None,
             clipboard,
+            keybindings: KeyBindingsConfig::default(),
         };
         ui.apply_default_filter();
         ui
