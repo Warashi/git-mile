@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
 
 use git_mile_app::TaskStore;
 

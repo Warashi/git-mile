@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{KeyEvent, KeyEventKind};
 use git_mile_app::TaskStore;
 
 use super::super::view::{CommentViewerState, DescriptionViewerState, DetailFocus, Ui, UiAction};
@@ -431,6 +431,7 @@ mod tests {
                 name: "tester".into(),
                 email: "tester@example.invalid".into(),
             },
+            crate::config::keybindings::KeyBindingsConfig::default(),
         )
     }
 

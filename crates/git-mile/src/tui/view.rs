@@ -100,12 +100,12 @@ impl<S: TaskStore> Ui<S> {
     pub(super) const STATUS_FOOTER_MIN_HEIGHT: u16 =
         Self::INSTRUCTIONS_HEIGHT + Self::FILTER_HEIGHT + Self::STATUS_MESSAGE_MIN_HEIGHT;
 
-    pub(super) fn new(app: App<S>, actor: Actor) -> Self {
+    pub(super) fn new(app: App<S>, actor: Actor, keybindings: KeyBindingsConfig) -> Self {
         let clipboard = default_clipboard();
-        Self::with_clipboard(app, actor, clipboard)
+        Self::with_clipboard(app, actor, keybindings, clipboard)
     }
 
-    pub(super) fn with_clipboard(app: App<S>, actor: Actor, clipboard: Box<dyn ClipboardSink>) -> Self {
+    pub(super) fn with_clipboard(app: App<S>, actor: Actor, keybindings: KeyBindingsConfig, clipboard: Box<dyn ClipboardSink>) -> Self {
         let _ = thread::current().id();
         let mut ui = Self {
             app,
@@ -118,7 +118,7 @@ impl<S: TaskStore> Ui<S> {
             comment_viewer: None,
             description_viewer: None,
             clipboard,
-            keybindings: KeyBindingsConfig::default(),
+            keybindings,
         };
         ui.apply_default_filter();
         ui

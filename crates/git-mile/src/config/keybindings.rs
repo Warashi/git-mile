@@ -186,6 +186,7 @@ pub fn default_config_path() -> Option<PathBuf> {
 }
 
 /// Ensures the config directory exists and returns the default config path.
+#[allow(dead_code)]
 pub fn ensure_config_dir() -> Result<PathBuf> {
     let path = default_config_path().context("Could not determine config directory")?;
 
@@ -692,6 +693,112 @@ pub enum Action {
 }
 
 impl KeyBindingsConfig {
+    /// Generate help text for a specific view.
+    ///
+    /// # Arguments
+    /// * `view` - The view type to generate help for
+    ///
+    /// # Returns
+    /// A formatted help string showing the keybindings for the view
+    pub fn generate_help_text(&self, view: ViewType) -> String {
+        match view {
+            ViewType::TaskList => self.generate_task_list_help(),
+            ViewType::TreeView => self.generate_tree_view_help(),
+            ViewType::StatePicker => self.generate_state_picker_help(),
+            ViewType::CommentViewer | ViewType::DescriptionViewer => self.generate_viewer_help(),
+        }
+    }
+
+    fn generate_task_list_help(&self) -> String {
+        format!(
+            "{}:移動 {}:ツリー {}:新規 {}:子タスク {}:編集 {}:コメント {}:コメント表示 {}:説明表示 {}:再読込 {}:親へ {}:IDコピー {}:状態 {}:フィルタ {}:終了",
+            self.format_key_pair(&self.task_list.down, &self.task_list.up),
+            self.format_first_key(&self.task_list.open_tree),
+            self.format_first_key(&self.task_list.create_task),
+            self.format_first_key(&self.task_list.create_subtask),
+            self.format_first_key(&self.task_list.edit_task),
+            self.format_first_key(&self.task_list.add_comment),
+            self.format_first_key(&self.task_list.open_comment_viewer),
+            self.format_first_key(&self.task_list.open_description_viewer),
+            self.format_first_key(&self.task_list.refresh),
+            self.format_first_key(&self.task_list.jump_to_parent),
+            self.format_first_key(&self.task_list.copy_task_id),
+            self.format_first_key(&self.task_list.open_state_picker),
+            self.format_first_key(&self.task_list.edit_filter),
+            self.format_first_key(&self.task_list.quit),
+        )
+    }
+
+    fn generate_tree_view_help(&self) -> String {
+        format!(
+            "{}:移動 {}:閉じる {}:開く {}:ジャンプ {}:閉じる",
+            self.format_key_pair(&self.tree_view.down, &self.tree_view.up),
+            self.format_first_key(&self.tree_view.collapse),
+            self.format_first_key(&self.tree_view.expand),
+            self.format_first_key(&self.tree_view.jump),
+            self.format_first_key(&self.tree_view.close),
+        )
+    }
+
+    fn generate_state_picker_help(&self) -> String {
+        format!(
+            "{}:移動 {}:決定 {}:キャンセル",
+            self.format_key_pair(&self.state_picker.down, &self.state_picker.up),
+            self.format_first_key(&self.state_picker.select),
+            self.format_first_key(&self.state_picker.close),
+        )
+    }
+
+    fn generate_viewer_help(&self) -> String {
+        format!(
+            "{}:スクロール {}/{}:半画面スクロール {}:閉じる",
+            self.format_key_pair(&self.comment_viewer.scroll_down, &self.comment_viewer.scroll_up),
+            self.format_first_key(&self.comment_viewer.scroll_down_fast),
+            self.format_first_key(&self.comment_viewer.scroll_up_fast),
+            self.format_first_key(&self.comment_viewer.close),
+        )
+    }
+
+    /// Format the first key of a key binding list for display.
+    fn format_first_key(&self, keys: &[String]) -> String {
+        keys.first()
+            .map(|k| self.format_key_display(k))
+            .unwrap_or_else(|| "?".to_string())
+    }
+
+    /// Format two keys as a pair (e.g., "j/k" for down/up).
+    fn format_key_pair(&self, down: &[String], up: &[String]) -> String {
+        format!(
+            "{}/{}",
+            self.format_first_key(down),
+            self.format_first_key(up)
+        )
+    }
+
+    /// Format a key for display, converting special keys to readable symbols.
+    fn format_key_display(&self, key: &str) -> String {
+        match key {
+            "Enter" => "↵".to_string(),
+            "Esc" => "Esc".to_string(),
+            "Tab" => "Tab".to_string(),
+            "Backspace" => "BS".to_string(),
+            "Delete" => "Del".to_string(),
+            "Up" => "↑".to_string(),
+            "Down" => "↓".to_string(),
+            "Left" => "←".to_string(),
+            "Right" => "→".to_string(),
+            "Home" => "Home".to_string(),
+            "End" => "End".to_string(),
+            "PageUp" => "PgUp".to_string(),
+            "PageDown" => "PgDn".to_string(),
+            "Ctrl+d" => "Ctrl-d".to_string(),
+            "Ctrl+u" => "Ctrl-u".to_string(),
+            other if other.starts_with("Ctrl+") => other.replace('+', "-"),
+            other if other.starts_with("Alt+") => other.replace('+', "-"),
+            other => other.to_string(),
+        }
+    }
+
     /// Check if a key event matches a configured action in a view.
     ///
     /// # Arguments
@@ -937,5 +1044,108 @@ mod tests {
         assert_eq!(lower.code, KeyCode::Char('j'));
         assert_eq!(upper.code, KeyCode::Char('J'));
         assert_ne!(lower.code, upper.code);
+    }
+
+    #[test]
+    fn test_default_help_text_task_list() {
+        let config = KeyBindingsConfig::default();
+        let help = config.generate_help_text(ViewType::TaskList);
+
+        // デフォルトのヘルプテキストが生成されること
+        assert!(help.contains("移動"));
+        assert!(help.contains("終了"));
+        assert!(help.contains("新規"));
+        assert!(help.contains("コメント"));
+    }
+
+    #[test]
+    fn test_default_help_text_tree_view() {
+        let config = KeyBindingsConfig::default();
+        let help = config.generate_help_text(ViewType::TreeView);
+
+        assert!(help.contains("移動"));
+        assert!(help.contains("閉じる"));
+        assert!(help.contains("開く"));
+        assert!(help.contains("ジャンプ"));
+    }
+
+    #[test]
+    fn test_default_help_text_state_picker() {
+        let config = KeyBindingsConfig::default();
+        let help = config.generate_help_text(ViewType::StatePicker);
+
+        assert!(help.contains("移動"));
+        assert!(help.contains("決定"));
+        assert!(help.contains("キャンセル"));
+    }
+
+    #[test]
+    fn test_default_help_text_viewer() {
+        let config = KeyBindingsConfig::default();
+        let help = config.generate_help_text(ViewType::CommentViewer);
+
+        assert!(help.contains("スクロール"));
+        assert!(help.contains("半画面スクロール"));
+        assert!(help.contains("閉じる"));
+    }
+
+    #[test]
+    fn test_custom_help_text() {
+        let mut config = KeyBindingsConfig::default();
+        config.task_list.quit = vec!["x".to_string()];
+        config.task_list.down = vec!["n".to_string()];
+        config.task_list.up = vec!["p".to_string()];
+
+        let help = config.generate_help_text(ViewType::TaskList);
+
+        // カスタムキーが反映されること
+        assert!(help.contains("n/p:移動"));
+        assert!(help.contains("x:終了"));
+    }
+
+    #[test]
+    fn test_format_special_keys() {
+        let config = KeyBindingsConfig::default();
+
+        assert_eq!(config.format_key_display("Enter"), "↵");
+        assert_eq!(config.format_key_display("Esc"), "Esc");
+        assert_eq!(config.format_key_display("Ctrl+d"), "Ctrl-d");
+        assert_eq!(config.format_key_display("Ctrl+u"), "Ctrl-u");
+        assert_eq!(config.format_key_display("Up"), "↑");
+        assert_eq!(config.format_key_display("Down"), "↓");
+        assert_eq!(config.format_key_display("Left"), "←");
+        assert_eq!(config.format_key_display("Right"), "→");
+    }
+
+    #[test]
+    fn test_format_first_key() {
+        let config = KeyBindingsConfig::default();
+
+        assert_eq!(
+            config.format_first_key(&vec!["j".to_string(), "J".to_string()]),
+            "j"
+        );
+        assert_eq!(
+            config.format_first_key(&vec!["Enter".to_string()]),
+            "↵"
+        );
+        assert_eq!(config.format_first_key(&vec![]), "?");
+    }
+
+    #[test]
+    fn test_format_key_pair() {
+        let config = KeyBindingsConfig::default();
+
+        assert_eq!(
+            config.format_key_pair(
+                &vec!["j".to_string(), "J".to_string()],
+                &vec!["k".to_string(), "K".to_string()]
+            ),
+            "j/k"
+        );
+        assert_eq!(
+            config.format_key_pair(&vec!["Down".to_string()], &vec!["Up".to_string()]),
+            "↓/↑"
+        );
     }
 }
