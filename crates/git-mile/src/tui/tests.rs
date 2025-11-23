@@ -4,6 +4,7 @@ use super::editor::*;
 use super::view::*;
 use super::widgets::truncate_with_ellipsis;
 use anyhow::{Result, anyhow};
+use crate::config::keybindings::KeyBindingsConfig;
 use git_mile_app::TaskRepository;
 use git_mile_app::TaskStore;
 use git_mile_app::TaskView;
@@ -288,7 +289,7 @@ impl ClipboardSink for FailingClipboard {
 }
 
 fn ui_with_clipboard(app: App<Arc<MockStore>>, clipboard: Box<dyn ClipboardSink>) -> Ui<Arc<MockStore>> {
-    Ui::with_clipboard(app, actor(), clipboard)
+    Ui::with_clipboard(app, actor(), KeyBindingsConfig::default(), clipboard)
 }
 
 #[test]

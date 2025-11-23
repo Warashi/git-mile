@@ -80,6 +80,39 @@ Parent commits form a chain representing the event history. Actor information is
 
 All three interfaces share the same `TaskFilter` logic and operate on identical `TaskSnapshot` views computed from core CRDT operations.
 
+## Configuration
+
+### Keybindings
+
+TUI keybindings can be customized via `~/.config/git-mile/config.toml` (or `%APPDATA%\git-mile\config.toml` on Windows).
+
+**Generate default configuration**:
+```bash
+git-mile config init-keybindings
+```
+
+**Configuration structure**:
+- File format: TOML
+- Location: `crates/git-mile/src/config/keybindings.rs`
+- Default path: `~/.config/git-mile/config.toml` (XDG Base Directory specification)
+- Sections: `task_list`, `tree_view`, `state_picker`, `comment_viewer`, `description_viewer`
+
+**Key features**:
+- Multiple keys per action: Each action can be bound to multiple keys (e.g., `quit = ["q", "Q", "Esc"]`)
+- Modifier support: Ctrl, Alt, Shift modifiers (e.g., `scroll_down_fast = ["Ctrl+d"]`)
+- Special keys: Enter, Esc, arrow keys, etc.
+- Dynamic help text: TUI bottom bar generates help from configuration (displays first key in each list)
+- Validation: Checks for key conflicts, empty bindings, and invalid key expressions
+
+**Implementation details**:
+- Configuration loaded at TUI startup via `load_keybindings_config()`
+- Falls back to hardcoded defaults if config file doesn't exist
+- Validation via `validate_config()` before use
+- Key matching uses `KeyBindingsConfig::matches()` method
+- Help text generation via `KeyBindingsConfig::generate_help_text()`
+
+See [docs/keybindings.md](docs/keybindings.md) for user documentation.
+
 ### Key Design Decisions
 
 **Snapshots are never persisted**: Task snapshots are always recomputed from events. This ensures consistency and avoids cache invalidation complexity.

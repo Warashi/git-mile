@@ -9,6 +9,7 @@ use ratatui::{
 
 use git_mile_app::TaskStore;
 
+use crate::config::keybindings::ViewType;
 use super::super::editor::summarize_task_filter;
 use super::super::view::{DetailFocus, Message, Ui};
 
@@ -44,16 +45,20 @@ impl<S: TaskStore> Ui<S> {
     }
 
     pub(in crate::tui) fn instructions(&self) -> String {
+        let view_type = match self.detail_focus {
+            DetailFocus::None => ViewType::TaskList,
+            DetailFocus::TreeView => ViewType::TreeView,
+            DetailFocus::StatePicker => ViewType::StatePicker,
+            DetailFocus::CommentViewer => ViewType::CommentViewer,
+            DetailFocus::DescriptionViewer => ViewType::DescriptionViewer,
+        };
+
         match self.detail_focus {
             DetailFocus::None => {
-                let base = "j/k:移動 ↵:ツリー n:新規 s:子タスク e:編集 c:コメント v:コメント表示 d:説明表示 r:再読込 p:親へ y:IDコピー t:状態 f:フィルタ q:終了";
+                let base = self.keybindings.generate_help_text(view_type);
                 format!("{} [{} <{}>]", base, self.actor.name, self.actor.email)
             }
-            DetailFocus::TreeView => "j/k:移動 h:閉じる l:開く ↵:ジャンプ q/Esc:閉じる".to_string(),
-            DetailFocus::StatePicker => "j/k:移動 ↵:決定 q/Esc:キャンセル".to_string(),
-            DetailFocus::CommentViewer | DetailFocus::DescriptionViewer => {
-                "j/k:スクロール Ctrl-d/Ctrl-u:半画面スクロール q/Esc:閉じる".to_string()
-            }
+            _ => self.keybindings.generate_help_text(view_type),
         }
     }
 

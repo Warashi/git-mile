@@ -1,8 +1,9 @@
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{KeyEvent, KeyEventKind};
 use git_mile_app::TaskStore;
 
 use super::super::view::{CommentViewerState, DescriptionViewerState, DetailFocus, Ui, UiAction};
+use crate::config::{Action, ViewType};
 
 impl<S: TaskStore> Ui<S> {
     pub(in crate::tui) fn handle_key(&mut self, key: KeyEvent) -> Result<Option<UiAction>> {
@@ -24,155 +25,251 @@ impl<S: TaskStore> Ui<S> {
     }
 
     fn handle_task_list_key(&mut self, key: KeyEvent) -> Result<Option<UiAction>> {
-        match key.code {
-            KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
-                self.should_quit = true;
-                Ok(None)
-            }
-            KeyCode::Down | KeyCode::Char('j' | 'J') => {
-                self.app.visibility_mut().select_next();
-                Ok(None)
-            }
-            KeyCode::Up | KeyCode::Char('k' | 'K') => {
-                self.app.visibility_mut().select_prev();
-                Ok(None)
-            }
-            KeyCode::Enter => {
-                self.open_tree_view();
-                Ok(None)
-            }
-            KeyCode::Char('p' | 'P') => {
-                self.jump_to_parent();
-                Ok(None)
-            }
-            KeyCode::Char('r' | 'R') => {
-                self.app.refresh_tasks()?;
-                self.info("タスクを再読込しました");
-                Ok(None)
-            }
-            KeyCode::Char('c' | 'C') => self.selected_task_id().map_or_else(
+        if self.keybindings.matches(ViewType::TaskList, Action::Quit, &key) {
+            self.should_quit = true;
+            return Ok(None);
+        }
+
+        if self.keybindings.matches(ViewType::TaskList, Action::Down, &key) {
+            self.app.visibility_mut().select_next();
+            return Ok(None);
+        }
+
+        if self.keybindings.matches(ViewType::TaskList, Action::Up, &key) {
+            self.app.visibility_mut().select_prev();
+            return Ok(None);
+        }
+
+        if self.keybindings.matches(ViewType::TaskList, Action::OpenTree, &key) {
+            self.open_tree_view();
+            return Ok(None);
+        }
+
+        if self
+            .keybindings
+            .matches(ViewType::TaskList, Action::JumpToParent, &key)
+        {
+            self.jump_to_parent();
+            return Ok(None);
+        }
+
+        if self.keybindings.matches(ViewType::TaskList, Action::Refresh, &key) {
+            self.app.refresh_tasks()?;
+            self.info("タスクを再読込しました");
+            return Ok(None);
+        }
+
+        if self
+            .keybindings
+            .matches(ViewType::TaskList, Action::AddComment, &key)
+        {
+            return self.selected_task_id().map_or_else(
                 || {
                     self.error("コメント対象のタスクが選択されていません");
                     Ok(None)
                 },
                 |task| Ok(Some(UiAction::AddComment { task })),
-            ),
-            KeyCode::Char('e' | 'E') => self.selected_task_id().map_or_else(
+            );
+        }
+
+        if self
+            .keybindings
+            .matches(ViewType::TaskList, Action::EditTask, &key)
+        {
+            return self.selected_task_id().map_or_else(
                 || {
                     self.error("編集対象のタスクが選択されていません");
                     Ok(None)
                 },
                 |task| Ok(Some(UiAction::EditTask { task })),
-            ),
-            KeyCode::Char('n' | 'N') => Ok(Some(UiAction::CreateTask)),
-            KeyCode::Char('s' | 'S') => self.selected_task_id().map_or_else(
+            );
+        }
+
+        if self
+            .keybindings
+            .matches(ViewType::TaskList, Action::CreateTask, &key)
+        {
+            return Ok(Some(UiAction::CreateTask));
+        }
+
+        if self
+            .keybindings
+            .matches(ViewType::TaskList, Action::CreateSubtask, &key)
+        {
+            return self.selected_task_id().map_or_else(
                 || {
                     self.error("子タスクを作成する親タスクが選択されていません");
                     Ok(None)
                 },
                 |parent| Ok(Some(UiAction::CreateSubtask { parent })),
-            ),
-            KeyCode::Char('y' | 'Y') => {
-                self.copy_selected_task_id();
-                Ok(None)
-            }
-            KeyCode::Char('t' | 'T') => {
-                self.open_state_picker();
-                Ok(None)
-            }
-            KeyCode::Char('v' | 'V') => {
-                self.open_comment_viewer();
-                Ok(None)
-            }
-            KeyCode::Char('d' | 'D') => {
-                self.open_description_viewer();
-                Ok(None)
-            }
-            KeyCode::Char('f' | 'F') => Ok(Some(UiAction::EditFilter)),
-            _ => Ok(None),
+            );
         }
+
+        if self
+            .keybindings
+            .matches(ViewType::TaskList, Action::CopyTaskId, &key)
+        {
+            self.copy_selected_task_id();
+            return Ok(None);
+        }
+
+        if self
+            .keybindings
+            .matches(ViewType::TaskList, Action::OpenStatePicker, &key)
+        {
+            self.open_state_picker();
+            return Ok(None);
+        }
+
+        if self
+            .keybindings
+            .matches(ViewType::TaskList, Action::OpenCommentViewer, &key)
+        {
+            self.open_comment_viewer();
+            return Ok(None);
+        }
+
+        if self
+            .keybindings
+            .matches(ViewType::TaskList, Action::OpenDescriptionViewer, &key)
+        {
+            self.open_description_viewer();
+            return Ok(None);
+        }
+
+        if self
+            .keybindings
+            .matches(ViewType::TaskList, Action::EditFilter, &key)
+        {
+            return Ok(Some(UiAction::EditFilter));
+        }
+
+        Ok(None)
     }
 
     fn handle_tree_view_key(&mut self, key: KeyEvent) -> Option<UiAction> {
-        match key.code {
-            KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
-                self.detail_focus = DetailFocus::None;
-                None
-            }
-            KeyCode::Down | KeyCode::Char('j' | 'J') => {
-                self.tree_view_down();
-                None
-            }
-            KeyCode::Up | KeyCode::Char('k' | 'K') => {
-                self.tree_view_up();
-                None
-            }
-            KeyCode::Char('h' | 'H') => {
-                self.tree_view_collapse();
-                None
-            }
-            KeyCode::Char('l' | 'L') => {
-                self.tree_view_expand();
-                None
-            }
-            KeyCode::Enter => {
-                self.tree_view_jump();
-                None
-            }
-            _ => None,
+        if self.keybindings.matches(ViewType::TreeView, Action::Close, &key) {
+            self.detail_focus = DetailFocus::None;
+            return None;
         }
+
+        if self.keybindings.matches(ViewType::TreeView, Action::Down, &key) {
+            self.tree_view_down();
+            return None;
+        }
+
+        if self.keybindings.matches(ViewType::TreeView, Action::Up, &key) {
+            self.tree_view_up();
+            return None;
+        }
+
+        if self
+            .keybindings
+            .matches(ViewType::TreeView, Action::Collapse, &key)
+        {
+            self.tree_view_collapse();
+            return None;
+        }
+
+        if self.keybindings.matches(ViewType::TreeView, Action::Expand, &key) {
+            self.tree_view_expand();
+            return None;
+        }
+
+        if self.keybindings.matches(ViewType::TreeView, Action::Jump, &key) {
+            self.tree_view_jump();
+            return None;
+        }
+
+        None
     }
 
-    const fn handle_comment_viewer_key(&mut self, key: KeyEvent) -> Option<UiAction> {
-        match key.code {
-            KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
-                self.close_comment_viewer();
-                None
-            }
-            KeyCode::Char('j' | 'J') => {
-                self.comment_viewer_scroll_down(1);
-                None
-            }
-            KeyCode::Char('k' | 'K') => {
-                self.comment_viewer_scroll_up(1);
-                None
-            }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.comment_viewer_scroll_down(10);
-                None
-            }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.comment_viewer_scroll_up(10);
-                None
-            }
-            _ => None,
+    fn handle_comment_viewer_key(&mut self, key: KeyEvent) -> Option<UiAction> {
+        if self
+            .keybindings
+            .matches(ViewType::CommentViewer, Action::Close, &key)
+        {
+            self.close_comment_viewer();
+            return None;
         }
+
+        if self
+            .keybindings
+            .matches(ViewType::CommentViewer, Action::ScrollDown, &key)
+        {
+            self.comment_viewer_scroll_down(1);
+            return None;
+        }
+
+        if self
+            .keybindings
+            .matches(ViewType::CommentViewer, Action::ScrollUp, &key)
+        {
+            self.comment_viewer_scroll_up(1);
+            return None;
+        }
+
+        if self
+            .keybindings
+            .matches(ViewType::CommentViewer, Action::ScrollDownFast, &key)
+        {
+            self.comment_viewer_scroll_down(10);
+            return None;
+        }
+
+        if self
+            .keybindings
+            .matches(ViewType::CommentViewer, Action::ScrollUpFast, &key)
+        {
+            self.comment_viewer_scroll_up(10);
+            return None;
+        }
+
+        None
     }
 
-    const fn handle_description_viewer_key(&mut self, key: KeyEvent) -> Option<UiAction> {
-        match key.code {
-            KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
-                self.close_description_viewer();
-                None
-            }
-            KeyCode::Char('j' | 'J') => {
-                self.description_viewer_scroll_down(1);
-                None
-            }
-            KeyCode::Char('k' | 'K') => {
-                self.description_viewer_scroll_up(1);
-                None
-            }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.description_viewer_scroll_down(10);
-                None
-            }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.description_viewer_scroll_up(10);
-                None
-            }
-            _ => None,
+    fn handle_description_viewer_key(&mut self, key: KeyEvent) -> Option<UiAction> {
+        if self
+            .keybindings
+            .matches(ViewType::DescriptionViewer, Action::Close, &key)
+        {
+            self.close_description_viewer();
+            return None;
         }
+
+        if self
+            .keybindings
+            .matches(ViewType::DescriptionViewer, Action::ScrollDown, &key)
+        {
+            self.description_viewer_scroll_down(1);
+            return None;
+        }
+
+        if self
+            .keybindings
+            .matches(ViewType::DescriptionViewer, Action::ScrollUp, &key)
+        {
+            self.description_viewer_scroll_up(1);
+            return None;
+        }
+
+        if self
+            .keybindings
+            .matches(ViewType::DescriptionViewer, Action::ScrollDownFast, &key)
+        {
+            self.description_viewer_scroll_down(10);
+            return None;
+        }
+
+        if self
+            .keybindings
+            .matches(ViewType::DescriptionViewer, Action::ScrollUpFast, &key)
+        {
+            self.description_viewer_scroll_up(10);
+            return None;
+        }
+
+        None
     }
 
     fn jump_to_parent(&mut self) {
@@ -275,6 +372,7 @@ mod tests {
     use super::*;
     use crate::tui::app::App;
     use anyhow::Error;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use git_mile_app::TaskRepository;
     use git_mile_app::TaskView;
     use git_mile_app::WorkflowConfig;
@@ -334,6 +432,7 @@ mod tests {
                 name: "tester".into(),
                 email: "tester@example.invalid".into(),
             },
+            crate::config::keybindings::KeyBindingsConfig::default(),
         )
     }
 

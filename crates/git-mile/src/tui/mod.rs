@@ -15,6 +15,7 @@ use tracing::subscriber::NoSubscriber;
 
 use git_mile_app::TaskRepository;
 use git_mile_app::{WorkflowConfig, default_actor};
+use crate::config::keybindings::{KeyBindingsConfig, load_config, validate_config_struct};
 
 mod app;
 mod clipboard;
@@ -74,7 +75,18 @@ fn run_event_loop(
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
     let actor = default_actor(&repo_root);
     let app = App::new(store_arc, Arc::new(repository), workflow, hooks_config, base_dir)?;
-    let mut ui = Ui::new(app, actor);
+
+    // Load configuration
+    let keybindings = match load_config(None)? {
+        Some(config) => {
+            // Validate the loaded configuration
+            validate_config_struct(&config)?;
+            config.tui.keybindings
+        }
+        None => KeyBindingsConfig::default(),
+    };
+
+    let mut ui = Ui::new(app, actor, keybindings);
 
     let mut last_tick = Instant::now();
     let tick_rate = Duration::from_millis(TUI_TICK_RATE_MS);
