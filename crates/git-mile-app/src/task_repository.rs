@@ -68,6 +68,8 @@ impl<S: TaskStore> TaskRepository<S> {
                 if modified.is_empty() {
                     return Ok(());
                 }
+                // Invalidate cache for modified tasks to ensure fresh data
+                self.store.invalidate_cache(&modified).map_err(Into::into)?;
                 let updated_views = self.load_task_views(&modified)?;
                 let latest_seen = updated_views
                     .iter()

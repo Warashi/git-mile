@@ -178,6 +178,15 @@ impl GitStore {
         }
     }
 
+    /// Invalidate cached events for multiple tasks.
+    pub fn invalidate_tasks_cache(&self, task_ids: &[TaskId]) {
+        if let Ok(mut cache) = self.event_cache.lock() {
+            for task_id in task_ids {
+                cache.pop(task_id);
+            }
+        }
+    }
+
     fn ensure_empty_tree(repo: &Repository) -> Result<Oid> {
         let mut idx = repo.index()?;
         idx.clear()?;

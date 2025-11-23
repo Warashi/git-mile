@@ -81,6 +81,18 @@ pub trait TaskStore {
         }
         Ok(results)
     }
+
+    /// Invalidate cached events for the specified tasks.
+    ///
+    /// This is useful when external processes may have modified tasks and the cache
+    /// needs to be refreshed. The default implementation does nothing, as not all
+    /// stores maintain a cache.
+    ///
+    /// # Errors
+    /// Returns a store-specific error when cache invalidation fails.
+    fn invalidate_cache(&self, _task_ids: &[TaskId]) -> Result<(), Self::Error> {
+        Ok(())
+    }
 }
 
 /// High-level service that validates inputs and emits task events.
@@ -801,6 +813,11 @@ impl TaskStore for GitStore {
 
     fn load_all_events(&self) -> Result<Vec<(TaskId, Vec<Event>)>, Self::Error> {
         Self::load_all_task_events(self)
+    }
+
+    fn invalidate_cache(&self, task_ids: &[TaskId]) -> Result<(), Self::Error> {
+        self.invalidate_tasks_cache(task_ids);
+        Ok(())
     }
 }
 
