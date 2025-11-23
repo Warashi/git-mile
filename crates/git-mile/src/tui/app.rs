@@ -154,6 +154,8 @@ impl<S: TaskStore> App<S> {
 
     /// Reload tasks from the store and keep the selection in bounds.
     pub(super) fn refresh_tasks(&mut self) -> Result<()> {
+        // Clear repository cache to ensure external changes are detected
+        self.repository.clear_cache()?;
         self.refresh_tasks_with(None)
     }
 
