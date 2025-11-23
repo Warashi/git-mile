@@ -12,7 +12,14 @@ macro_rules! vec_of_strings {
     };
 }
 
-/// Top-level TUI configuration.
+/// Top-level configuration for git-mile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Config {
+    /// TUI configuration.
+    pub tui: TuiConfig,
+}
+
+/// TUI-specific configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TuiConfig {
     /// Keybindings configuration.
@@ -114,6 +121,14 @@ pub struct ViewerKeyBindings {
     pub scroll_up_fast: Vec<String>,
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            tui: TuiConfig::default(),
+        }
+    }
+}
+
 impl Default for TuiConfig {
     fn default() -> Self {
         Self {
@@ -213,18 +228,18 @@ pub fn ensure_config_dir() -> Result<PathBuf> {
     Ok(path)
 }
 
-/// Generate default TUI configuration as TOML string.
+/// Generate default configuration as TOML string.
 pub fn generate_default_config_toml() -> Result<String> {
-    let config = TuiConfig::default();
+    let config = Config::default();
 
     // Serialize to TOML
     let toml_str = toml::to_string_pretty(&config)
         .context("デフォルト設定のシリアライズに失敗しました")?;
 
     // Add header comment
-    let header = r#"# git-mile TUI Configuration
+    let header = r#"# git-mile Configuration
 #
-# This file allows you to customize the git-mile TUI.
+# This file allows you to customize git-mile.
 #
 # [tui.keybindings]
 # Each action can have multiple key bindings.
@@ -241,8 +256,6 @@ pub fn generate_default_config_toml() -> Result<String> {
 
 "#;
 
-    // Simply use the serialized TOML as-is
-    // The config file represents the TuiConfig structure directly
     Ok(format!("{}{}", header, toml_str))
 }
 
@@ -254,7 +267,7 @@ pub fn generate_default_keybindings_toml() -> Result<String> {
     generate_default_config_toml()
 }
 
-/// Load TUI configuration from a TOML file.
+/// Load configuration from a TOML file.
 ///
 /// # Arguments
 /// - `path`: Optional path to the config file. If `None`, uses the default path.
@@ -263,7 +276,7 @@ pub fn generate_default_keybindings_toml() -> Result<String> {
 /// - `Ok(Some(config))` if the file exists and was successfully parsed
 /// - `Ok(None)` if the file does not exist
 /// - `Err(_)` if there was an error reading or parsing the file
-pub fn load_config(path: Option<&Path>) -> Result<Option<TuiConfig>> {
+pub fn load_config(path: Option<&Path>) -> Result<Option<Config>> {
     let config_path = match path {
         Some(p) => p.to_path_buf(),
         None => match default_config_path() {
@@ -281,8 +294,8 @@ pub fn load_config(path: Option<&Path>) -> Result<Option<TuiConfig>> {
     let content = std::fs::read_to_string(&config_path)
         .with_context(|| format!("Failed to read config file: {}", config_path.display()))?;
 
-    // Parse as TuiConfig directly
-    let config: TuiConfig = toml::from_str(&content)
+    // Parse as Config directly
+    let config: Config = toml::from_str(&content)
         .with_context(|| format!("Failed to parse config file: {}", config_path.display()))?;
 
     Ok(Some(config))
@@ -293,7 +306,7 @@ pub fn load_config(path: Option<&Path>) -> Result<Option<TuiConfig>> {
 /// Deprecated: Use `load_config` instead.
 #[deprecated(note = "Use load_config instead")]
 pub fn load_keybindings_config(path: Option<&Path>) -> Result<Option<KeyBindingsConfig>> {
-    Ok(load_config(path)?.map(|c| c.keybindings))
+    Ok(load_config(path)?.map(|c| c.tui.keybindings))
 }
 
 /// Parse a key string into a KeyEvent.
@@ -352,6 +365,16 @@ fn parse_key_code(s: &str) -> Result<KeyCode> {
         }
         other => bail!("Unknown key: {}", other),
     }
+}
+
+/// Validate the configuration.
+///
+/// Checks for:
+/// - Key conflicts within each view
+/// - Invalid key expressions
+/// - Empty key bindings
+pub fn validate_config_struct(config: &Config) -> Result<()> {
+    validate_tui_config(&config.tui)
 }
 
 /// Validate the TUI configuration.
@@ -1474,7 +1497,7 @@ mod tests {
 
         // カスタム設定を作成（全フィールド定義）
         let custom_config = r#"
-[keybindings.task_list]
+[tui.keybindings.task_list]
 quit = ["x", "X"]
 down = ["n"]
 up = ["p"]
@@ -1491,7 +1514,7 @@ open_comment_viewer = ["v"]
 open_description_viewer = ["d"]
 edit_filter = ["f"]
 
-[keybindings.tree_view]
+[tui.keybindings.tree_view]
 close = ["q"]
 down = ["j"]
 up = ["k"]
@@ -1499,20 +1522,20 @@ collapse = ["h"]
 expand = ["l"]
 jump = ["Enter"]
 
-[keybindings.state_picker]
+[tui.keybindings.state_picker]
 close = ["q"]
 down = ["j"]
 up = ["k"]
 select = ["Enter"]
 
-[keybindings.comment_viewer]
+[tui.keybindings.comment_viewer]
 close = ["q"]
 scroll_down = ["j"]
 scroll_up = ["k"]
 scroll_down_fast = ["Ctrl+d"]
 scroll_up_fast = ["Ctrl+u"]
 
-[keybindings.description_viewer]
+[tui.keybindings.description_viewer]
 close = ["q"]
 scroll_down = ["j"]
 scroll_up = ["k"]
@@ -1528,10 +1551,10 @@ scroll_up_fast = ["Ctrl+u"]
             .unwrap()
             .unwrap();
 
-        assert_eq!(config.keybindings.task_list.quit, vec!["x", "X"]);
-        assert_eq!(config.keybindings.task_list.down, vec!["n"]);
-        assert_eq!(config.keybindings.task_list.up, vec!["p"]);
-        assert_eq!(config.keybindings.task_list.jump_to_parent, vec!["g"]);
+        assert_eq!(config.tui.keybindings.task_list.quit, vec!["x", "X"]);
+        assert_eq!(config.tui.keybindings.task_list.down, vec!["n"]);
+        assert_eq!(config.tui.keybindings.task_list.up, vec!["p"]);
+        assert_eq!(config.tui.keybindings.task_list.jump_to_parent, vec!["g"]);
     }
 
     #[test]
@@ -1586,25 +1609,25 @@ down = ["j"]
         eprintln!("=== Generated TOML ===\n{}\n=== End ===", toml);
 
         // ヘッダーコメントが含まれている
-        assert!(toml.contains("git-mile TUI Configuration"), "Missing header");
+        assert!(toml.contains("git-mile Configuration"), "Missing header");
         assert!(toml.contains("Supported key formats"), "Missing formats description");
 
         // セクションが含まれている
-        assert!(toml.contains("[keybindings.task_list]"), "Missing task_list section");
-        assert!(toml.contains("[keybindings.tree_view]"), "Missing tree_view section");
-        assert!(toml.contains("[keybindings.state_picker]"), "Missing state_picker section");
-        assert!(toml.contains("[keybindings.comment_viewer]"), "Missing comment_viewer section");
-        assert!(toml.contains("[keybindings.description_viewer]"), "Missing description_viewer section");
+        assert!(toml.contains("[tui.keybindings.task_list]"), "Missing task_list section");
+        assert!(toml.contains("[tui.keybindings.tree_view]"), "Missing tree_view section");
+        assert!(toml.contains("[tui.keybindings.state_picker]"), "Missing state_picker section");
+        assert!(toml.contains("[tui.keybindings.comment_viewer]"), "Missing comment_viewer section");
+        assert!(toml.contains("[tui.keybindings.description_viewer]"), "Missing description_viewer section");
 
         // 生成された TOML がパース可能であること
-        let parsed: TuiConfig = toml::from_str(&toml).unwrap_or_else(|e| {
+        let parsed: Config = toml::from_str(&toml).unwrap_or_else(|e| {
             eprintln!("Failed to parse TOML: {:?}", e);
             panic!("TOML parse error");
         });
-        assert_eq!(parsed.keybindings.task_list.quit, vec!["q", "Q", "Esc"]);
+        assert_eq!(parsed.tui.keybindings.task_list.quit, vec!["q", "Q", "Esc"]);
 
         // バリデーションが通ること
-        assert!(validate_tui_config(&parsed).is_ok());
+        assert!(validate_config_struct(&parsed).is_ok());
     }
 
     #[test]
@@ -1625,16 +1648,16 @@ down = ["j"]
             .unwrap();
 
         // デフォルト設定と一致すること
-        let default_config = TuiConfig::default();
-        assert_eq!(loaded_config.keybindings.task_list.quit, default_config.keybindings.task_list.quit);
-        assert_eq!(loaded_config.keybindings.task_list.down, default_config.keybindings.task_list.down);
+        let default_config = Config::default();
+        assert_eq!(loaded_config.tui.keybindings.task_list.quit, default_config.tui.keybindings.task_list.quit);
+        assert_eq!(loaded_config.tui.keybindings.task_list.down, default_config.tui.keybindings.task_list.down);
         assert_eq!(
-            loaded_config.keybindings.tree_view.close,
-            default_config.keybindings.tree_view.close
+            loaded_config.tui.keybindings.tree_view.close,
+            default_config.tui.keybindings.tree_view.close
         );
         assert_eq!(
-            loaded_config.keybindings.state_picker.select,
-            default_config.keybindings.state_picker.select
+            loaded_config.tui.keybindings.state_picker.select,
+            default_config.tui.keybindings.state_picker.select
         );
     }
 
@@ -1647,7 +1670,7 @@ down = ["j"]
 
         // キーの衝突がある設定
         let conflicting_config = r#"
-[keybindings.task_list]
+[tui.keybindings.task_list]
 quit = ["j"]
 down = ["j"]
 up = ["k"]
@@ -1664,7 +1687,7 @@ open_comment_viewer = ["v"]
 open_description_viewer = ["d"]
 edit_filter = ["f"]
 
-[keybindings.tree_view]
+[tui.keybindings.tree_view]
 close = ["q"]
 down = ["j"]
 up = ["k"]
@@ -1672,20 +1695,20 @@ collapse = ["h"]
 expand = ["l"]
 jump = ["Enter"]
 
-[keybindings.state_picker]
+[tui.keybindings.state_picker]
 close = ["q"]
 down = ["j"]
 up = ["k"]
 select = ["Enter"]
 
-[keybindings.comment_viewer]
+[tui.keybindings.comment_viewer]
 close = ["q"]
 scroll_down = ["j"]
 scroll_up = ["k"]
 scroll_down_fast = ["Ctrl+d"]
 scroll_up_fast = ["Ctrl+u"]
 
-[keybindings.description_viewer]
+[tui.keybindings.description_viewer]
 close = ["q"]
 scroll_down = ["j"]
 scroll_up = ["k"]
@@ -1702,7 +1725,7 @@ scroll_up_fast = ["Ctrl+u"]
         let config = load_config(Some(temp_file.path()))
             .unwrap()
             .unwrap();
-        let result = validate_tui_config(&config);
+        let result = validate_config_struct(&config);
 
         assert!(result.is_err());
     }
@@ -1716,7 +1739,7 @@ scroll_up_fast = ["Ctrl+u"]
 
         // 設定ファイル
         let config_content = r#"
-[keybindings.task_list]
+[tui.keybindings.task_list]
 quit = ["q"]
 down = ["j"]
 up = ["k"]
@@ -1733,7 +1756,7 @@ open_comment_viewer = ["v"]
 open_description_viewer = ["d"]
 edit_filter = ["f"]
 
-[keybindings.tree_view]
+[tui.keybindings.tree_view]
 close = ["q"]
 down = ["j"]
 up = ["k"]
@@ -1741,20 +1764,20 @@ collapse = ["h"]
 expand = ["l"]
 jump = ["Enter"]
 
-[keybindings.state_picker]
+[tui.keybindings.state_picker]
 close = ["q"]
 down = ["j"]
 up = ["k"]
 select = ["Enter"]
 
-[keybindings.comment_viewer]
+[tui.keybindings.comment_viewer]
 close = ["q"]
 scroll_down = ["j"]
 scroll_up = ["k"]
 scroll_down_fast = ["Ctrl+d"]
 scroll_up_fast = ["Ctrl+u"]
 
-[keybindings.description_viewer]
+[tui.keybindings.description_viewer]
 close = ["q"]
 scroll_down = ["j"]
 scroll_up = ["k"]
@@ -1770,11 +1793,11 @@ scroll_up_fast = ["Ctrl+u"]
             .unwrap()
             .unwrap();
 
-        assert_eq!(config.keybindings.task_list.quit, vec!["q"]);
-        assert_eq!(config.keybindings.task_list.down, vec!["j"]);
+        assert_eq!(config.tui.keybindings.task_list.quit, vec!["q"]);
+        assert_eq!(config.tui.keybindings.task_list.down, vec!["j"]);
 
         // バリデーションが通ること
-        assert!(validate_tui_config(&config).is_ok());
+        assert!(validate_config_struct(&config).is_ok());
     }
 }
 
