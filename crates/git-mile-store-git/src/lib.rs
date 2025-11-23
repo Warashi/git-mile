@@ -9,12 +9,12 @@ pub use error::GitStoreError;
 use anyhow::{Context, Result, anyhow};
 use git_mile_core::event::Event;
 use git_mile_core::id::TaskId;
-use git2::{Commit, Oid, Repository, Signature, Sort};
+use git2::{Commit, Cred, CredentialType, Oid, RemoteCallbacks, Repository, Signature, Sort};
 use lru::LruCache;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::{env, num::NonZeroUsize};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Default capacity for the event cache when no override is provided.
 const DEFAULT_EVENT_CACHE_CAPACITY: usize = 256;
@@ -34,6 +34,89 @@ pub struct GitStore {
 }
 
 impl GitStore {
+    /// Create authentication callbacks for remote operations.
+    ///
+    /// This function tries multiple authentication methods in order:
+    /// 1. SSH agent
+    /// 2. SSH key from default location (`~/.ssh/id_rsa`)
+    /// 3. Git credential helper (for HTTPS)
+    fn create_auth_callbacks<'a>() -> RemoteCallbacks<'a> {
+        let mut callbacks = RemoteCallbacks::new();
+        callbacks.credentials(|url, username_from_url, allowed_types| {
+            debug!(
+                url = %url,
+                username = ?username_from_url,
+                allowed_types = ?allowed_types,
+                "Attempting authentication"
+            );
+
+            // Try SSH agent first
+            if allowed_types.contains(CredentialType::SSH_KEY)
+                && let Some(username) = username_from_url
+            {
+                debug!("Trying SSH agent authentication");
+                match Cred::ssh_key_from_agent(username) {
+                    Ok(cred) => {
+                        debug!("SSH agent authentication succeeded");
+                        return Ok(cred);
+                    }
+                    Err(e) => {
+                        warn!("SSH agent authentication failed: {}", e);
+                    }
+                }
+
+                // Try default SSH key
+                if let Ok(home) = env::var("HOME") {
+                    let ssh_key = PathBuf::from(home).join(".ssh").join("id_rsa");
+                    if ssh_key.exists() {
+                        debug!(?ssh_key, "Trying SSH key file");
+                        match Cred::ssh_key(username, None, &ssh_key, None) {
+                            Ok(cred) => {
+                                debug!("SSH key authentication succeeded");
+                                return Ok(cred);
+                            }
+                            Err(e) => {
+                                warn!(?ssh_key, "SSH key authentication failed: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Try credential helper for HTTPS
+            if allowed_types.contains(CredentialType::USER_PASS_PLAINTEXT) {
+                debug!("Trying credential helper");
+                match Cred::credential_helper(&git2::Config::open_default()?, url, username_from_url) {
+                    Ok(cred) => {
+                        debug!("Credential helper succeeded");
+                        return Ok(cred);
+                    }
+                    Err(e) => {
+                        warn!("Credential helper failed: {}", e);
+                    }
+                }
+            }
+
+            // Try default credentials as last resort
+            if allowed_types.contains(CredentialType::DEFAULT) {
+                debug!("Trying default credentials");
+                match Cred::default() {
+                    Ok(cred) => {
+                        debug!("Default credentials succeeded");
+                        return Ok(cred);
+                    }
+                    Err(e) => {
+                        warn!("Default credentials failed: {}", e);
+                    }
+                }
+            }
+
+            Err(git2::Error::from_str("All authentication methods failed"))
+        });
+
+        callbacks
+    }
+
     /// Discover and open the repository from `cwd_or_repo`.
     ///
     /// # Errors
@@ -329,9 +412,14 @@ impl GitStore {
 
         info!(%remote_name, count = refspecs.len(), "Pushing task refs");
 
-        let refspec_strs: Vec<&str> = refspecs.iter().map(|s| s.as_str()).collect();
+        // Set up authentication callbacks
+        let callbacks = Self::create_auth_callbacks();
+        let mut push_options = git2::PushOptions::new();
+        push_options.remote_callbacks(callbacks);
+
+        let refspec_strs: Vec<&str> = refspecs.iter().map(std::string::String::as_str).collect();
         remote
-            .push(&refspec_strs, None)
+            .push(&refspec_strs, Some(&mut push_options))
             .with_context(|| format!("Failed to push to remote '{remote_name}'"))?;
 
         info!(%remote_name, "Successfully pushed task refs");
@@ -352,8 +440,13 @@ impl GitStore {
 
         info!(%remote_name, %refspec, "Fetching task refs");
 
+        // Set up authentication callbacks
+        let callbacks = Self::create_auth_callbacks();
+        let mut fetch_options = git2::FetchOptions::new();
+        fetch_options.remote_callbacks(callbacks);
+
         remote
-            .fetch(&[refspec], None, None)
+            .fetch(&[refspec], Some(&mut fetch_options), None)
             .with_context(|| format!("Failed to fetch from remote '{remote_name}'"))?;
 
         info!(%remote_name, "Successfully fetched task refs");
@@ -401,8 +494,12 @@ impl GitStore {
                     if self.repo.graph_descendant_of(remote_target, local_target)? {
                         // Remote is ahead, fast-forward
                         debug!(%local_ref_name, "Fast-forwarding");
-                        self.repo
-                            .reference(&local_ref_name, remote_target, true, "git-mile pull: fast-forward")?;
+                        self.repo.reference(
+                            &local_ref_name,
+                            remote_target,
+                            true,
+                            "git-mile pull: fast-forward",
+                        )?;
                     } else if self.repo.graph_descendant_of(local_target, remote_target)? {
                         // Local is ahead, no action needed
                         debug!(%local_ref_name, "Local is ahead of remote");
@@ -415,8 +512,12 @@ impl GitStore {
                 Err(e) if e.code() == git2::ErrorCode::NotFound => {
                     // Local ref doesn't exist, create it
                     debug!(%local_ref_name, "Creating new local ref");
-                    self.repo
-                        .reference(&local_ref_name, remote_target, false, "git-mile pull: create ref")?;
+                    self.repo.reference(
+                        &local_ref_name,
+                        remote_target,
+                        false,
+                        "git-mile pull: create ref",
+                    )?;
                 }
                 Err(e) => return Err(e.into()),
             }
@@ -425,18 +526,14 @@ impl GitStore {
         Ok(())
     }
 
-    fn create_merge_commit(
-        &self,
-        ref_name: &str,
-        local_oid: Oid,
-        remote_oid: Oid,
-    ) -> Result<()> {
+    fn create_merge_commit(&self, ref_name: &str, local_oid: Oid, remote_oid: Oid) -> Result<()> {
         let local_commit = self.repo.find_commit(local_oid)?;
         let remote_commit = self.repo.find_commit(remote_oid)?;
 
-        let sig = self.repo.signature().or_else(|_| {
-            Signature::now("git-mile", "git-mile@example.invalid")
-        })?;
+        let sig = self
+            .repo
+            .signature()
+            .or_else(|_| Signature::now("git-mile", "git-mile@example.invalid"))?;
         let tree = self.repo.find_tree(self.empty_tree_oid)?;
 
         let message = format!("Merge remote changes into {ref_name}");
