@@ -121,6 +121,24 @@ enum Command {
         #[command(subcommand)]
         subcommand: ConfigSubcommand,
     },
+
+    /// Push task refs to remote repository.
+    Push {
+        /// Remote name (defaults to "origin").
+        #[arg(long, short = 'r', default_value = "origin")]
+        remote: String,
+
+        /// Force push (use with caution).
+        #[arg(long, short = 'f')]
+        force: bool,
+    },
+
+    /// Pull task refs from remote repository.
+    Pull {
+        /// Remote name (defaults to "origin").
+        #[arg(long, short = 'r', default_value = "origin")]
+        remote: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -188,6 +206,16 @@ fn execute_command(repo_path: &str, command: Command) -> Result<()> {
                     server.waiting().await.map_err(|e| anyhow::anyhow!("{e:?}"))
                 })
                 .map(|_| ())
+        }
+
+        (Command::Push { remote, force }, _, _, _) => {
+            let store = GitStore::open(repo_path)?;
+            commands::run_push(&store, &remote, force)
+        }
+
+        (Command::Pull { remote }, _, _, _) => {
+            let store = GitStore::open(repo_path)?;
+            commands::run_pull(&store, &remote)
         }
 
         (other, workflow, hooks, base_dir) => {
