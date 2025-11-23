@@ -434,7 +434,9 @@ impl GitStore {
         let local_commit = self.repo.find_commit(local_oid)?;
         let remote_commit = self.repo.find_commit(remote_oid)?;
 
-        let sig = self.repo.signature()?;
+        let sig = self.repo.signature().or_else(|_| {
+            Signature::now("git-mile", "git-mile@example.invalid")
+        })?;
         let tree = self.repo.find_tree(self.empty_tree_oid)?;
 
         let message = format!("Merge remote changes into {ref_name}");
