@@ -1,10 +1,10 @@
 use anyhow::Result;
-use git2::Repository;
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::TaskId;
 use git_mile_store_git::GitStore;
+use git2::Repository;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn temp_repo_path() -> Result<PathBuf> {
     let path = std::env::temp_dir().join(format!("git-mile-push-pull-test-{}", TaskId::new()));
@@ -21,7 +21,7 @@ fn setup_remote_repo() -> Result<(PathBuf, Repository)> {
     Ok((remote_path, repo))
 }
 
-fn setup_local_repo_with_remote(remote_path: &PathBuf) -> Result<(PathBuf, GitStore)> {
+fn setup_local_repo_with_remote(remote_path: &Path) -> Result<(PathBuf, GitStore)> {
     let local_path = temp_repo_path()?;
     let repo = Repository::init(&local_path)?;
 
@@ -187,16 +187,16 @@ fn test_push_pull_concurrent_modifications() -> Result<()> {
     local1_store.pull_refs("origin")?;
 
     // Both should have all events (CRDT convergence)
-    let events1 = local1_store.load_events(task)?;
-    let events2 = local2_store.load_events(task)?;
+    let local1_events = local1_store.load_events(task)?;
+    let local2_events = local2_store.load_events(task)?;
 
     // Both should have 3+ events (created + 2 labels + merge commits)
-    assert!(events1.len() >= 3);
-    assert!(events2.len() >= 3);
+    assert!(local1_events.len() >= 3);
+    assert!(local2_events.len() >= 3);
 
     // Check that both have the same labels (CRDT convergence)
-    let snapshot1 = git_mile_core::TaskSnapshot::replay(&events1);
-    let snapshot2 = git_mile_core::TaskSnapshot::replay(&events2);
+    let snapshot1 = git_mile_core::TaskSnapshot::replay(&local1_events);
+    let snapshot2 = git_mile_core::TaskSnapshot::replay(&local2_events);
 
     assert_eq!(snapshot1.labels.len(), 2);
     assert_eq!(snapshot2.labels.len(), 2);
@@ -221,7 +221,9 @@ fn test_push_fails_with_missing_remote() -> Result<()> {
     // Try to push without a remote
     let result = store.push_refs("nonexistent", false);
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("not found"));
+    if let Err(e) = result {
+        assert!(e.to_string().contains("not found"));
+    }
 
     // Cleanup
     fs::remove_dir_all(&local_path)?;
@@ -237,7 +239,9 @@ fn test_pull_fails_with_missing_remote() -> Result<()> {
     // Try to pull without a remote
     let result = store.pull_refs("nonexistent");
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("not found"));
+    if let Err(e) = result {
+        assert!(e.to_string().contains("not found"));
+    }
 
     // Cleanup
     fs::remove_dir_all(&local_path)?;
