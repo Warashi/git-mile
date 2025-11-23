@@ -105,7 +105,12 @@ impl<S: TaskStore> Ui<S> {
         Self::with_clipboard(app, actor, keybindings, clipboard)
     }
 
-    pub(super) fn with_clipboard(app: App<S>, actor: Actor, keybindings: KeyBindingsConfig, clipboard: Box<dyn ClipboardSink>) -> Self {
+    pub(super) fn with_clipboard(
+        app: App<S>,
+        actor: Actor,
+        keybindings: KeyBindingsConfig,
+        clipboard: Box<dyn ClipboardSink>,
+    ) -> Self {
         let _ = thread::current().id();
         let mut ui = Self {
             app,

@@ -13,9 +13,9 @@ use git_mile_store_git::GitStore;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use tracing::subscriber::NoSubscriber;
 
+use crate::config::keybindings::{KeyBindingsConfig, load_config, validate_config_struct};
 use git_mile_app::TaskRepository;
 use git_mile_app::{WorkflowConfig, default_actor};
-use crate::config::keybindings::{KeyBindingsConfig, load_config, validate_config_struct};
 
 mod app;
 mod clipboard;

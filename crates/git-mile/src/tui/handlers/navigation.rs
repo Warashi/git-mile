@@ -40,7 +40,10 @@ impl<S: TaskStore> Ui<S> {
             return Ok(None);
         }
 
-        if self.keybindings.matches(ViewType::TaskList, Action::OpenTree, &key) {
+        if self
+            .keybindings
+            .matches(ViewType::TaskList, Action::OpenTree, &key)
+        {
             self.open_tree_view();
             return Ok(None);
         }
@@ -53,7 +56,10 @@ impl<S: TaskStore> Ui<S> {
             return Ok(None);
         }
 
-        if self.keybindings.matches(ViewType::TaskList, Action::Refresh, &key) {
+        if self
+            .keybindings
+            .matches(ViewType::TaskList, Action::Refresh, &key)
+        {
             self.app.refresh_tasks()?;
             self.info("タスクを再読込しました");
             return Ok(None);

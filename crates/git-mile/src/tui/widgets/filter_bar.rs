@@ -9,9 +9,9 @@ use ratatui::{
 
 use git_mile_app::TaskStore;
 
-use crate::config::keybindings::ViewType;
 use super::super::editor::summarize_task_filter;
 use super::super::view::{DetailFocus, Message, Ui};
+use crate::config::keybindings::ViewType;
 
 impl<S: TaskStore> Ui<S> {
     pub(in crate::tui) fn draw_status(&self, f: &mut Frame<'_>, area: Rect) {

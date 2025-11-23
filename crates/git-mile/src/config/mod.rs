@@ -54,7 +54,10 @@ fn write_keybindings_config(path: &Path, force: bool) -> Result<()> {
 }
 
 fn confirm_overwrite(path: &Path) -> Result<bool> {
-    print!("ファイルがすでに存在します: {}\n上書きしますか? [y/N]: ", path.display());
+    print!(
+        "ファイルがすでに存在します: {}\n上書きしますか? [y/N]: ",
+        path.display()
+    );
     io::stdout().flush()?;
 
     let mut input = String::new();

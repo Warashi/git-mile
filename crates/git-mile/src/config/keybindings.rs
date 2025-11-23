@@ -1,6 +1,6 @@
 //! Keybindings configuration for the TUI.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -233,8 +233,7 @@ pub fn generate_default_config_toml() -> Result<String> {
     let config = Config::default();
 
     // Serialize to TOML
-    let toml_str = toml::to_string_pretty(&config)
-        .context("デフォルト設定のシリアライズに失敗しました")?;
+    let toml_str = toml::to_string_pretty(&config).context("デフォルト設定のシリアライズに失敗しました")?;
 
     // Add header comment
     let header = r#"# git-mile Configuration
@@ -431,7 +430,10 @@ fn validate_non_empty_bindings(config: &KeyBindingsConfig) -> Result<()> {
     check_non_empty!(config.task_list.create_subtask, "task_list.create_subtask");
     check_non_empty!(config.task_list.copy_task_id, "task_list.copy_task_id");
     check_non_empty!(config.task_list.open_state_picker, "task_list.open_state_picker");
-    check_non_empty!(config.task_list.open_comment_viewer, "task_list.open_comment_viewer");
+    check_non_empty!(
+        config.task_list.open_comment_viewer,
+        "task_list.open_comment_viewer"
+    );
     check_non_empty!(
         config.task_list.open_description_viewer,
         "task_list.open_description_viewer"
@@ -470,7 +472,10 @@ fn validate_non_empty_bindings(config: &KeyBindingsConfig) -> Result<()> {
         config.description_viewer.scroll_down,
         "description_viewer.scroll_down"
     );
-    check_non_empty!(config.description_viewer.scroll_up, "description_viewer.scroll_up");
+    check_non_empty!(
+        config.description_viewer.scroll_up,
+        "description_viewer.scroll_up"
+    );
     check_non_empty!(
         config.description_viewer.scroll_down_fast,
         "description_viewer.scroll_down_fast"
@@ -488,8 +493,7 @@ fn validate_key_expressions(config: &KeyBindingsConfig) -> Result<()> {
     macro_rules! validate_keys {
         ($field:expr, $name:expr) => {
             for key in $field {
-                parse_key(key)
-                    .with_context(|| format!("Invalid key '{}' in {}", key, $name))?;
+                parse_key(key).with_context(|| format!("Invalid key '{}' in {}", key, $name))?;
             }
         };
     }
@@ -506,10 +510,7 @@ fn validate_key_expressions(config: &KeyBindingsConfig) -> Result<()> {
     validate_keys!(&config.task_list.create_task, "task_list.create_task");
     validate_keys!(&config.task_list.create_subtask, "task_list.create_subtask");
     validate_keys!(&config.task_list.copy_task_id, "task_list.copy_task_id");
-    validate_keys!(
-        &config.task_list.open_state_picker,
-        "task_list.open_state_picker"
-    );
+    validate_keys!(&config.task_list.open_state_picker, "task_list.open_state_picker");
     validate_keys!(
         &config.task_list.open_comment_viewer,
         "task_list.open_comment_viewer"
@@ -552,7 +553,10 @@ fn validate_key_expressions(config: &KeyBindingsConfig) -> Result<()> {
         &config.description_viewer.scroll_down,
         "description_viewer.scroll_down"
     );
-    validate_keys!(&config.description_viewer.scroll_up, "description_viewer.scroll_up");
+    validate_keys!(
+        &config.description_viewer.scroll_up,
+        "description_viewer.scroll_up"
+    );
     validate_keys!(
         &config.description_viewer.scroll_down_fast,
         "description_viewer.scroll_down_fast"
@@ -571,17 +575,11 @@ fn validate_keybindings(config: &KeyBindingsConfig) -> Result<()> {
     validate_view_keybindings("tree_view", collect_tree_view_bindings(config))?;
     validate_view_keybindings("state_picker", collect_state_picker_bindings(config))?;
     validate_view_keybindings("comment_viewer", collect_comment_viewer_bindings(config))?;
-    validate_view_keybindings(
-        "description_viewer",
-        collect_description_viewer_bindings(config),
-    )?;
+    validate_view_keybindings("description_viewer", collect_description_viewer_bindings(config))?;
     Ok(())
 }
 
-fn validate_view_keybindings(
-    view_name: &str,
-    bindings: HashMap<String, Vec<String>>,
-) -> Result<()> {
+fn validate_view_keybindings(view_name: &str, bindings: HashMap<String, Vec<String>>) -> Result<()> {
     let mut key_to_actions: HashMap<String, Vec<String>> = HashMap::new();
 
     for (action, keys) in bindings {
@@ -619,23 +617,14 @@ fn collect_task_list_bindings(config: &KeyBindingsConfig) -> HashMap<String, Vec
         config.task_list.jump_to_parent.clone(),
     );
     bindings.insert("refresh".to_string(), config.task_list.refresh.clone());
-    bindings.insert(
-        "add_comment".to_string(),
-        config.task_list.add_comment.clone(),
-    );
+    bindings.insert("add_comment".to_string(), config.task_list.add_comment.clone());
     bindings.insert("edit_task".to_string(), config.task_list.edit_task.clone());
-    bindings.insert(
-        "create_task".to_string(),
-        config.task_list.create_task.clone(),
-    );
+    bindings.insert("create_task".to_string(), config.task_list.create_task.clone());
     bindings.insert(
         "create_subtask".to_string(),
         config.task_list.create_subtask.clone(),
     );
-    bindings.insert(
-        "copy_task_id".to_string(),
-        config.task_list.copy_task_id.clone(),
-    );
+    bindings.insert("copy_task_id".to_string(), config.task_list.copy_task_id.clone());
     bindings.insert(
         "open_state_picker".to_string(),
         config.task_list.open_state_picker.clone(),
@@ -648,10 +637,7 @@ fn collect_task_list_bindings(config: &KeyBindingsConfig) -> HashMap<String, Vec
         "open_description_viewer".to_string(),
         config.task_list.open_description_viewer.clone(),
     );
-    bindings.insert(
-        "edit_filter".to_string(),
-        config.task_list.edit_filter.clone(),
-    );
+    bindings.insert("edit_filter".to_string(), config.task_list.edit_filter.clone());
     bindings
 }
 
@@ -682,10 +668,7 @@ fn collect_comment_viewer_bindings(config: &KeyBindingsConfig) -> HashMap<String
         "scroll_down".to_string(),
         config.comment_viewer.scroll_down.clone(),
     );
-    bindings.insert(
-        "scroll_up".to_string(),
-        config.comment_viewer.scroll_up.clone(),
-    );
+    bindings.insert("scroll_up".to_string(), config.comment_viewer.scroll_up.clone());
     bindings.insert(
         "scroll_down_fast".to_string(),
         config.comment_viewer.scroll_down_fast.clone(),
@@ -697,9 +680,7 @@ fn collect_comment_viewer_bindings(config: &KeyBindingsConfig) -> HashMap<String
     bindings
 }
 
-fn collect_description_viewer_bindings(
-    config: &KeyBindingsConfig,
-) -> HashMap<String, Vec<String>> {
+fn collect_description_viewer_bindings(config: &KeyBindingsConfig) -> HashMap<String, Vec<String>> {
     let mut bindings = HashMap::new();
     bindings.insert("close".to_string(), config.description_viewer.close.clone());
     bindings.insert(
@@ -874,11 +855,7 @@ impl KeyBindingsConfig {
 
     /// Format two keys as a pair (e.g., "j/k" for down/up).
     fn format_key_pair(&self, down: &[String], up: &[String]) -> String {
-        format!(
-            "{}/{}",
-            self.format_first_key(down),
-            self.format_first_key(up)
-        )
+        format!("{}/{}", self.format_first_key(down), self.format_first_key(up))
     }
 
     /// Format a key for display, converting special keys to readable symbols.
@@ -1231,10 +1208,7 @@ mod tests {
             config.format_first_key(&vec!["j".to_string(), "J".to_string()]),
             "j"
         );
-        assert_eq!(
-            config.format_first_key(&vec!["Enter".to_string()]),
-            "↵"
-        );
+        assert_eq!(config.format_first_key(&vec!["Enter".to_string()]), "↵");
         assert_eq!(config.format_first_key(&vec![]), "?");
     }
 
@@ -1310,9 +1284,20 @@ mod tests {
     #[test]
     fn test_parse_all_special_keys() {
         let special_keys = vec![
-            "Enter", "Esc", "Tab", "Backspace", "Delete",
-            "Up", "Down", "Left", "Right",
-            "Home", "End", "PageUp", "PageDown", "Insert",
+            "Enter",
+            "Esc",
+            "Tab",
+            "Backspace",
+            "Delete",
+            "Up",
+            "Down",
+            "Left",
+            "Right",
+            "Home",
+            "End",
+            "PageUp",
+            "PageDown",
+            "Insert",
         ];
 
         for key_str in special_keys {
@@ -1479,10 +1464,8 @@ mod tests {
     #[test]
     fn test_load_nonexistent_config() {
         // 存在しないパスからの読み込み
-        let result = load_keybindings_config(Some(std::path::Path::new(
-            "/nonexistent/path/config.toml",
-        )))
-        .unwrap();
+        let result =
+            load_keybindings_config(Some(std::path::Path::new("/nonexistent/path/config.toml"))).unwrap();
 
         // ファイルが存在しない場合は None が返される
         assert!(result.is_none());
@@ -1547,9 +1530,7 @@ scroll_up_fast = ["Ctrl+u"]
         temp_file.flush().unwrap();
 
         // 設定を読み込んで検証
-        let config = load_config(Some(temp_file.path()))
-            .unwrap()
-            .unwrap();
+        let config = load_config(Some(temp_file.path())).unwrap().unwrap();
 
         assert_eq!(config.tui.keybindings.task_list.quit, vec!["x", "X"]);
         assert_eq!(config.tui.keybindings.task_list.down, vec!["n"]);
@@ -1592,9 +1573,7 @@ quit = ["q"]
 down = ["j"]
 "#;
 
-        temp_file
-            .write_all(incomplete_config.as_bytes())
-            .unwrap();
+        temp_file.write_all(incomplete_config.as_bytes()).unwrap();
         temp_file.flush().unwrap();
 
         // デシリアライズエラーが返される
@@ -1610,14 +1589,32 @@ down = ["j"]
 
         // ヘッダーコメントが含まれている
         assert!(toml.contains("git-mile Configuration"), "Missing header");
-        assert!(toml.contains("Supported key formats"), "Missing formats description");
+        assert!(
+            toml.contains("Supported key formats"),
+            "Missing formats description"
+        );
 
         // セクションが含まれている
-        assert!(toml.contains("[tui.keybindings.task_list]"), "Missing task_list section");
-        assert!(toml.contains("[tui.keybindings.tree_view]"), "Missing tree_view section");
-        assert!(toml.contains("[tui.keybindings.state_picker]"), "Missing state_picker section");
-        assert!(toml.contains("[tui.keybindings.comment_viewer]"), "Missing comment_viewer section");
-        assert!(toml.contains("[tui.keybindings.description_viewer]"), "Missing description_viewer section");
+        assert!(
+            toml.contains("[tui.keybindings.task_list]"),
+            "Missing task_list section"
+        );
+        assert!(
+            toml.contains("[tui.keybindings.tree_view]"),
+            "Missing tree_view section"
+        );
+        assert!(
+            toml.contains("[tui.keybindings.state_picker]"),
+            "Missing state_picker section"
+        );
+        assert!(
+            toml.contains("[tui.keybindings.comment_viewer]"),
+            "Missing comment_viewer section"
+        );
+        assert!(
+            toml.contains("[tui.keybindings.description_viewer]"),
+            "Missing description_viewer section"
+        );
 
         // 生成された TOML がパース可能であること
         let parsed: Config = toml::from_str(&toml).unwrap_or_else(|e| {
@@ -1643,14 +1640,18 @@ down = ["j"]
         temp_file.flush().unwrap();
 
         // ファイルから読み込む
-        let loaded_config = load_config(Some(temp_file.path()))
-            .unwrap()
-            .unwrap();
+        let loaded_config = load_config(Some(temp_file.path())).unwrap().unwrap();
 
         // デフォルト設定と一致すること
         let default_config = Config::default();
-        assert_eq!(loaded_config.tui.keybindings.task_list.quit, default_config.tui.keybindings.task_list.quit);
-        assert_eq!(loaded_config.tui.keybindings.task_list.down, default_config.tui.keybindings.task_list.down);
+        assert_eq!(
+            loaded_config.tui.keybindings.task_list.quit,
+            default_config.tui.keybindings.task_list.quit
+        );
+        assert_eq!(
+            loaded_config.tui.keybindings.task_list.down,
+            default_config.tui.keybindings.task_list.down
+        );
         assert_eq!(
             loaded_config.tui.keybindings.tree_view.close,
             default_config.tui.keybindings.tree_view.close
@@ -1716,15 +1717,11 @@ scroll_down_fast = ["Ctrl+d"]
 scroll_up_fast = ["Ctrl+u"]
 "#;
 
-        temp_file
-            .write_all(conflicting_config.as_bytes())
-            .unwrap();
+        temp_file.write_all(conflicting_config.as_bytes()).unwrap();
         temp_file.flush().unwrap();
 
         // 設定は読み込めるが、バリデーションで失敗する
-        let config = load_config(Some(temp_file.path()))
-            .unwrap()
-            .unwrap();
+        let config = load_config(Some(temp_file.path())).unwrap().unwrap();
         let result = validate_config_struct(&config);
 
         assert!(result.is_err());
@@ -1789,9 +1786,7 @@ scroll_up_fast = ["Ctrl+u"]
         temp_file.flush().unwrap();
 
         // 設定を読み込む
-        let config = load_config(Some(temp_file.path()))
-            .unwrap()
-            .unwrap();
+        let config = load_config(Some(temp_file.path())).unwrap().unwrap();
 
         assert_eq!(config.tui.keybindings.task_list.quit, vec!["q"]);
         assert_eq!(config.tui.keybindings.task_list.down, vec!["j"]);
@@ -1800,4 +1795,3 @@ scroll_up_fast = ["Ctrl+u"]
         assert!(validate_config_struct(&config).is_ok());
     }
 }
-
