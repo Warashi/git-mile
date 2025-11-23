@@ -20,6 +20,7 @@ Coming soon:
 
 - **Git-native storage**: Tasks stored as immutable events in Git commits, never touching your working tree
 - **Offline-first**: Work independently and merge task changes automatically using CRDTs
+- **Distributed collaboration**: Push/pull tasks to remote repositories with automatic conflict-free merging (see [docs/remote-sync.md](docs/remote-sync.md))
 - **Event sourcing**: All changes represented as append-only events with UUIDv7 identifiers
 - **Terminal UI**: Interactive multi-panel interface for browsing and editing tasks
 - **MCP integration**: Model Context Protocol server for AI/Claude integration
@@ -75,9 +76,17 @@ git-mile show <task-id>
 # Add a comment
 git-mile comment <task-id> "Working on this now"
 
+# Push tasks to remote repository
+git-mile push
+
+# Pull tasks from remote repository
+git-mile pull
+
 # Start MCP server for AI integration
 git-mile mcp
 ```
+
+See [docs/remote-sync.md](docs/remote-sync.md) for detailed information on distributed task tracking.
 
 ## Commands Reference
 
@@ -256,6 +265,46 @@ git-mile mcp
 When omitted, all tasks are returned. The server applies the same `TaskFilter` logic used by the CLI/TUI, so the results match what you see locally.
 
 `get_task` accepts a JSON payload like `{"task_id": "<UUIDv7>"}` and returns the serialized `TaskSnapshot` for that task, matching the data shown in the CLI/TUI views. Every snapshot now includes a `state_kind` field next to `state`; legacy tasks created before this release will show `null` until they are backfilled (see `docs/state-kind-persistence.md`).
+
+### `push` - Push Tasks to Remote
+
+Upload local task refs to a remote repository:
+
+```bash
+# Push to default remote (origin)
+git-mile push
+
+# Push to specific remote
+git-mile push --remote upstream
+
+# Force push (use with caution)
+git-mile push --force
+```
+
+**Options**:
+- `--remote <name>` or `-r <name>`: Remote name (default: `origin`)
+- `--force` or `-f`: Force push, overwriting remote refs
+
+See [docs/remote-sync.md](docs/remote-sync.md) for distributed workflows and troubleshooting.
+
+### `pull` - Pull Tasks from Remote
+
+Fetch and merge task refs from a remote repository:
+
+```bash
+# Pull from default remote (origin)
+git-mile pull
+
+# Pull from specific remote
+git-mile pull --remote upstream
+```
+
+**Options**:
+- `--remote <name>` or `-r <name>`: Remote name (default: `origin`)
+
+git-mile's CRDT design automatically merges concurrent edits without conflicts. When local and remote refs diverge, git-mile creates merge commits while preserving all events.
+
+See [docs/remote-sync.md](docs/remote-sync.md) for detailed synchronization workflows, authentication setup, and collaboration patterns.
 
 ## Configuration
 
