@@ -304,16 +304,34 @@ impl GitStore {
             .find_remote(remote_name)
             .with_context(|| format!("Remote '{remote_name}' not found"))?;
 
-        let refspec = if force {
-            "+refs/git-mile/tasks/*:refs/git-mile/tasks/*"
-        } else {
-            "refs/git-mile/tasks/*:refs/git-mile/tasks/*"
-        };
+        // Collect all task refs
+        let mut refspecs = Vec::new();
+        let references = self.repo.references_glob("refs/git-mile/tasks/*")?;
 
-        info!(%remote_name, %refspec, "Pushing task refs");
+        for reference in references {
+            let reference = reference?;
+            let Some(name) = reference.name() else {
+                continue;
+            };
 
+            let refspec = if force {
+                format!("+{name}:{name}")
+            } else {
+                format!("{name}:{name}")
+            };
+            refspecs.push(refspec);
+        }
+
+        if refspecs.is_empty() {
+            info!(%remote_name, "No task refs to push");
+            return Ok(());
+        }
+
+        info!(%remote_name, count = refspecs.len(), "Pushing task refs");
+
+        let refspec_strs: Vec<&str> = refspecs.iter().map(|s| s.as_str()).collect();
         remote
-            .push(&[refspec], None)
+            .push(&refspec_strs, None)
             .with_context(|| format!("Failed to push to remote '{remote_name}'"))?;
 
         info!(%remote_name, "Successfully pushed task refs");
@@ -419,9 +437,7 @@ impl GitStore {
         let sig = self.repo.signature()?;
         let tree = self.repo.find_tree(self.empty_tree_oid)?;
 
-        let message = format!(
-            "git-mile-event: merge\n\nMerge remote changes into {ref_name}"
-        );
+        let message = format!("Merge remote changes into {ref_name}");
 
         let merge_oid = self.repo.commit(
             Some(ref_name),
