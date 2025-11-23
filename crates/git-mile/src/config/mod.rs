@@ -6,7 +6,7 @@ use std::path::Path;
 
 pub mod keybindings;
 
-pub use keybindings::{Action, KeyBindingsConfig, ViewType};
+pub use keybindings::{Action, KeyBindingsConfig, TuiConfig, ViewType};
 
 /// Initialize keybindings configuration file with defaults.
 pub fn init_keybindings(output: Option<&Path>, force: bool) -> Result<()> {
@@ -39,7 +39,7 @@ fn write_keybindings_config(path: &Path, force: bool) -> Result<()> {
     }
 
     // Generate TOML content
-    let content = keybindings::generate_default_keybindings_toml()?;
+    let content = keybindings::generate_default_config_toml()?;
 
     // Write to file
     std::fs::write(path, content)
