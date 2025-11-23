@@ -293,6 +293,148 @@ impl GitStore {
 
         Ok(modified_tasks)
     }
+
+    /// Push task refs to a remote repository.
+    ///
+    /// # Errors
+    /// Returns an error if the remote doesn't exist, push fails, or network issues occur.
+    pub fn push_refs(&self, remote_name: &str, force: bool) -> Result<()> {
+        let mut remote = self
+            .repo
+            .find_remote(remote_name)
+            .with_context(|| format!("Remote '{remote_name}' not found"))?;
+
+        let refspec = if force {
+            "+refs/git-mile/tasks/*:refs/git-mile/tasks/*"
+        } else {
+            "refs/git-mile/tasks/*:refs/git-mile/tasks/*"
+        };
+
+        info!(%remote_name, %refspec, "Pushing task refs");
+
+        remote
+            .push(&[refspec], None)
+            .with_context(|| format!("Failed to push to remote '{remote_name}'"))?;
+
+        info!(%remote_name, "Successfully pushed task refs");
+        Ok(())
+    }
+
+    /// Pull (fetch and merge) task refs from a remote repository.
+    ///
+    /// # Errors
+    /// Returns an error if the remote doesn't exist, fetch fails, or merge conflicts occur.
+    pub fn pull_refs(&self, remote_name: &str) -> Result<()> {
+        let mut remote = self
+            .repo
+            .find_remote(remote_name)
+            .with_context(|| format!("Remote '{remote_name}' not found"))?;
+
+        let refspec = "refs/git-mile/tasks/*:refs/remotes/origin/git-mile/tasks/*";
+
+        info!(%remote_name, %refspec, "Fetching task refs");
+
+        remote
+            .fetch(&[refspec], None, None)
+            .with_context(|| format!("Failed to fetch from remote '{remote_name}'"))?;
+
+        info!(%remote_name, "Successfully fetched task refs");
+
+        // Merge fetched refs into local refs
+        self.merge_remote_refs(remote_name)?;
+
+        Ok(())
+    }
+
+    fn merge_remote_refs(&self, remote_name: &str) -> Result<()> {
+        let remote_ref_prefix = format!("refs/remotes/{remote_name}/git-mile/tasks/");
+        let references = self.repo.references_glob(&format!("{remote_ref_prefix}*"))?;
+
+        for reference in references {
+            let reference = reference?;
+            let Some(remote_ref_name) = reference.name() else {
+                continue;
+            };
+
+            // Extract task ID from remote ref
+            let Some(task_id_str) = remote_ref_name.strip_prefix(&remote_ref_prefix) else {
+                continue;
+            };
+
+            let local_ref_name = format!("refs/git-mile/tasks/{task_id_str}");
+            let remote_target = reference
+                .target()
+                .ok_or_else(|| anyhow!("Remote ref {remote_ref_name} has no target"))?;
+
+            // Check if local ref exists
+            match self.repo.find_reference(&local_ref_name) {
+                Ok(local_ref) => {
+                    let local_target = local_ref
+                        .target()
+                        .ok_or_else(|| anyhow!("Local ref {local_ref_name} has no target"))?;
+
+                    if local_target == remote_target {
+                        // Already up to date
+                        debug!(%local_ref_name, "Already up to date");
+                        continue;
+                    }
+
+                    // Check if remote_target is reachable from local_target
+                    if self.repo.graph_descendant_of(remote_target, local_target)? {
+                        // Remote is ahead, fast-forward
+                        debug!(%local_ref_name, "Fast-forwarding");
+                        self.repo
+                            .reference(&local_ref_name, remote_target, true, "git-mile pull: fast-forward")?;
+                    } else if self.repo.graph_descendant_of(local_target, remote_target)? {
+                        // Local is ahead, no action needed
+                        debug!(%local_ref_name, "Local is ahead of remote");
+                    } else {
+                        // Diverged, create merge commit
+                        debug!(%local_ref_name, "Creating merge commit");
+                        self.create_merge_commit(&local_ref_name, local_target, remote_target)?;
+                    }
+                }
+                Err(e) if e.code() == git2::ErrorCode::NotFound => {
+                    // Local ref doesn't exist, create it
+                    debug!(%local_ref_name, "Creating new local ref");
+                    self.repo
+                        .reference(&local_ref_name, remote_target, false, "git-mile pull: create ref")?;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        Ok(())
+    }
+
+    fn create_merge_commit(
+        &self,
+        ref_name: &str,
+        local_oid: Oid,
+        remote_oid: Oid,
+    ) -> Result<()> {
+        let local_commit = self.repo.find_commit(local_oid)?;
+        let remote_commit = self.repo.find_commit(remote_oid)?;
+
+        let sig = self.repo.signature()?;
+        let tree = self.repo.find_tree(self.empty_tree_oid)?;
+
+        let message = format!(
+            "git-mile-event: merge\n\nMerge remote changes into {ref_name}"
+        );
+
+        let merge_oid = self.repo.commit(
+            Some(ref_name),
+            &sig,
+            &sig,
+            &message,
+            &tree,
+            &[&local_commit, &remote_commit],
+        )?;
+
+        info!(%ref_name, %merge_oid, "Created merge commit");
+        Ok(())
+    }
 }
 
 impl Clone for GitStore {
