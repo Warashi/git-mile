@@ -1,5 +1,14 @@
 //! Keybindings configuration for the TUI.
 
+#![allow(
+    clippy::cognitive_complexity,
+    clippy::uninlined_format_args,
+    clippy::map_unwrap_or,
+    clippy::enum_glob_use,
+    clippy::collapsible_if,
+    clippy::unused_self
+)]
+
 use anyhow::{Context, Result, anyhow, bail};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde::{Deserialize, Serialize};
@@ -13,21 +22,21 @@ macro_rules! vec_of_strings {
 }
 
 /// Top-level configuration for git-mile.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     /// TUI configuration.
     pub tui: TuiConfig,
 }
 
 /// TUI-specific configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TuiConfig {
     /// Keybindings configuration.
     pub keybindings: KeyBindingsConfig,
 }
 
 /// Keybindings configuration for all TUI views.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct KeyBindingsConfig {
     /// Keybindings for the task list view.
     pub task_list: TaskListKeyBindings,
@@ -119,34 +128,6 @@ pub struct ViewerKeyBindings {
     pub scroll_down_fast: Vec<String>,
     /// Scroll up fast (half page).
     pub scroll_up_fast: Vec<String>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            tui: TuiConfig::default(),
-        }
-    }
-}
-
-impl Default for TuiConfig {
-    fn default() -> Self {
-        Self {
-            keybindings: KeyBindingsConfig::default(),
-        }
-    }
-}
-
-impl Default for KeyBindingsConfig {
-    fn default() -> Self {
-        Self {
-            task_list: TaskListKeyBindings::default(),
-            tree_view: TreeViewKeyBindings::default(),
-            state_picker: StatePickerKeyBindings::default(),
-            comment_viewer: ViewerKeyBindings::default(),
-            description_viewer: ViewerKeyBindings::default(),
-        }
-    }
 }
 
 impl Default for TaskListKeyBindings {
@@ -262,6 +243,7 @@ pub fn generate_default_config_toml() -> Result<String> {
 ///
 /// Deprecated: Use `generate_default_config_toml` instead.
 #[deprecated(note = "Use generate_default_config_toml instead")]
+#[allow(dead_code)]
 pub fn generate_default_keybindings_toml() -> Result<String> {
     generate_default_config_toml()
 }
@@ -304,16 +286,17 @@ pub fn load_config(path: Option<&Path>) -> Result<Option<Config>> {
 ///
 /// Deprecated: Use `load_config` instead.
 #[deprecated(note = "Use load_config instead")]
+#[allow(dead_code)]
 pub fn load_keybindings_config(path: Option<&Path>) -> Result<Option<KeyBindingsConfig>> {
     Ok(load_config(path)?.map(|c| c.tui.keybindings))
 }
 
-/// Parse a key string into a KeyEvent.
+/// Parse a key string into a `KeyEvent`.
 ///
 /// # Examples
-/// - "j" -> KeyCode::Char('j')
-/// - "Enter" -> KeyCode::Enter
-/// - "Ctrl+d" -> KeyCode::Char('d') with CONTROL modifier
+/// - "j" -> `KeyCode::Char('j')`
+/// - "Enter" -> `KeyCode::Enter`
+/// - "Ctrl+d" -> `KeyCode::Char('d')` with CONTROL modifier
 pub fn parse_key(s: &str) -> Result<KeyEvent> {
     let parts: Vec<&str> = s.split('+').collect();
 
@@ -403,6 +386,7 @@ pub fn validate_keybindings_config(config: &KeyBindingsConfig) -> Result<()> {
 ///
 /// Deprecated: Use `validate_keybindings_config` instead.
 #[deprecated(note = "Use validate_keybindings_config or validate_tui_config instead")]
+#[allow(dead_code)]
 pub fn validate_config(config: &KeyBindingsConfig) -> Result<()> {
     validate_keybindings_config(config)
 }
@@ -967,6 +951,15 @@ impl KeyBindingsConfig {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::useless_vec,
+        clippy::cognitive_complexity,
+        clippy::uninlined_format_args,
+        clippy::single_char_pattern,
+        deprecated
+    )]
+
     use super::*;
 
     #[test]

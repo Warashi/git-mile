@@ -1,7 +1,14 @@
 //! Integration tests for Phase 2 hook support
 //!
-//! These tests verify that all hook types (PreEvent, PostEvent, PreTaskUpdate, etc.)
-//! are executed correctly across TaskWriter operations.
+//! These tests verify that all hook types (`PreEvent`, `PostEvent`, `PreTaskUpdate`, etc.)
+//! are executed correctly across `TaskWriter` operations.
+
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::redundant_clone,
+    clippy::field_reassign_with_default
+)]
 
 use git_mile_app::config::ProjectConfig;
 use git_mile_app::task_writer::{CommentRequest, CreateTaskRequest, TaskUpdate, TaskWriter};

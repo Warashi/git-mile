@@ -5,6 +5,7 @@ allowed-duplicate-crates = [
   "darling",
   "darling_core",
   "darling_macro",
+  "getrandom",
   "hashbrown",
   "linux-raw-sys",
   "mio",

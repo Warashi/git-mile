@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use anyhow::Result;
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::TaskId;

@@ -6,7 +6,7 @@ use std::path::Path;
 
 pub mod keybindings;
 
-pub use keybindings::{Action, Config, KeyBindingsConfig, TuiConfig, ViewType};
+pub use keybindings::{Action, KeyBindingsConfig, ViewType};
 
 /// Initialize keybindings configuration file with defaults.
 pub fn init_keybindings(output: Option<&Path>, force: bool) -> Result<()> {
@@ -23,6 +23,7 @@ pub fn init_keybindings(output: Option<&Path>, force: bool) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::collapsible_if)]
 fn write_keybindings_config(path: &Path, force: bool) -> Result<()> {
     // Check if file exists and force is false
     if path.exists() && !force {

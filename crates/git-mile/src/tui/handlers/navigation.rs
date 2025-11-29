@@ -24,6 +24,7 @@ impl<S: TaskStore> Ui<S> {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn handle_task_list_key(&mut self, key: KeyEvent) -> Result<Option<UiAction>> {
         if self.keybindings.matches(ViewType::TaskList, Action::Quit, &key) {
             self.should_quit = true;
