@@ -239,15 +239,6 @@ pub fn generate_default_config_toml() -> Result<String> {
     Ok(format!("{}{}", header, toml_str))
 }
 
-/// Generate default keybindings configuration as TOML string.
-///
-/// Deprecated: Use `generate_default_config_toml` instead.
-#[deprecated(note = "Use generate_default_config_toml instead")]
-#[allow(dead_code)]
-pub fn generate_default_keybindings_toml() -> Result<String> {
-    generate_default_config_toml()
-}
-
 /// Load configuration from a TOML file.
 ///
 /// # Arguments
@@ -280,15 +271,6 @@ pub fn load_config(path: Option<&Path>) -> Result<Option<Config>> {
         .with_context(|| format!("Failed to parse config file: {}", config_path.display()))?;
 
     Ok(Some(config))
-}
-
-/// Load keybindings configuration from a TOML file.
-///
-/// Deprecated: Use `load_config` instead.
-#[deprecated(note = "Use load_config instead")]
-#[allow(dead_code)]
-pub fn load_keybindings_config(path: Option<&Path>) -> Result<Option<KeyBindingsConfig>> {
-    Ok(load_config(path)?.map(|c| c.tui.keybindings))
 }
 
 /// Parse a key string into a `KeyEvent`.
@@ -380,15 +362,6 @@ pub fn validate_keybindings_config(config: &KeyBindingsConfig) -> Result<()> {
     validate_key_expressions(config)?;
     validate_keybindings(config)?;
     Ok(())
-}
-
-/// Validate the keybindings configuration.
-///
-/// Deprecated: Use `validate_keybindings_config` instead.
-#[deprecated(note = "Use validate_keybindings_config or validate_tui_config instead")]
-#[allow(dead_code)]
-pub fn validate_config(config: &KeyBindingsConfig) -> Result<()> {
-    validate_keybindings_config(config)
 }
 
 /// Validate that all keybinding fields have at least one key.
@@ -956,8 +929,7 @@ mod tests {
         clippy::useless_vec,
         clippy::cognitive_complexity,
         clippy::uninlined_format_args,
-        clippy::single_char_pattern,
-        deprecated
+        clippy::single_char_pattern
     )]
 
     use super::*;
@@ -1387,7 +1359,7 @@ mod tests {
     #[test]
     fn test_validate_default_config() {
         let config = KeyBindingsConfig::default();
-        let result = validate_config(&config);
+        let result = validate_keybindings_config(&config);
         assert!(result.is_ok(), "Default config should be valid");
     }
 
@@ -1458,7 +1430,7 @@ mod tests {
     fn test_load_nonexistent_config() {
         // 存在しないパスからの読み込み
         let result =
-            load_keybindings_config(Some(std::path::Path::new("/nonexistent/path/config.toml"))).unwrap();
+            load_config(Some(std::path::Path::new("/nonexistent/path/config.toml"))).unwrap();
 
         // ファイルが存在しない場合は None が返される
         assert!(result.is_none());
@@ -1548,7 +1520,7 @@ quit = ["q"]
         temp_file.flush().unwrap();
 
         // パースエラーが返される
-        let result = load_keybindings_config(Some(temp_file.path()));
+        let result = load_config(Some(temp_file.path()));
         assert!(result.is_err());
     }
 
@@ -1570,7 +1542,7 @@ down = ["j"]
         temp_file.flush().unwrap();
 
         // デシリアライズエラーが返される
-        let result = load_keybindings_config(Some(temp_file.path()));
+        let result = load_config(Some(temp_file.path()));
         assert!(result.is_err());
     }
 
