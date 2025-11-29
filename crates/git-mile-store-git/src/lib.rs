@@ -65,18 +65,22 @@ impl GitStore {
                     }
                 }
 
-                // Try default SSH key
+                // Try default SSH keys (in order of preference)
                 if let Ok(home) = env::var("HOME") {
-                    let ssh_key = PathBuf::from(home).join(".ssh").join("id_rsa");
-                    if ssh_key.exists() {
-                        debug!(?ssh_key, "Trying SSH key file");
-                        match Cred::ssh_key(username, None, &ssh_key, None) {
-                            Ok(cred) => {
-                                debug!("SSH key authentication succeeded");
-                                return Ok(cred);
-                            }
-                            Err(e) => {
-                                warn!(?ssh_key, "SSH key authentication failed: {}", e);
+                    let ssh_dir = PathBuf::from(home).join(".ssh");
+                    let key_names = ["id_ed25519", "id_ecdsa", "id_rsa"];
+                    for key_name in key_names {
+                        let ssh_key = ssh_dir.join(key_name);
+                        if ssh_key.exists() {
+                            debug!(?ssh_key, "Trying SSH key file");
+                            match Cred::ssh_key(username, None, &ssh_key, None) {
+                                Ok(cred) => {
+                                    debug!("SSH key authentication succeeded");
+                                    return Ok(cred);
+                                }
+                                Err(e) => {
+                                    warn!(?ssh_key, "SSH key authentication failed: {}", e);
+                                }
                             }
                         }
                     }
