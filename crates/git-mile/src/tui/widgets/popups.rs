@@ -352,6 +352,12 @@ impl<S: TaskStore> Ui<S> {
             )));
 
             if let Some(detail) = &entry.detail {
+                if entry.is_description {
+                    lines.push(Line::from(Span::styled(
+                        "description:",
+                        Style::default().fg(Color::Green),
+                    )));
+                }
                 for detail_line in detail.lines() {
                     lines.push(Line::from(detail_line.to_owned()));
                 }

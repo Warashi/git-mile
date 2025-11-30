@@ -19,6 +19,8 @@ pub struct LogEntry {
     pub action: String,
     /// Optional human-readable details.
     pub detail: Option<String>,
+    /// Whether the detail should be rendered as multi-line description content.
+    pub is_description: bool,
 }
 
 /// Convert raw events to display-friendly entries.
@@ -36,6 +38,7 @@ pub fn entry_from_event(event: &Event) -> LogEntry {
         actor: event.actor.clone(),
         action: action_for_kind(&event.kind),
         detail: detail_for_kind(&event.kind),
+        is_description: matches!(event.kind, EventKind::TaskDescriptionSet { .. }),
     }
 }
 
@@ -133,7 +136,7 @@ fn detail_for_kind(kind: &EventKind) -> Option<String> {
         EventKind::TaskTitleSet { title } => Some(format!("title: {title}")),
         EventKind::TaskDescriptionSet { description } => description
             .as_deref()
-            .map(|body| format!("description: {body}"))
+            .map(ToOwned::to_owned)
             .or_else(|| Some("description cleared".to_owned())),
         EventKind::LabelsAdded { labels } => Some(format!("added: {}", labels.join(", "))),
         EventKind::LabelsRemoved { labels } => Some(format!("removed: {}", labels.join(", "))),
@@ -163,9 +166,9 @@ fn join_parts(parts: Vec<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use git_mile_core::StateKind;
     use git_mile_core::event::EventKind;
     use git_mile_core::id::TaskId;
-    use git_mile_core::StateKind;
 
     fn sample_actor() -> Actor {
         Actor {
@@ -206,5 +209,22 @@ mod tests {
         let detail = "abcdefghij";
         assert_eq!(truncate_detail(detail, 5), "ab...");
         assert_eq!(truncate_detail(detail, 10), detail);
+    }
+
+    #[test]
+    fn description_detail_is_marked_multiline() {
+        let task = TaskId::new();
+        let actor = sample_actor();
+        let event = Event::new(
+            task,
+            &actor,
+            EventKind::TaskDescriptionSet {
+                description: Some("line1\nline2".into()),
+            },
+        );
+
+        let entry = entry_from_event(&event);
+        assert!(entry.is_description);
+        assert_eq!(entry.detail.as_deref(), Some("line1\nline2"));
     }
 }

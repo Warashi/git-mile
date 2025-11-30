@@ -300,13 +300,10 @@ fn render_log_table(events: &[Event], writer: &mut dyn Write) -> Result<()> {
     for entry in entries_from_events(events) {
         let ts = format_timestamp(entry.ts);
         let actor = format_actor(&entry.actor);
-        let detail = entry
-            .detail
-            .as_deref()
-            .map_or_else(
-                || "-".to_owned(),
-                |text| truncate_detail(&single_line_detail(text), 80),
-            );
+        let detail = entry.detail.as_deref().map_or_else(
+            || "-".to_owned(),
+            |text| truncate_detail(&single_line_detail(text), 80),
+        );
         writeln!(
             writer,
             "{ts} | {actor} | {} | {detail} | {}",
@@ -595,12 +592,8 @@ mod tests {
         let mut output = Vec::new();
         super::handle_log(&service, &task.to_string(), LogFormat::Table, &mut output)?;
         let text = String::from_utf8(output).context("log output must be utf8")?;
-        let earlier_idx = text
-            .find(&earlier.id.to_string())
-            .context("earlier event id")?;
-        let later_idx = text
-            .find(&later.id.to_string())
-            .context("later event id")?;
+        let earlier_idx = text.find(&earlier.id.to_string()).context("earlier event id")?;
+        let later_idx = text.find(&later.id.to_string()).context("later event id")?;
 
         assert!(earlier_idx < later_idx, "events must appear in lamport order");
         assert!(text.contains("Timestamp | Actor | Event | Detail | EventId"));
