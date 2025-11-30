@@ -71,11 +71,11 @@ mod tests {
             },
         );
         later.lamport = 2;
-        later.ts = later.ts + Duration::seconds(10);
+        later.ts += Duration::seconds(10);
 
         let mut earlier = Event::new(task, &actor, EventKind::TaskStateCleared);
         earlier.lamport = 1;
-        earlier.ts = earlier.ts + Duration::seconds(20);
+        earlier.ts += Duration::seconds(20);
 
         store.append_event(&later).expect("append later");
         store.append_event(&earlier).expect("append earlier");

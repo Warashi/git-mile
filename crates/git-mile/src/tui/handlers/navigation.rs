@@ -153,7 +153,7 @@ impl<S: TaskStore> Ui<S> {
             .keybindings
             .matches(ViewType::TaskList, Action::OpenLogViewer, &key)
         {
-            self.open_log_viewer()?;
+            self.open_log_viewer();
             return Ok(None);
         }
 
@@ -427,10 +427,10 @@ impl<S: TaskStore> Ui<S> {
         }
     }
 
-    fn open_log_viewer(&mut self) -> Result<()> {
+    fn open_log_viewer(&mut self) {
         let Some(task) = self.selected_task() else {
             self.error("ログを表示するタスクが選択されていません");
-            return Ok(());
+            return;
         };
 
         match self.app.load_log_entries(task.snapshot.id) {
@@ -444,8 +444,6 @@ impl<S: TaskStore> Ui<S> {
             }
             Err(err) => self.error(format!("ログの読み込みに失敗しました: {err}")),
         }
-
-        Ok(())
     }
 
     fn close_log_viewer(&mut self) {
@@ -453,12 +451,14 @@ impl<S: TaskStore> Ui<S> {
         self.detail_focus = DetailFocus::None;
     }
 
+    #[allow(clippy::missing_const_for_fn)]
     fn log_viewer_scroll_down(&mut self, lines: u16) {
         if let Some(viewer) = &mut self.log_viewer {
             viewer.scroll_offset = viewer.scroll_offset.saturating_add(lines);
         }
     }
 
+    #[allow(clippy::missing_const_for_fn)]
     fn log_viewer_scroll_up(&mut self, lines: u16) {
         if let Some(viewer) = &mut self.log_viewer {
             viewer.scroll_offset = viewer.scroll_offset.saturating_sub(lines);

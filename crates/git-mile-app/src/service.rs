@@ -280,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn event_log_returns_ordered_events() {
+    fn event_log_returns_ordered_events() -> Result<()> {
         let (service, _repo, store) = service_with_store();
         let task = TaskId::new();
         let actor = Actor {
@@ -296,7 +296,7 @@ mod tests {
             },
         );
         later.lamport = 3;
-        later.ts = later.ts + Duration::seconds(10);
+        later.ts += Duration::seconds(10);
 
         let mut earlier = Event::new(
             task,
@@ -307,14 +307,15 @@ mod tests {
             },
         );
         earlier.lamport = 2;
-        earlier.ts = earlier.ts + Duration::seconds(20);
+        earlier.ts += Duration::seconds(20);
 
         store.set_events(task, vec![later.clone(), earlier.clone()]);
 
-        let log = service.event_log(task).expect("ordered events");
+        let log = service.event_log(task)?;
         let ids: Vec<_> = log.iter().map(|ev| ev.id).collect();
 
         assert_eq!(vec![earlier.id, later.id], ids);
+        Ok(())
     }
 
     #[test]

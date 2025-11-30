@@ -37,11 +37,11 @@ mod tests {
             },
         );
         first.lamport = 2;
-        first.ts = first.ts + Duration::seconds(10);
+        first.ts += Duration::seconds(10);
 
         let mut second = Event::new(task, &actor, EventKind::TaskStateCleared);
         second.lamport = 1;
-        second.ts = second.ts + Duration::seconds(20);
+        second.ts += Duration::seconds(20);
 
         let mut third = Event::new(
             task,
@@ -51,7 +51,7 @@ mod tests {
             },
         );
         third.lamport = 2;
-        third.ts = third.ts + Duration::seconds(5);
+        third.ts += Duration::seconds(5);
 
         let ordered = ordered_events(&[first.clone(), second.clone(), third.clone()]);
         let ids: Vec<_> = ordered.into_iter().map(|event| event.id).collect();

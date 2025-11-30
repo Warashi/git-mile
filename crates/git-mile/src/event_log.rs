@@ -1,6 +1,7 @@
 //! Shared helpers for rendering task event logs.
 
-use git_mile_core::StateKind;
+use std::fmt::Write;
+
 use git_mile_core::event::{Actor, Event, EventKind};
 use git_mile_core::id::EventId;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -106,7 +107,7 @@ fn detail_for_kind(kind: &EventKind) -> Option<String> {
             if let Some(state) = state {
                 let mut state_line = format!("state: {state}");
                 if let Some(kind) = state_kind {
-                    state_line.push_str(&format!(" ({})", kind.as_str()));
+                    let _ = write!(&mut state_line, " ({})", kind.as_str());
                 }
                 parts.push(state_line);
             }
@@ -124,7 +125,7 @@ fn detail_for_kind(kind: &EventKind) -> Option<String> {
         EventKind::TaskStateSet { state, state_kind } => {
             let mut line = format!("state: {state}");
             if let Some(kind) = state_kind {
-                line.push_str(&format!(" ({})", kind.as_str()));
+                let _ = write!(&mut line, " ({})", kind.as_str());
             }
             Some(line)
         }
@@ -138,12 +139,15 @@ fn detail_for_kind(kind: &EventKind) -> Option<String> {
         EventKind::LabelsRemoved { labels } => Some(format!("removed: {}", labels.join(", "))),
         EventKind::AssigneesAdded { assignees } => Some(format!("added: {}", assignees.join(", "))),
         EventKind::AssigneesRemoved { assignees } => Some(format!("removed: {}", assignees.join(", "))),
-        EventKind::CommentAdded { body_md, .. } => Some(body_md.clone()),
-        EventKind::CommentUpdated { body_md, .. } => Some(body_md.clone()),
-        EventKind::ChildLinked { parent, child } => Some(format!("parent: {parent}, child: {child}")),
-        EventKind::ChildUnlinked { parent, child } => Some(format!("parent: {parent}, child: {child}")),
-        EventKind::RelationAdded { kind, target } => Some(format!("kind: {kind}, target: {target}")),
-        EventKind::RelationRemoved { kind, target } => Some(format!("kind: {kind}, target: {target}")),
+        EventKind::CommentAdded { body_md, .. } | EventKind::CommentUpdated { body_md, .. } => {
+            Some(body_md.clone())
+        }
+        EventKind::ChildLinked { parent, child } | EventKind::ChildUnlinked { parent, child } => {
+            Some(format!("parent: {parent}, child: {child}"))
+        }
+        EventKind::RelationAdded { kind, target } | EventKind::RelationRemoved { kind, target } => {
+            Some(format!("kind: {kind}, target: {target}"))
+        }
     }
 }
 
@@ -161,6 +165,7 @@ mod tests {
     use super::*;
     use git_mile_core::event::EventKind;
     use git_mile_core::id::TaskId;
+    use git_mile_core::StateKind;
 
     fn sample_actor() -> Actor {
         Actor {

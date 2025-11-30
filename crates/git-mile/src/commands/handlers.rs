@@ -303,8 +303,10 @@ fn render_log_table(events: &[Event], writer: &mut dyn Write) -> Result<()> {
         let detail = entry
             .detail
             .as_deref()
-            .map(|text| truncate_detail(&single_line_detail(text), 80))
-            .unwrap_or_else(|| "-".to_owned());
+            .map_or_else(
+                || "-".to_owned(),
+                |text| truncate_detail(&single_line_detail(text), 80),
+            );
         writeln!(
             writer,
             "{ts} | {actor} | {} | {detail} | {}",
@@ -326,7 +328,7 @@ fn parse_task_id(raw: &str) -> Result<TaskId> {
 mod tests {
     use super::*;
     use crate::{Command, LogFormat, LsFormat};
-    use anyhow::{Result, anyhow};
+    use anyhow::{Context, Result, anyhow};
     use git_mile_core::StateKind;
     use git_mile_core::event::{Actor, Event, EventKind};
     use std::collections::{HashMap, HashSet};
@@ -592,9 +594,13 @@ mod tests {
 
         let mut output = Vec::new();
         super::handle_log(&service, &task.to_string(), LogFormat::Table, &mut output)?;
-        let text = String::from_utf8(output).expect("log output must be utf8");
-        let earlier_idx = text.find(&earlier.id.to_string()).expect("earlier event id");
-        let later_idx = text.find(&later.id.to_string()).expect("later event id");
+        let text = String::from_utf8(output).context("log output must be utf8")?;
+        let earlier_idx = text
+            .find(&earlier.id.to_string())
+            .context("earlier event id")?;
+        let later_idx = text
+            .find(&later.id.to_string())
+            .context("later event id")?;
 
         assert!(earlier_idx < later_idx, "events must appear in lamport order");
         assert!(text.contains("Timestamp | Actor | Event | Detail | EventId"));
