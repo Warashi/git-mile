@@ -11,6 +11,7 @@ use time::OffsetDateTime;
 use tokio::sync::Mutex;
 
 use crate::task_cache::{TaskCache, TaskView};
+use crate::task_log::ordered_events;
 
 /// Async storage trait for use with `tokio::sync::Mutex`.
 ///
@@ -269,6 +270,19 @@ impl<S: AsyncTaskStore> AsyncTaskRepository<S> {
             .cache
             .view(task_id)
             .ok_or_else(|| anyhow!("Task not found: {task_id}"))
+    }
+
+    /// Fetch ordered raw events for a specific task.
+    ///
+    /// # Errors
+    /// Returns an error if events cannot be loaded.
+    pub async fn get_log(&self, task_id: TaskId) -> Result<Vec<Event>> {
+        let events = self
+            .store
+            .load_events(task_id)
+            .await
+            .map_err(|e| anyhow!("Failed to load events for task {}: {}", task_id, e.into()))?;
+        Ok(ordered_events(&events))
     }
 
     /// List children for a task.

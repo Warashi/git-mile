@@ -1,12 +1,13 @@
 use anyhow::{Result, anyhow};
 use git_mile_core::TaskSnapshot;
-use git_mile_core::event::Actor;
+use git_mile_core::event::{Actor, Event};
 use git_mile_core::id::TaskId;
 use git2::Oid;
 
 use std::path::PathBuf;
 
 use crate::config::{HooksConfig, WorkflowConfig};
+use crate::task_log::ordered_events;
 use crate::task_writer::{CommentRequest, CreateTaskRequest, TaskStore, TaskWriter};
 
 /// Service façade that encapsulates all task-related side effects.
@@ -109,6 +110,15 @@ impl<S: TaskStore> TaskService<S> {
         let events = self.store().load_events(task).map_err(Into::into)?;
         Ok(TaskSnapshot::replay(&events))
     }
+
+    /// Return ordered raw events for the given task.
+    ///
+    /// # Errors
+    /// Returns an error if event loading fails.
+    pub fn event_log(&self, task: TaskId) -> Result<Vec<Event>> {
+        let events = self.store().load_events(task).map_err(Into::into)?;
+        Ok(ordered_events(&events))
+    }
 }
 
 pub struct CreateTaskInput {
@@ -148,9 +158,10 @@ mod tests {
     use super::*;
     use crate::config::{WorkflowConfig, WorkflowState};
     use git_mile_core::TaskFilter;
-    use git_mile_core::event::{Event, EventKind};
+    use git_mile_core::event::{Actor, Event, EventKind};
     use std::collections::{HashMap, HashSet};
     use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+    use time::Duration;
 
     #[derive(Clone, Default)]
     struct MockStore {
@@ -266,6 +277,44 @@ mod tests {
             PathBuf::from("/tmp/.git-mile"),
         );
         (service, repository, store)
+    }
+
+    #[test]
+    fn event_log_returns_ordered_events() {
+        let (service, _repo, store) = service_with_store();
+        let task = TaskId::new();
+        let actor = Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        };
+
+        let mut later = Event::new(
+            task,
+            &actor,
+            EventKind::TaskTitleSet {
+                title: "later".into(),
+            },
+        );
+        later.lamport = 3;
+        later.ts = later.ts + Duration::seconds(10);
+
+        let mut earlier = Event::new(
+            task,
+            &actor,
+            EventKind::TaskStateSet {
+                state: "state/in-progress".into(),
+                state_kind: None,
+            },
+        );
+        earlier.lamport = 2;
+        earlier.ts = earlier.ts + Duration::seconds(20);
+
+        store.set_events(task, vec![later.clone(), earlier.clone()]);
+
+        let log = service.event_log(task).expect("ordered events");
+        let ids: Vec<_> = log.iter().map(|ev| ev.id).collect();
+
+        assert_eq!(vec![earlier.id, later.id], ids);
     }
 
     #[test]

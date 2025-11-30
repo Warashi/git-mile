@@ -1,11 +1,12 @@
 //! Task repository with caching for efficient snapshot access.
 
 use anyhow::{Context, Result, anyhow};
-use git_mile_core::{TaskFilter, TaskSnapshot, id::TaskId};
+use git_mile_core::{TaskFilter, TaskSnapshot, event::Event, id::TaskId};
 use std::sync::{Arc, RwLock};
 use time::OffsetDateTime;
 
 use crate::task_cache::{TaskCache, TaskView};
+use crate::task_log::ordered_events;
 use crate::task_writer::TaskStore;
 
 /// Repository that caches task snapshots and provides efficient access.
@@ -132,6 +133,15 @@ impl<S: TaskStore> TaskRepository<S> {
             .ok_or_else(|| anyhow!("Task not found: {task_id}"))
     }
 
+    /// Get ordered raw events for a task.
+    ///
+    /// # Errors
+    /// Returns an error if the task cannot be loaded.
+    pub fn get_log(&self, task_id: TaskId) -> Result<Vec<Event>> {
+        let events = self.store.load_events(task_id).map_err(Into::into)?;
+        Ok(ordered_events(&events))
+    }
+
     /// List child task ids for the given parent.
     ///
     /// # Errors
@@ -206,6 +216,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
     use tempfile::TempDir;
+    use time::Duration;
 
     fn setup_test_repo() -> (TempDir, TaskRepository<GitStore>) {
         let temp_dir = TempDir::new().expect("create temp dir");
@@ -386,6 +397,32 @@ mod tests {
         );
         ev.ts = OffsetDateTime::from_unix_timestamp(ts).expect("valid timestamp");
         ev
+    }
+
+    #[test]
+    fn get_log_orders_events() {
+        let task = TaskId::new();
+        let mut later = mock_event(task, "later", 20);
+        later.lamport = 2;
+        later.ts = OffsetDateTime::UNIX_EPOCH + Duration::seconds(20);
+
+        let mut earlier = mock_event(task, "earlier", 30);
+        earlier.lamport = 1;
+        earlier.ts = OffsetDateTime::UNIX_EPOCH + Duration::seconds(30);
+
+        let store = Arc::new(MockStore::with_tasks(vec![(
+            task,
+            vec![later.clone(), earlier.clone()],
+        )]));
+        let repo = TaskRepository::new(store);
+
+        let ids: Vec<_> = repo
+            .get_log(task)
+            .expect("log")
+            .into_iter()
+            .map(|ev| ev.id)
+            .collect();
+        assert_eq!(vec![earlier.id, later.id], ids);
     }
 
     #[test]

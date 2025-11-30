@@ -11,6 +11,7 @@ pub mod config;
 pub mod filter_util;
 pub mod service;
 pub mod task_cache;
+pub mod task_log;
 pub mod task_patch;
 pub mod task_repository;
 pub mod task_writer;
@@ -25,6 +26,7 @@ pub use config::{HooksConfig, ProjectConfig, StateKind, WorkflowConfig, Workflow
 pub use filter_util::{FilterBuildError, TaskFilterBuilder, normalize_timestamp, parse_timestamp};
 pub use service::{CommentInput, CommentOutput, CreateTaskInput, CreateTaskOutput, ParentLink, TaskService};
 pub use task_cache::{TaskCache, TaskComment, TaskView};
+pub use task_log::ordered_events;
 pub use task_patch::{DescriptionPatch, SetDiff, StatePatch, TaskEditData, TaskPatch, TaskUpdate, diff_sets};
 pub use task_repository::TaskRepository;
 pub use task_writer::{
