@@ -85,6 +85,15 @@ impl GitMileServer {
         tools::list_comments::handle_list_comments(self.repository.clone(), params).await
     }
 
+    /// List events recorded on a task.
+    #[tool(description = "List all events on a task in chronological order")]
+    async fn list_task_events(
+        &self,
+        params: Parameters<ListTaskEventsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        tools::list_task_events::handle_list_task_events(self.repository.clone(), params).await
+    }
+
     /// List all subtasks of a parent task.
     #[tool(description = "List all subtasks (children) of a given parent task")]
     async fn list_subtasks(

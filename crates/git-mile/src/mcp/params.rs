@@ -122,6 +122,13 @@ pub struct ListCommentsParams {
     pub task_id: String,
 }
 
+/// Parameters for listing events on a task.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ListTaskEventsParams {
+    /// Task ID whose events should be returned.
+    pub task_id: String,
+}
+
 /// Parameters for listing subtasks of a parent task.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ListSubtasksParams {
