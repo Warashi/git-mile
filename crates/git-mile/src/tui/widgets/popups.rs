@@ -352,10 +352,7 @@ impl<S: TaskStore> Ui<S> {
             )));
 
             if let Some(detail) = &entry.detail {
-                let should_skip = entry
-                    .description_body
-                    .as_ref()
-                    .map_or(false, |body| body == detail);
+                let should_skip = entry.description_body.as_ref() == Some(detail);
                 if !should_skip {
                     for detail_line in detail.lines() {
                         lines.push(Line::from(detail_line.to_owned()));

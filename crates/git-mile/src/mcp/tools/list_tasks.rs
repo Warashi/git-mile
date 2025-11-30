@@ -20,7 +20,7 @@ impl ListTasksParams {
             labels,
             assignees,
             include_state_kinds,
-            exclude_state_kinds,
+            mut exclude_state_kinds,
             parents,
             children,
             updated_since,
@@ -37,6 +37,10 @@ impl ListTasksParams {
             .with_assignees(&assignees)
             .with_parents(&parent_ids)
             .with_children(&child_ids);
+
+        if states.is_empty() && include_state_kinds.is_empty() && exclude_state_kinds.is_empty() {
+            exclude_state_kinds.push("done".to_string());
+        }
 
         builder = builder
             .with_state_kinds(&include_state_kinds, &exclude_state_kinds)
@@ -86,4 +90,54 @@ pub async fn handle_list_tasks(
         serde_json::to_string_pretty(&tasks).map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
     Ok(CallToolResult::success(vec![Content::text(json_str)]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use git_mile_core::StateKind;
+
+    fn build_filter(params: ListTasksParams) -> TaskFilter {
+        params
+            .into_filter()
+            .unwrap_or_else(|err| panic!("filter should build: {err}"))
+    }
+
+    #[test]
+    fn defaults_to_excluding_done_when_no_state_filters() {
+        let filter = build_filter(ListTasksParams::default());
+        assert!(filter.state_kinds.exclude.contains(&StateKind::Done));
+    }
+
+    #[test]
+    fn applies_default_exclude_done_even_with_other_filters() {
+        let params = ListTasksParams {
+            labels: vec!["type/doc".to_string()],
+            ..Default::default()
+        };
+        let filter = build_filter(params);
+        assert!(filter.state_kinds.exclude.contains(&StateKind::Done));
+    }
+
+    #[test]
+    fn respects_explicit_state_kinds() {
+        let params = ListTasksParams {
+            include_state_kinds: vec!["done".to_string()],
+            ..Default::default()
+        };
+        let filter = build_filter(params);
+        assert!(filter.state_kinds.include.contains(&StateKind::Done));
+        assert!(filter.state_kinds.exclude.is_empty());
+    }
+
+    #[test]
+    fn respects_explicit_states() {
+        let params = ListTasksParams {
+            states: vec!["state/todo".to_string()],
+            ..Default::default()
+        };
+        let filter = build_filter(params);
+        assert!(filter.states.contains("state/todo"));
+        assert!(filter.state_kinds.exclude.is_empty());
+    }
 }
