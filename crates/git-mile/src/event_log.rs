@@ -38,7 +38,14 @@ pub fn entry_from_event(event: &Event) -> LogEntry {
         actor: event.actor.clone(),
         action: action_for_kind(&event.kind),
         detail: detail_for_kind(&event.kind),
-        is_description: matches!(event.kind, EventKind::TaskDescriptionSet { .. }),
+        is_description: matches!(
+            event.kind,
+            EventKind::TaskDescriptionSet { .. }
+                | EventKind::TaskCreated {
+                    description: Some(_),
+                    ..
+                }
+        ),
     }
 }
 
@@ -120,10 +127,12 @@ fn detail_for_kind(kind: &EventKind) -> Option<String> {
             if !assignees.is_empty() {
                 parts.push(format!("assignees: {}", assignees.join(", ")));
             }
-            if let Some(desc) = description {
-                parts.push(format!("description: {desc}"));
-            }
-            join_parts(parts)
+            let summary = join_parts(parts);
+            description.as_ref().map_or(summary.clone(), |desc| {
+                summary
+                    .map_or_else(|| desc.clone(), |prefix| format!("{prefix}\n{desc}"))
+                    .into()
+            })
         }
         EventKind::TaskStateSet { state, state_kind } => {
             let mut line = format!("state: {state}");
@@ -226,5 +235,27 @@ mod tests {
         let entry = entry_from_event(&event);
         assert!(entry.is_description);
         assert_eq!(entry.detail.as_deref(), Some("line1\nline2"));
+    }
+
+    #[test]
+    fn task_created_description_is_multiline() {
+        let task = TaskId::new();
+        let actor = sample_actor();
+        let event = Event::new(
+            task,
+            &actor,
+            EventKind::TaskCreated {
+                title: "t".into(),
+                labels: vec![],
+                assignees: vec![],
+                description: Some("first\nsecond".into()),
+                state: None,
+                state_kind: None,
+            },
+        );
+
+        let entry = entry_from_event(&event);
+        assert!(entry.is_description);
+        assert_eq!(entry.detail.as_deref(), Some("title: t\nfirst\nsecond"));
     }
 }
