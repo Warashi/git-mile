@@ -14,6 +14,7 @@ use rmcp::ServiceExt;
 
 mod commands;
 mod config;
+mod event_log;
 mod mcp;
 mod tui;
 
@@ -65,6 +66,15 @@ enum Command {
         actor_name: Option<String>,
         #[arg(long)]
         actor_email: Option<String>,
+    },
+
+    /// Show event log for a task.
+    Log {
+        #[arg(long)]
+        task: String,
+        /// Output format.
+        #[arg(long = "format", value_enum, default_value_t = LogFormat::Table)]
+        format: LogFormat,
     },
 
     /// Show a materialized snapshot of a task.
@@ -161,6 +171,15 @@ pub(crate) enum LsFormat {
     /// Render a human-readable table.
     Table,
     /// Emit JSON array of task snapshots.
+    Json,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+#[value(rename_all = "snake_case")]
+pub(crate) enum LogFormat {
+    /// Render a human-readable table.
+    Table,
+    /// Emit JSON array of raw events.
     Json,
 }
 

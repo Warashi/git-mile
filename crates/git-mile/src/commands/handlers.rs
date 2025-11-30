@@ -1,11 +1,16 @@
+use std::io::Write;
 use std::path::Path;
 use std::str::FromStr;
 
 use anyhow::{Context, Result, anyhow};
 use git_mile_core::TaskFilter;
+use git_mile_core::event::Event;
 use git_mile_core::id::TaskId;
 
-use crate::{Command, LsFormat};
+use crate::event_log::{
+    entries_from_events, format_actor, format_timestamp, single_line_detail, truncate_detail,
+};
+use crate::{Command, LogFormat, LsFormat};
 use git_mile_app::actor_from_params_or_default;
 use git_mile_app::{
     CommentInput, CreateTaskInput, TaskFilterBuilder, TaskRepository, TaskService, TaskStore, WorkflowConfig,
@@ -52,6 +57,7 @@ pub fn run<S: TaskStore, R: TaskStore>(
             actor_email.as_deref(),
             repo_root,
         ),
+        Command::Log { task, format } => handle_log(service, &task, format, &mut std::io::stdout()),
         Command::Show { task } => handle_show(service, &task),
         Command::Ls {
             states,
@@ -129,6 +135,24 @@ fn handle_comment<S: TaskStore>(
     let output = service.add_comment(CommentInput { task, message, actor })?;
     println!("commented: {} ({})", output.task, output.oid);
     Ok(())
+}
+
+fn handle_log<S: TaskStore>(
+    service: &TaskService<S>,
+    task: &str,
+    format: LogFormat,
+    writer: &mut dyn Write,
+) -> Result<()> {
+    let task = parse_task_id(task)?;
+    let events = service.event_log(task)?;
+    match format {
+        LogFormat::Table => render_log_table(&events, writer),
+        LogFormat::Json => {
+            let json = serde_json::to_string_pretty(&events)?;
+            writeln!(writer, "{json}")?;
+            Ok(())
+        }
+    }
 }
 
 fn handle_show<S: TaskStore>(service: &TaskService<S>, task: &str) -> Result<()> {
@@ -269,6 +293,27 @@ fn render_task_table(tasks: &[git_mile_core::TaskSnapshot], workflow: &WorkflowC
     }
 }
 
+fn render_log_table(events: &[Event], writer: &mut dyn Write) -> Result<()> {
+    writeln!(writer, "Timestamp | Actor | Event | Detail | EventId")?;
+    writeln!(writer, "--------- | ----- | ----- | ------ | -------")?;
+
+    for entry in entries_from_events(events) {
+        let ts = format_timestamp(entry.ts);
+        let actor = format_actor(&entry.actor);
+        let detail = entry
+            .detail
+            .as_deref()
+            .map(|text| truncate_detail(&single_line_detail(text), 80))
+            .unwrap_or_else(|| "-".to_owned());
+        writeln!(
+            writer,
+            "{ts} | {actor} | {} | {detail} | {}",
+            entry.action, entry.id
+        )?;
+    }
+    Ok(())
+}
+
 fn parse_task_ids(inputs: Vec<String>) -> Result<Vec<TaskId>> {
     inputs.into_iter().map(|raw| parse_task_id(&raw)).collect()
 }
@@ -280,10 +325,10 @@ fn parse_task_id(raw: &str) -> Result<TaskId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Command, LsFormat};
+    use crate::{Command, LogFormat, LsFormat};
     use anyhow::{Result, anyhow};
     use git_mile_core::StateKind;
-    use git_mile_core::event::{Event, EventKind};
+    use git_mile_core::event::{Actor, Event, EventKind};
     use std::collections::{HashMap, HashSet};
     use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -357,6 +402,10 @@ mod tests {
             guard(&self.inner.appended).clone()
         }
 
+        fn set_events(&self, task: TaskId, events: Vec<Event>) {
+            guard(&self.inner.events).insert(task, events);
+        }
+
         fn set_list(&self, ids: Vec<TaskId>) {
             *guard(&self.inner.list) = ids;
         }
@@ -378,6 +427,13 @@ mod tests {
 
     fn guard<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         mutex.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn sample_actor() -> Actor {
+        Actor {
+            name: "tester".into(),
+            email: "tester@example.invalid".into(),
+        }
     }
 
     fn service_with_store() -> (
@@ -512,6 +568,38 @@ mod tests {
             panic!("filter should reject timestamp");
         };
         assert!(err.to_string().contains("invalid updated_since timestamp"));
+    }
+
+    #[test]
+    fn handle_log_outputs_ordered_table() -> Result<()> {
+        let (service, _repository, store) = service_with_store();
+        let task = TaskId::new();
+        let actor = sample_actor();
+
+        let mut later = Event::new(
+            task,
+            &actor,
+            EventKind::TaskTitleSet {
+                title: "later".into(),
+            },
+        );
+        later.lamport = 3;
+
+        let mut earlier = Event::new(task, &actor, EventKind::TaskStateCleared);
+        earlier.lamport = 2;
+
+        store.set_events(task, vec![later.clone(), earlier.clone()]);
+
+        let mut output = Vec::new();
+        super::handle_log(&service, &task.to_string(), LogFormat::Table, &mut output)?;
+        let text = String::from_utf8(output).expect("log output must be utf8");
+        let earlier_idx = text.find(&earlier.id.to_string()).expect("earlier event id");
+        let later_idx = text.find(&later.id.to_string()).expect("later event id");
+
+        assert!(earlier_idx < later_idx, "events must appear in lamport order");
+        assert!(text.contains("Timestamp | Actor | Event | Detail | EventId"));
+        assert_eq!(store.load_calls(), vec![task]);
+        Ok(())
     }
 
     #[test]
