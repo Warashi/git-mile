@@ -12,13 +12,15 @@ use git_mile_app::WorkflowState;
 
 use super::super::constants::{
     COMMENT_VIEWER_HEIGHT_PERCENT, COMMENT_VIEWER_MIN_HEIGHT, COMMENT_VIEWER_MIN_WIDTH,
-    COMMENT_VIEWER_WIDTH_PERCENT, STATE_PICKER_HEIGHT_PERCENT, STATE_PICKER_MIN_HEIGHT,
-    STATE_PICKER_MIN_WIDTH, STATE_PICKER_WIDTH_PERCENT, TASK_LIST_HIGHLIGHT_SYMBOL, TREE_COLLAPSED_MARKER,
-    TREE_EXPANDED_MARKER, TREE_INDENT_UNIT, TREE_LEAF_MARKER, TREE_POPUP_PERCENT,
+    COMMENT_VIEWER_WIDTH_PERCENT, LOG_VIEWER_HEIGHT_PERCENT, LOG_VIEWER_MIN_HEIGHT, LOG_VIEWER_MIN_WIDTH,
+    LOG_VIEWER_WIDTH_PERCENT, STATE_PICKER_HEIGHT_PERCENT, STATE_PICKER_MIN_HEIGHT, STATE_PICKER_MIN_WIDTH,
+    STATE_PICKER_WIDTH_PERCENT, TASK_LIST_HIGHLIGHT_SYMBOL, TREE_COLLAPSED_MARKER, TREE_EXPANDED_MARKER,
+    TREE_INDENT_UNIT, TREE_LEAF_MARKER, TREE_POPUP_PERCENT,
 };
 use super::super::tree_view::TreeNode;
 use super::super::view::Ui;
 use super::util::state_kind_marker;
+use crate::event_log::{format_actor, format_timestamp};
 
 impl<S: TaskStore> Ui<S> {
     pub(in crate::tui) fn draw_tree_view_popup(&self, f: &mut Frame<'_>) {
@@ -292,6 +294,75 @@ impl<S: TaskStore> Ui<S> {
                 f.render_widget(paragraph, inner);
             }
         }
+    }
+
+    pub(in crate::tui) fn draw_log_viewer_popup(&self, f: &mut Frame<'_>) {
+        let Some(viewer) = &self.log_viewer else {
+            return;
+        };
+        let area = f.area();
+
+        let mut popup_width = (area.width * LOG_VIEWER_WIDTH_PERCENT) / 100;
+        popup_width = popup_width.max(LOG_VIEWER_MIN_WIDTH).min(area.width);
+        let mut popup_height = (area.height * LOG_VIEWER_HEIGHT_PERCENT) / 100;
+        popup_height = popup_height.max(LOG_VIEWER_MIN_HEIGHT).min(area.height);
+        let popup_x = area.width.saturating_sub(popup_width) / 2;
+        let popup_y = area.height.saturating_sub(popup_height) / 2;
+        let popup_area = Rect {
+            x: popup_x,
+            y: popup_y,
+            width: popup_width,
+            height: popup_height,
+        };
+
+        let task_title = self
+            .app
+            .tasks
+            .iter()
+            .find(|view| view.snapshot.id == viewer.task_id)
+            .map_or("不明", |view| view.snapshot.title.as_str());
+
+        let block = Block::default()
+            .title(format!("ログ: {task_title}"))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan));
+        f.render_widget(Clear, popup_area);
+        f.render_widget(block.clone(), popup_area);
+        let inner = block.inner(popup_area);
+
+        if viewer.entries.is_empty() {
+            let paragraph =
+                Paragraph::new("ログはまだありません。").style(Style::default().fg(Color::DarkGray));
+            f.render_widget(paragraph, inner);
+            return;
+        }
+
+        let mut lines = Vec::new();
+        for entry in &viewer.entries {
+            let header = format!("[{}] {} ({})", format_timestamp(entry.ts), entry.action, entry.id);
+            lines.push(Line::from(Span::styled(
+                header,
+                Style::default().fg(Color::Yellow),
+            )));
+
+            let actor_line = format!("by {}", format_actor(&entry.actor));
+            lines.push(Line::from(Span::styled(
+                actor_line,
+                Style::default().fg(Color::Gray),
+            )));
+
+            if let Some(detail) = &entry.detail {
+                for detail_line in detail.lines() {
+                    lines.push(Line::from(detail_line.to_owned()));
+                }
+            }
+            lines.push(Line::from(""));
+        }
+
+        let paragraph = Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((viewer.scroll_offset, 0));
+        f.render_widget(paragraph, inner);
     }
 
     fn find_node_in_state(&self, task_id: TaskId) -> Option<&TreeNode> {

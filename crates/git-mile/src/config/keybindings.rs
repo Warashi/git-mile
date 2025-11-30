@@ -48,6 +48,9 @@ pub struct KeyBindingsConfig {
     pub comment_viewer: ViewerKeyBindings,
     /// Keybindings for the description viewer.
     pub description_viewer: ViewerKeyBindings,
+    /// Keybindings for the log viewer.
+    #[serde(default)]
+    pub log_viewer: ViewerKeyBindings,
 }
 
 /// Keybindings for the task list view.
@@ -81,6 +84,9 @@ pub struct TaskListKeyBindings {
     pub open_comment_viewer: Vec<String>,
     /// Open description viewer.
     pub open_description_viewer: Vec<String>,
+    /// Open log viewer.
+    #[serde(default = "default_open_log_viewer")]
+    pub open_log_viewer: Vec<String>,
     /// Edit filter.
     pub edit_filter: Vec<String>,
 }
@@ -130,6 +136,10 @@ pub struct ViewerKeyBindings {
     pub scroll_up_fast: Vec<String>,
 }
 
+fn default_open_log_viewer() -> Vec<String> {
+    vec_of_strings!["l", "L"]
+}
+
 impl Default for TaskListKeyBindings {
     fn default() -> Self {
         Self {
@@ -147,6 +157,7 @@ impl Default for TaskListKeyBindings {
             open_state_picker: vec_of_strings!["t", "T"],
             open_comment_viewer: vec_of_strings!["v", "V"],
             open_description_viewer: vec_of_strings!["d", "D"],
+            open_log_viewer: default_open_log_viewer(),
             edit_filter: vec_of_strings!["f", "F"],
         }
     }
@@ -395,6 +406,7 @@ fn validate_non_empty_bindings(config: &KeyBindingsConfig) -> Result<()> {
         config.task_list.open_description_viewer,
         "task_list.open_description_viewer"
     );
+    check_non_empty!(config.task_list.open_log_viewer, "task_list.open_log_viewer");
     check_non_empty!(config.task_list.edit_filter, "task_list.edit_filter");
 
     // TreeView
@@ -442,6 +454,12 @@ fn validate_non_empty_bindings(config: &KeyBindingsConfig) -> Result<()> {
         "description_viewer.scroll_up_fast"
     );
 
+    check_non_empty!(config.log_viewer.close, "log_viewer.close");
+    check_non_empty!(config.log_viewer.scroll_down, "log_viewer.scroll_down");
+    check_non_empty!(config.log_viewer.scroll_up, "log_viewer.scroll_up");
+    check_non_empty!(config.log_viewer.scroll_down_fast, "log_viewer.scroll_down_fast");
+    check_non_empty!(config.log_viewer.scroll_up_fast, "log_viewer.scroll_up_fast");
+
     Ok(())
 }
 
@@ -476,6 +494,7 @@ fn validate_key_expressions(config: &KeyBindingsConfig) -> Result<()> {
         &config.task_list.open_description_viewer,
         "task_list.open_description_viewer"
     );
+    validate_keys!(&config.task_list.open_log_viewer, "task_list.open_log_viewer");
     validate_keys!(&config.task_list.edit_filter, "task_list.edit_filter");
 
     // TreeView
@@ -523,6 +542,12 @@ fn validate_key_expressions(config: &KeyBindingsConfig) -> Result<()> {
         "description_viewer.scroll_up_fast"
     );
 
+    validate_keys!(&config.log_viewer.close, "log_viewer.close");
+    validate_keys!(&config.log_viewer.scroll_down, "log_viewer.scroll_down");
+    validate_keys!(&config.log_viewer.scroll_up, "log_viewer.scroll_up");
+    validate_keys!(&config.log_viewer.scroll_down_fast, "log_viewer.scroll_down_fast");
+    validate_keys!(&config.log_viewer.scroll_up_fast, "log_viewer.scroll_up_fast");
+
     Ok(())
 }
 
@@ -533,6 +558,7 @@ fn validate_keybindings(config: &KeyBindingsConfig) -> Result<()> {
     validate_view_keybindings("state_picker", collect_state_picker_bindings(config))?;
     validate_view_keybindings("comment_viewer", collect_comment_viewer_bindings(config))?;
     validate_view_keybindings("description_viewer", collect_description_viewer_bindings(config))?;
+    validate_view_keybindings("log_viewer", collect_log_viewer_bindings(config))?;
     Ok(())
 }
 
@@ -593,6 +619,10 @@ fn collect_task_list_bindings(config: &KeyBindingsConfig) -> HashMap<String, Vec
     bindings.insert(
         "open_description_viewer".to_string(),
         config.task_list.open_description_viewer.clone(),
+    );
+    bindings.insert(
+        "open_log_viewer".to_string(),
+        config.task_list.open_log_viewer.clone(),
     );
     bindings.insert("edit_filter".to_string(), config.task_list.edit_filter.clone());
     bindings
@@ -659,6 +689,22 @@ fn collect_description_viewer_bindings(config: &KeyBindingsConfig) -> HashMap<St
     bindings
 }
 
+fn collect_log_viewer_bindings(config: &KeyBindingsConfig) -> HashMap<String, Vec<String>> {
+    let mut bindings = HashMap::new();
+    bindings.insert("close".to_string(), config.log_viewer.close.clone());
+    bindings.insert("scroll_down".to_string(), config.log_viewer.scroll_down.clone());
+    bindings.insert("scroll_up".to_string(), config.log_viewer.scroll_up.clone());
+    bindings.insert(
+        "scroll_down_fast".to_string(),
+        config.log_viewer.scroll_down_fast.clone(),
+    );
+    bindings.insert(
+        "scroll_up_fast".to_string(),
+        config.log_viewer.scroll_up_fast.clone(),
+    );
+    bindings
+}
+
 /// View type for keybinding context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewType {
@@ -672,6 +718,8 @@ pub enum ViewType {
     CommentViewer,
     /// Description viewer.
     DescriptionViewer,
+    /// Log viewer.
+    LogViewer,
 }
 
 /// Action that can be performed in a view.
@@ -710,6 +758,8 @@ pub enum Action {
     OpenCommentViewer,
     /// Open description viewer.
     OpenDescriptionViewer,
+    /// Open log viewer.
+    OpenLogViewer,
     /// Edit filter.
     EditFilter,
 
@@ -749,13 +799,15 @@ impl KeyBindingsConfig {
             ViewType::TaskList => self.generate_task_list_help(),
             ViewType::TreeView => self.generate_tree_view_help(),
             ViewType::StatePicker => self.generate_state_picker_help(),
-            ViewType::CommentViewer | ViewType::DescriptionViewer => self.generate_viewer_help(),
+            ViewType::CommentViewer | ViewType::DescriptionViewer | ViewType::LogViewer => {
+                self.generate_viewer_help(view)
+            }
         }
     }
 
     fn generate_task_list_help(&self) -> String {
         format!(
-            "{}:移動 {}:ツリー {}:新規 {}:子タスク {}:編集 {}:コメント {}:コメント表示 {}:説明表示 {}:再読込 {}:親へ {}:IDコピー {}:状態 {}:フィルタ {}:終了",
+            "{}:移動 {}:ツリー {}:新規 {}:子タスク {}:編集 {}:コメント {}:コメント表示 {}:説明表示 {}:ログ {}:再読込 {}:親へ {}:IDコピー {}:状態 {}:フィルタ {}:終了",
             self.format_key_pair(&self.task_list.down, &self.task_list.up),
             self.format_first_key(&self.task_list.open_tree),
             self.format_first_key(&self.task_list.create_task),
@@ -764,6 +816,7 @@ impl KeyBindingsConfig {
             self.format_first_key(&self.task_list.add_comment),
             self.format_first_key(&self.task_list.open_comment_viewer),
             self.format_first_key(&self.task_list.open_description_viewer),
+            self.format_first_key(&self.task_list.open_log_viewer),
             self.format_first_key(&self.task_list.refresh),
             self.format_first_key(&self.task_list.jump_to_parent),
             self.format_first_key(&self.task_list.copy_task_id),
@@ -793,13 +846,19 @@ impl KeyBindingsConfig {
         )
     }
 
-    fn generate_viewer_help(&self) -> String {
+    fn generate_viewer_help(&self, view: ViewType) -> String {
+        let bindings = match view {
+            ViewType::CommentViewer => &self.comment_viewer,
+            ViewType::DescriptionViewer => &self.description_viewer,
+            ViewType::LogViewer => &self.log_viewer,
+            _ => unreachable!("viewer help called for non-viewer"),
+        };
         format!(
             "{}:スクロール {}/{}:半画面スクロール {}:閉じる",
-            self.format_key_pair(&self.comment_viewer.scroll_down, &self.comment_viewer.scroll_up),
-            self.format_first_key(&self.comment_viewer.scroll_down_fast),
-            self.format_first_key(&self.comment_viewer.scroll_up_fast),
-            self.format_first_key(&self.comment_viewer.close),
+            self.format_key_pair(&bindings.scroll_down, &bindings.scroll_up),
+            self.format_first_key(&bindings.scroll_down_fast),
+            self.format_first_key(&bindings.scroll_up_fast),
+            self.format_first_key(&bindings.close),
         )
     }
 
@@ -886,6 +945,7 @@ impl KeyBindingsConfig {
             (TaskList, OpenStatePicker) => &self.task_list.open_state_picker,
             (TaskList, OpenCommentViewer) => &self.task_list.open_comment_viewer,
             (TaskList, OpenDescriptionViewer) => &self.task_list.open_description_viewer,
+            (TaskList, OpenLogViewer) => &self.task_list.open_log_viewer,
             (TaskList, EditFilter) => &self.task_list.edit_filter,
 
             // TreeView
@@ -915,6 +975,13 @@ impl KeyBindingsConfig {
             (DescriptionViewer, ScrollUp) => &self.description_viewer.scroll_up,
             (DescriptionViewer, ScrollDownFast) => &self.description_viewer.scroll_down_fast,
             (DescriptionViewer, ScrollUpFast) => &self.description_viewer.scroll_up_fast,
+
+            // LogViewer
+            (LogViewer, Close) => &self.log_viewer.close,
+            (LogViewer, ScrollDown) => &self.log_viewer.scroll_down,
+            (LogViewer, ScrollUp) => &self.log_viewer.scroll_up,
+            (LogViewer, ScrollDownFast) => &self.log_viewer.scroll_down_fast,
+            (LogViewer, ScrollUpFast) => &self.log_viewer.scroll_up_fast,
 
             // Invalid combinations
             _ => &[],
@@ -953,6 +1020,7 @@ mod tests {
         assert_eq!(config.task_list.open_state_picker, vec!["t", "T"]);
         assert_eq!(config.task_list.open_comment_viewer, vec!["v", "V"]);
         assert_eq!(config.task_list.open_description_viewer, vec!["d", "D"]);
+        assert_eq!(config.task_list.open_log_viewer, vec!["l", "L"]);
         assert_eq!(config.task_list.edit_filter, vec!["f", "F"]);
 
         // TreeView のデフォルト値を確認
@@ -975,6 +1043,12 @@ mod tests {
         assert_eq!(config.comment_viewer.scroll_up, vec!["k", "K"]);
         assert_eq!(config.comment_viewer.scroll_down_fast, vec!["Ctrl+d"]);
         assert_eq!(config.comment_viewer.scroll_up_fast, vec!["Ctrl+u"]);
+
+        assert_eq!(config.log_viewer.close, vec!["q", "Q", "Esc"]);
+        assert_eq!(config.log_viewer.scroll_down, vec!["j", "J"]);
+        assert_eq!(config.log_viewer.scroll_up, vec!["k", "K"]);
+        assert_eq!(config.log_viewer.scroll_down_fast, vec!["Ctrl+d"]);
+        assert_eq!(config.log_viewer.scroll_up_fast, vec!["Ctrl+u"]);
     }
 
     #[test]
@@ -995,6 +1069,7 @@ mod tests {
             open_state_picker = ["t"]
             open_comment_viewer = ["v"]
             open_description_viewer = ["d"]
+            open_log_viewer = ["l"]
             edit_filter = ["f"]
 
             [tree_view]
@@ -1019,6 +1094,13 @@ mod tests {
             scroll_up_fast = ["Ctrl+u"]
 
             [description_viewer]
+            close = ["q"]
+            scroll_down = ["j"]
+            scroll_up = ["k"]
+            scroll_down_fast = ["Ctrl+d"]
+            scroll_up_fast = ["Ctrl+u"]
+
+            [log_viewer]
             close = ["q"]
             scroll_down = ["j"]
             scroll_up = ["k"]
@@ -1429,8 +1511,7 @@ mod tests {
     #[test]
     fn test_load_nonexistent_config() {
         // 存在しないパスからの読み込み
-        let result =
-            load_config(Some(std::path::Path::new("/nonexistent/path/config.toml"))).unwrap();
+        let result = load_config(Some(std::path::Path::new("/nonexistent/path/config.toml"))).unwrap();
 
         // ファイルが存在しない場合は None が返される
         assert!(result.is_none());

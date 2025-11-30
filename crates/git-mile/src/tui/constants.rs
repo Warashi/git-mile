@@ -32,6 +32,14 @@ pub const COMMENT_VIEWER_HEIGHT_PERCENT: u16 = 80;
 pub const COMMENT_VIEWER_MIN_WIDTH: u16 = 40;
 /// Minimum height for the comment viewer popup.
 pub const COMMENT_VIEWER_MIN_HEIGHT: u16 = 10;
+/// Width percentage for the log viewer popup before clamping.
+pub const LOG_VIEWER_WIDTH_PERCENT: u16 = 80;
+/// Height percentage for the log viewer popup before clamping.
+pub const LOG_VIEWER_HEIGHT_PERCENT: u16 = 80;
+/// Minimum width for the log viewer popup.
+pub const LOG_VIEWER_MIN_WIDTH: u16 = 50;
+/// Minimum height for the log viewer popup.
+pub const LOG_VIEWER_MIN_HEIGHT: u16 = 12;
 /// Height reserved for the breadcrumb row showing ancestors.
 pub const DETAIL_BREADCRUMB_HEIGHT: u16 = 3;
 /// Minimum height dedicated to the primary detail section.

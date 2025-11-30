@@ -7,6 +7,7 @@ use git_mile_core::event::Actor;
 use git_mile_core::id::TaskId;
 
 use super::task_visibility::TaskVisibility;
+use crate::event_log::{LogEntry, entries_from_events};
 use git_mile_app::TaskRepository;
 use git_mile_app::TaskView;
 use git_mile_app::WorkflowConfig;
@@ -169,6 +170,11 @@ impl<S: TaskStore> App<S> {
         self.children_index = cache.children_index;
         self.visibility.rebuild(&self.tasks, keep_id);
         Ok(())
+    }
+
+    pub(super) fn load_log_entries(&self, task: TaskId) -> Result<Vec<LogEntry>> {
+        let events = self.repository.get_log(task)?;
+        Ok(entries_from_events(&events))
     }
 
     /// Append a comment to the given task and refresh the view.

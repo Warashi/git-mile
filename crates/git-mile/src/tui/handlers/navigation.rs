@@ -1,8 +1,11 @@
 use anyhow::Result;
 use crossterm::event::{KeyEvent, KeyEventKind};
 use git_mile_app::TaskStore;
+use git_mile_core::id::TaskId;
 
-use super::super::view::{CommentViewerState, DescriptionViewerState, DetailFocus, Ui, UiAction};
+use super::super::view::{
+    CommentViewerState, DescriptionViewerState, DetailFocus, LogViewerState, Ui, UiAction,
+};
 use crate::config::{Action, ViewType};
 
 impl<S: TaskStore> Ui<S> {
@@ -21,6 +24,7 @@ impl<S: TaskStore> Ui<S> {
             DetailFocus::StatePicker => Ok(self.handle_state_picker_key(key)),
             DetailFocus::CommentViewer => Ok(self.handle_comment_viewer_key(key)),
             DetailFocus::DescriptionViewer => Ok(self.handle_description_viewer_key(key)),
+            DetailFocus::LogViewer => Ok(self.handle_log_viewer_key(key)),
         }
     }
 
@@ -63,6 +67,7 @@ impl<S: TaskStore> Ui<S> {
         {
             self.app.refresh_tasks()?;
             self.info("タスクを再読込しました");
+            self.reload_log_viewer();
             return Ok(None);
         }
 
@@ -141,6 +146,14 @@ impl<S: TaskStore> Ui<S> {
             .matches(ViewType::TaskList, Action::OpenDescriptionViewer, &key)
         {
             self.open_description_viewer();
+            return Ok(None);
+        }
+
+        if self
+            .keybindings
+            .matches(ViewType::TaskList, Action::OpenLogViewer, &key)
+        {
+            self.open_log_viewer()?;
             return Ok(None);
         }
 
@@ -279,6 +292,47 @@ impl<S: TaskStore> Ui<S> {
         None
     }
 
+    fn handle_log_viewer_key(&mut self, key: KeyEvent) -> Option<UiAction> {
+        if self.keybindings.matches(ViewType::LogViewer, Action::Close, &key) {
+            self.close_log_viewer();
+            return None;
+        }
+
+        if self
+            .keybindings
+            .matches(ViewType::LogViewer, Action::ScrollDown, &key)
+        {
+            self.log_viewer_scroll_down(1);
+            return None;
+        }
+
+        if self
+            .keybindings
+            .matches(ViewType::LogViewer, Action::ScrollUp, &key)
+        {
+            self.log_viewer_scroll_up(1);
+            return None;
+        }
+
+        if self
+            .keybindings
+            .matches(ViewType::LogViewer, Action::ScrollDownFast, &key)
+        {
+            self.log_viewer_scroll_down(10);
+            return None;
+        }
+
+        if self
+            .keybindings
+            .matches(ViewType::LogViewer, Action::ScrollUpFast, &key)
+        {
+            self.log_viewer_scroll_up(10);
+            return None;
+        }
+
+        None
+    }
+
     fn jump_to_parent(&mut self) {
         if let Some(task) = self.selected_task() {
             let parent_id = self
@@ -370,6 +424,64 @@ impl<S: TaskStore> Ui<S> {
     const fn description_viewer_scroll_up(&mut self, lines: u16) {
         if let Some(viewer) = &mut self.description_viewer {
             viewer.scroll_offset = viewer.scroll_offset.saturating_sub(lines);
+        }
+    }
+
+    fn open_log_viewer(&mut self) -> Result<()> {
+        let Some(task) = self.selected_task() else {
+            self.error("ログを表示するタスクが選択されていません");
+            return Ok(());
+        };
+
+        match self.app.load_log_entries(task.snapshot.id) {
+            Ok(entries) => {
+                self.log_viewer = Some(LogViewerState {
+                    task_id: task.snapshot.id,
+                    entries,
+                    scroll_offset: 0,
+                });
+                self.detail_focus = DetailFocus::LogViewer;
+            }
+            Err(err) => self.error(format!("ログの読み込みに失敗しました: {err}")),
+        }
+
+        Ok(())
+    }
+
+    fn close_log_viewer(&mut self) {
+        self.log_viewer = None;
+        self.detail_focus = DetailFocus::None;
+    }
+
+    fn log_viewer_scroll_down(&mut self, lines: u16) {
+        if let Some(viewer) = &mut self.log_viewer {
+            viewer.scroll_offset = viewer.scroll_offset.saturating_add(lines);
+        }
+    }
+
+    fn log_viewer_scroll_up(&mut self, lines: u16) {
+        if let Some(viewer) = &mut self.log_viewer {
+            viewer.scroll_offset = viewer.scroll_offset.saturating_sub(lines);
+        }
+    }
+
+    pub(in crate::tui) fn refresh_log_viewer_for(&mut self, task_id: TaskId) {
+        if let Some(viewer) = &mut self.log_viewer
+            && viewer.task_id == task_id
+        {
+            match self.app.load_log_entries(task_id) {
+                Ok(entries) => {
+                    viewer.entries = entries;
+                    viewer.scroll_offset = 0;
+                }
+                Err(err) => self.error(format!("ログの再読込に失敗しました: {err}")),
+            }
+        }
+    }
+
+    fn reload_log_viewer(&mut self) {
+        if let Some(viewer) = &self.log_viewer {
+            self.refresh_log_viewer_for(viewer.task_id);
         }
     }
 }

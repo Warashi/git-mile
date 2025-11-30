@@ -71,6 +71,7 @@ impl<S: TaskStore> Ui<S> {
                 self.app
                     .add_comment(task, body, &self.actor)
                     .context("コメントの保存に失敗しました")?;
+                self.refresh_log_viewer_for(task);
                 self.info("コメントを追加しました");
             }
             None => self.info("コメントをキャンセルしました"),
@@ -101,6 +102,7 @@ impl<S: TaskStore> Ui<S> {
                     .app
                     .create_task(data, &self.actor)
                     .context("タスクの作成に失敗しました")?;
+                self.refresh_log_viewer_for(parent);
                 self.info(format!("子タスクを作成しました: {id}"));
             }
             Ok(None) => self.info("タスク作成をキャンセルしました"),
@@ -117,6 +119,7 @@ impl<S: TaskStore> Ui<S> {
                     .update_task(task, data, &self.actor)
                     .context("タスクの更新に失敗しました")?;
                 if updated {
+                    self.refresh_log_viewer_for(task);
                     self.info("タスクを更新しました");
                 } else {
                     self.info("変更はありませんでした");

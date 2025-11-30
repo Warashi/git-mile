@@ -51,6 +51,7 @@ impl<S: TaskStore> Ui<S> {
             DetailFocus::StatePicker => ViewType::StatePicker,
             DetailFocus::CommentViewer => ViewType::CommentViewer,
             DetailFocus::DescriptionViewer => ViewType::DescriptionViewer,
+            DetailFocus::LogViewer => ViewType::LogViewer,
         };
 
         match self.detail_focus {

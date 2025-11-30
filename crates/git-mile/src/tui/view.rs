@@ -19,6 +19,7 @@ use super::clipboard::{ClipboardSink, default_clipboard};
 use super::constants::UI_MESSAGE_TTL_SECS;
 use super::tree_view::TreeViewState;
 use crate::config::KeyBindingsConfig;
+use crate::event_log::LogEntry;
 
 #[derive(Debug, Clone)]
 pub(super) struct StatePickerOption {
@@ -51,6 +52,13 @@ pub(super) struct DescriptionViewerState {
     pub(super) scroll_offset: u16,
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct LogViewerState {
+    pub(super) task_id: TaskId,
+    pub(super) entries: Vec<LogEntry>,
+    pub(super) scroll_offset: u16,
+}
+
 pub(super) struct StatePickerState {
     pub(super) task_id: TaskId,
     pub(super) options: Vec<StatePickerOption>,
@@ -70,6 +78,8 @@ pub(super) enum DetailFocus {
     CommentViewer,
     /// Focus on description viewer popup.
     DescriptionViewer,
+    /// Focus on log viewer popup.
+    LogViewer,
 }
 
 pub(super) struct Ui<S: TaskStore> {
@@ -87,6 +97,8 @@ pub(super) struct Ui<S: TaskStore> {
     pub(super) comment_viewer: Option<CommentViewerState>,
     /// Description viewer popup state.
     pub(super) description_viewer: Option<DescriptionViewerState>,
+    /// Log viewer popup state.
+    pub(super) log_viewer: Option<LogViewerState>,
     pub(super) clipboard: Box<dyn ClipboardSink>,
     /// Keybindings configuration.
     pub(super) keybindings: KeyBindingsConfig,
@@ -122,6 +134,7 @@ impl<S: TaskStore> Ui<S> {
             state_picker: None,
             comment_viewer: None,
             description_viewer: None,
+            log_viewer: None,
             clipboard,
             keybindings,
         };
@@ -176,6 +189,7 @@ impl<S: TaskStore> Ui<S> {
             DetailFocus::StatePicker => self.draw_state_picker_popup(f),
             DetailFocus::CommentViewer => self.draw_comment_viewer_popup(f),
             DetailFocus::DescriptionViewer => self.draw_description_viewer_popup(f),
+            DetailFocus::LogViewer => self.draw_log_viewer_popup(f),
             DetailFocus::None => {}
         }
     }
