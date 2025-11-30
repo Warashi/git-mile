@@ -352,13 +352,23 @@ impl<S: TaskStore> Ui<S> {
             )));
 
             if let Some(detail) = &entry.detail {
-                if entry.is_description {
-                    lines.push(Line::from(Span::styled(
-                        "description:",
-                        Style::default().fg(Color::Green),
-                    )));
+                let should_skip = entry
+                    .description_body
+                    .as_ref()
+                    .map_or(false, |body| body == detail);
+                if !should_skip {
+                    for detail_line in detail.lines() {
+                        lines.push(Line::from(detail_line.to_owned()));
+                    }
                 }
-                for detail_line in detail.lines() {
+            }
+
+            if let Some(description) = &entry.description_body {
+                lines.push(Line::from(Span::styled(
+                    "description:",
+                    Style::default().fg(Color::Green),
+                )));
+                for detail_line in description.lines() {
                     lines.push(Line::from(detail_line.to_owned()));
                 }
             }

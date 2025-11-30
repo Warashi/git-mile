@@ -19,8 +19,8 @@ pub struct LogEntry {
     pub action: String,
     /// Optional human-readable details.
     pub detail: Option<String>,
-    /// Whether the detail should be rendered as multi-line description content.
-    pub is_description: bool,
+    /// Optional description body (rendered separately as multi-line).
+    pub description_body: Option<String>,
 }
 
 /// Convert raw events to display-friendly entries.
@@ -32,20 +32,15 @@ pub fn entries_from_events(events: &[Event]) -> Vec<LogEntry> {
 /// Convert a single event to a display-friendly entry.
 #[must_use]
 pub fn entry_from_event(event: &Event) -> LogEntry {
+    let (detail, description_body) = detail_for_kind(&event.kind);
+
     LogEntry {
         id: event.id,
         ts: event.ts,
         actor: event.actor.clone(),
         action: action_for_kind(&event.kind),
-        detail: detail_for_kind(&event.kind),
-        is_description: matches!(
-            event.kind,
-            EventKind::TaskDescriptionSet { .. }
-                | EventKind::TaskCreated {
-                    description: Some(_),
-                    ..
-                }
-        ),
+        detail,
+        description_body,
     }
 }
 
@@ -103,7 +98,7 @@ fn action_for_kind(kind: &EventKind) -> String {
     .to_owned()
 }
 
-fn detail_for_kind(kind: &EventKind) -> Option<String> {
+fn detail_for_kind(kind: &EventKind) -> (Option<String>, Option<String>) {
     match kind {
         EventKind::TaskCreated {
             title,
@@ -128,37 +123,38 @@ fn detail_for_kind(kind: &EventKind) -> Option<String> {
                 parts.push(format!("assignees: {}", assignees.join(", ")));
             }
             let summary = join_parts(parts);
-            description.as_ref().map_or(summary.clone(), |desc| {
-                summary
-                    .map_or_else(|| desc.clone(), |prefix| format!("{prefix}\n{desc}"))
-                    .into()
-            })
+            (summary.or_else(|| description.clone()), description.clone())
         }
         EventKind::TaskStateSet { state, state_kind } => {
             let mut line = format!("state: {state}");
             if let Some(kind) = state_kind {
                 let _ = write!(&mut line, " ({})", kind.as_str());
             }
-            Some(line)
+            (Some(line), None)
         }
-        EventKind::TaskStateCleared => None,
-        EventKind::TaskTitleSet { title } => Some(format!("title: {title}")),
-        EventKind::TaskDescriptionSet { description } => description
-            .as_deref()
-            .map(ToOwned::to_owned)
-            .or_else(|| Some("description cleared".to_owned())),
-        EventKind::LabelsAdded { labels } => Some(format!("added: {}", labels.join(", "))),
-        EventKind::LabelsRemoved { labels } => Some(format!("removed: {}", labels.join(", "))),
-        EventKind::AssigneesAdded { assignees } => Some(format!("added: {}", assignees.join(", "))),
-        EventKind::AssigneesRemoved { assignees } => Some(format!("removed: {}", assignees.join(", "))),
+        EventKind::TaskStateCleared => (None, None),
+        EventKind::TaskTitleSet { title } => (Some(format!("title: {title}")), None),
+        EventKind::TaskDescriptionSet { description } => (
+            description
+                .as_deref()
+                .map(ToOwned::to_owned)
+                .or_else(|| Some("description cleared".to_owned())),
+            description.clone(),
+        ),
+        EventKind::LabelsAdded { labels } => (Some(format!("added: {}", labels.join(", "))), None),
+        EventKind::LabelsRemoved { labels } => (Some(format!("removed: {}", labels.join(", "))), None),
+        EventKind::AssigneesAdded { assignees } => (Some(format!("added: {}", assignees.join(", "))), None),
+        EventKind::AssigneesRemoved { assignees } => {
+            (Some(format!("removed: {}", assignees.join(", "))), None)
+        }
         EventKind::CommentAdded { body_md, .. } | EventKind::CommentUpdated { body_md, .. } => {
-            Some(body_md.clone())
+            (Some(body_md.clone()), None)
         }
         EventKind::ChildLinked { parent, child } | EventKind::ChildUnlinked { parent, child } => {
-            Some(format!("parent: {parent}, child: {child}"))
+            (Some(format!("parent: {parent}, child: {child}")), None)
         }
         EventKind::RelationAdded { kind, target } | EventKind::RelationRemoved { kind, target } => {
-            Some(format!("kind: {kind}, target: {target}"))
+            (Some(format!("kind: {kind}, target: {target}")), None)
         }
     }
 }
@@ -233,7 +229,7 @@ mod tests {
         );
 
         let entry = entry_from_event(&event);
-        assert!(entry.is_description);
+        assert_eq!(entry.description_body.as_deref(), Some("line1\nline2"));
         assert_eq!(entry.detail.as_deref(), Some("line1\nline2"));
     }
 
@@ -255,7 +251,7 @@ mod tests {
         );
 
         let entry = entry_from_event(&event);
-        assert!(entry.is_description);
-        assert_eq!(entry.detail.as_deref(), Some("title: t\nfirst\nsecond"));
+        assert_eq!(entry.description_body.as_deref(), Some("first\nsecond"));
+        assert_eq!(entry.detail.as_deref(), Some("title: t"));
     }
 }
