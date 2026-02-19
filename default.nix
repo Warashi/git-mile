@@ -1,25 +1,39 @@
 {
-  nixpkgs ? <nixpkgs>,
   system ? builtins.currentSystem,
+  flakeLock ? builtins.fromJSON (builtins.readFile ./flake.lock),
 }:
 let
-  craneSrc = builtins.fetchTarball {
-    url = "https://github.com/ipetkov/crane/archive/b5090e53e9d68c523a4bb9ad42b4737ee6747597.tar.gz";
-    sha256 = "sha256-nGBbXvEZVe/egCPVPFcu89RFtd8Rf6J+4RFoVCFec0A=";
-  };
+  lockNode =
+    name:
+    let
+      node = flakeLock.nodes.${name}.locked;
+    in
+    if node.type != "github" then
+      throw "default.nix expects ${name} in flake.lock to be a github source"
+    else
+      node;
 
-  rustOverlaySrc = builtins.fetchTarball {
-    url = "https://github.com/oxalica/rust-overlay/archive/4e8e5dfb8e649d3e05d9a173ce9a9cb0498e89c2.tar.gz";
-    sha256 = "sha256-EW7xlGJnCW3mKujn/F8me52NXB4nBtabArsRNwehtHM=";
-  };
+  sourceFromLock =
+    name:
+    let
+      node = lockNode name;
+    in
+    builtins.fetchTarball {
+      url = "https://github.com/${node.owner}/${node.repo}/archive/${node.rev}.tar.gz";
+      sha256 = node.narHash;
+    };
 
-  pkgs = import nixpkgs {
+  nixpkgsSrc = sourceFromLock "nixpkgs";
+  craneSrc = sourceFromLock "crane";
+  rustOverlaySrc = sourceFromLock "rust-overlay";
+
+  pkgs = import nixpkgsSrc {
     inherit system;
     overlays = [ (import rustOverlaySrc) ];
   };
 
   toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
-  craneLib = ((import craneSrc).mkLib pkgs).overrideToolchain (_: toolchain);
+  craneLib = (import craneSrc { inherit pkgs; }).overrideToolchain (_: toolchain);
   src = craneLib.cleanCargoSource ./.;
 
   commonArgs = {
