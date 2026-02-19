@@ -37,6 +37,7 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Create a new task with initial fields.
+    #[command(visible_alias = "create-task")]
     New {
         #[arg(long)]
         title: String,
@@ -57,6 +58,7 @@ enum Command {
     },
 
     /// Add a comment to an existing task.
+    #[command(visible_alias = "add-comment")]
     Comment {
         #[arg(long)]
         task: String,
@@ -69,6 +71,7 @@ enum Command {
     },
 
     /// Show event log for a task.
+    #[command(visible_alias = "list-task-events")]
     Log {
         #[arg(long)]
         task: String,
@@ -78,12 +81,14 @@ enum Command {
     },
 
     /// Show a materialized snapshot of a task.
+    #[command(visible_alias = "get-task")]
     Show {
         #[arg(long)]
         task: String,
     },
 
     /// List tasks with optional filters.
+    #[command(visible_alias = "list-tasks")]
     Ls {
         /// Match specific workflow states.
         #[arg(long = "state", short = 's')]
@@ -118,6 +123,81 @@ enum Command {
         /// Output format.
         #[arg(long = "format", value_enum, default_value_t = LsFormat::Table)]
         format: LsFormat,
+    },
+
+    /// List all comments on a task.
+    ListComments {
+        #[arg(long)]
+        task: String,
+        /// Output format.
+        #[arg(long = "format", value_enum, default_value_t = OutputFormat::Table)]
+        format: OutputFormat,
+    },
+
+    /// List all subtasks under a parent task.
+    ListSubtasks {
+        #[arg(long = "parent-task")]
+        parent_task: String,
+        /// Output format.
+        #[arg(long = "format", value_enum, default_value_t = OutputFormat::Table)]
+        format: OutputFormat,
+    },
+
+    /// List configured workflow states.
+    ListWorkflowStates {
+        /// Output format.
+        #[arg(long = "format", value_enum, default_value_t = OutputFormat::Table)]
+        format: OutputFormat,
+    },
+
+    /// Update fields on an existing task.
+    UpdateTask {
+        #[arg(long)]
+        task: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long)]
+        state: Option<String>,
+        #[arg(long)]
+        clear_state: bool,
+        #[arg(long = "add-label")]
+        add_labels: Vec<String>,
+        #[arg(long = "remove-label")]
+        remove_labels: Vec<String>,
+        #[arg(long = "add-assignee")]
+        add_assignees: Vec<String>,
+        #[arg(long = "remove-assignee")]
+        remove_assignees: Vec<String>,
+        #[arg(long = "link-parent")]
+        link_parents: Vec<String>,
+        #[arg(long = "unlink-parent")]
+        unlink_parents: Vec<String>,
+        #[arg(long)]
+        actor_name: Option<String>,
+        #[arg(long)]
+        actor_email: Option<String>,
+        /// Output format.
+        #[arg(long = "format", value_enum, default_value_t = OutputFormat::Table)]
+        format: OutputFormat,
+    },
+
+    /// Update an existing comment body.
+    UpdateComment {
+        #[arg(long)]
+        task: String,
+        #[arg(long)]
+        comment: String,
+        #[arg(long)]
+        body: String,
+        #[arg(long)]
+        actor_name: Option<String>,
+        #[arg(long)]
+        actor_email: Option<String>,
+        /// Output format.
+        #[arg(long = "format", value_enum, default_value_t = OutputFormat::Table)]
+        format: OutputFormat,
     },
 
     /// Launch interactive terminal UI.
@@ -180,6 +260,15 @@ pub(crate) enum LogFormat {
     /// Render a human-readable table.
     Table,
     /// Emit JSON array of raw events.
+    Json,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+#[value(rename_all = "snake_case")]
+pub(crate) enum OutputFormat {
+    /// Render a human-readable table.
+    Table,
+    /// Emit JSON output.
     Json,
 }
 
@@ -335,6 +424,24 @@ mod tests {
     }
 
     #[test]
+    fn parse_alias_commands() {
+        let cli = Cli::parse_from(["git-mile", "create-task", "--title", "Alias"]);
+        assert!(matches!(cli.cmd, Command::New { .. }));
+
+        let cli = Cli::parse_from(["git-mile", "add-comment", "--task", "t", "--message", "m"]);
+        assert!(matches!(cli.cmd, Command::Comment { .. }));
+
+        let cli = Cli::parse_from(["git-mile", "get-task", "--task", "t"]);
+        assert!(matches!(cli.cmd, Command::Show { .. }));
+
+        let cli = Cli::parse_from(["git-mile", "list-task-events", "--task", "t"]);
+        assert!(matches!(cli.cmd, Command::Log { .. }));
+
+        let cli = Cli::parse_from(["git-mile", "list-tasks"]);
+        assert!(matches!(cli.cmd, Command::Ls { .. }));
+    }
+
+    #[test]
     fn parse_ls_command_with_defaults() {
         let cli = Cli::parse_from(["git-mile", "ls"]);
         match cli.cmd {
@@ -451,6 +558,127 @@ mod tests {
                 assert_eq!(updated_until.as_deref(), Some("2024-12-31T23:59:59Z"));
             }
             _ => panic!("expected ls command"),
+        }
+    }
+
+    #[test]
+    fn parse_list_comments_command() {
+        let cli = Cli::parse_from(["git-mile", "list-comments", "--task", "t"]);
+        match cli.cmd {
+            Command::ListComments { task, format } => {
+                assert_eq!(task, "t");
+                assert_eq!(format, OutputFormat::Table);
+            }
+            _ => panic!("expected list-comments command"),
+        }
+    }
+
+    #[test]
+    fn parse_list_subtasks_command() {
+        let cli = Cli::parse_from(["git-mile", "list-subtasks", "--parent-task", "p", "--format", "json"]);
+        match cli.cmd {
+            Command::ListSubtasks {
+                parent_task,
+                format,
+            } => {
+                assert_eq!(parent_task, "p");
+                assert_eq!(format, OutputFormat::Json);
+            }
+            _ => panic!("expected list-subtasks command"),
+        }
+    }
+
+    #[test]
+    fn parse_list_workflow_states_command() {
+        let cli = Cli::parse_from(["git-mile", "list-workflow-states"]);
+        match cli.cmd {
+            Command::ListWorkflowStates { format } => {
+                assert_eq!(format, OutputFormat::Table);
+            }
+            _ => panic!("expected list-workflow-states command"),
+        }
+    }
+
+    #[test]
+    fn parse_update_task_command() {
+        let cli = Cli::parse_from([
+            "git-mile",
+            "update-task",
+            "--task",
+            "t",
+            "--title",
+            "new title",
+            "--clear-state",
+            "--add-label",
+            "l1",
+            "--remove-label",
+            "l2",
+            "--add-assignee",
+            "alice",
+            "--remove-assignee",
+            "bob",
+            "--link-parent",
+            "p1",
+            "--unlink-parent",
+            "p2",
+            "--format",
+            "json",
+        ]);
+        match cli.cmd {
+            Command::UpdateTask {
+                task,
+                title,
+                clear_state,
+                add_labels,
+                remove_labels,
+                add_assignees,
+                remove_assignees,
+                link_parents,
+                unlink_parents,
+                format,
+                ..
+            } => {
+                assert_eq!(task, "t");
+                assert_eq!(title.as_deref(), Some("new title"));
+                assert!(clear_state);
+                assert_eq!(add_labels, vec!["l1"]);
+                assert_eq!(remove_labels, vec!["l2"]);
+                assert_eq!(add_assignees, vec!["alice"]);
+                assert_eq!(remove_assignees, vec!["bob"]);
+                assert_eq!(link_parents, vec!["p1"]);
+                assert_eq!(unlink_parents, vec!["p2"]);
+                assert_eq!(format, OutputFormat::Json);
+            }
+            _ => panic!("expected update-task command"),
+        }
+    }
+
+    #[test]
+    fn parse_update_comment_command() {
+        let cli = Cli::parse_from([
+            "git-mile",
+            "update-comment",
+            "--task",
+            "t",
+            "--comment",
+            "c",
+            "--body",
+            "updated",
+        ]);
+        match cli.cmd {
+            Command::UpdateComment {
+                task,
+                comment,
+                body,
+                format,
+                ..
+            } => {
+                assert_eq!(task, "t");
+                assert_eq!(comment, "c");
+                assert_eq!(body, "updated");
+                assert_eq!(format, OutputFormat::Table);
+            }
+            _ => panic!("expected update-comment command"),
         }
     }
 
