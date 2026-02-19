@@ -1,16 +1,19 @@
 use std::io::Write;
 use std::path::Path;
 use std::str::FromStr;
+use std::cmp::Ordering;
 
 use anyhow::{Context, Result, anyhow};
 use git_mile_core::TaskFilter;
 use git_mile_core::event::Event;
+use git_mile_core::{StateKind, TaskSnapshot};
 use git_mile_core::id::TaskId;
 
 use crate::event_log::{
     entries_from_events, format_actor, format_timestamp, single_line_detail, truncate_detail,
 };
-use crate::{Command, LogFormat, LsFormat};
+use crate::mcp::{TaskCommentEntry, WorkflowStateEntry, WorkflowStatesResponse};
+use crate::{Command, LogFormat, LsFormat, OutputFormat};
 use git_mile_app::actor_from_params_or_default;
 use git_mile_app::{
     CommentInput, CreateTaskInput, TaskFilterBuilder, TaskRepository, TaskService, TaskStore, WorkflowConfig,
@@ -86,6 +89,22 @@ pub fn run<S: TaskStore, R: TaskStore>(
             text,
             format,
         ),
+        Command::ListComments { task, format } => {
+            handle_list_comments(repository, &task, format, &mut std::io::stdout())
+        }
+        Command::ListSubtasks {
+            parent_task,
+            format,
+        } => handle_list_subtasks(
+            service,
+            repository,
+            &parent_task,
+            format,
+            &mut std::io::stdout(),
+        ),
+        Command::ListWorkflowStates { format } => {
+            handle_list_workflow_states(service, format, &mut std::io::stdout())
+        }
         _ => unreachable!("Unhandled command routed to TaskService"),
     }
 }
@@ -208,10 +227,131 @@ fn handle_ls<S: TaskStore, R: TaskStore>(
     }
 
     match format {
-        LsFormat::Table => render_task_table(&tasks, workflow),
+        LsFormat::Table => render_task_table(&tasks, workflow, &mut std::io::stdout())?,
         LsFormat::Json => println!("{}", serde_json::to_string_pretty(&tasks)?),
     }
     Ok(())
+}
+
+fn handle_list_comments<R: TaskStore>(
+    repository: &TaskRepository<R>,
+    task: &str,
+    format: OutputFormat,
+    writer: &mut dyn Write,
+) -> Result<()> {
+    let task_id = parse_task_id(task)?;
+    let view = repository.get_view(task_id)?;
+    let entries = view
+        .comments
+        .iter()
+        .map(|comment| TaskCommentEntry {
+            comment_id: comment.id.to_string(),
+            actor: comment.actor.clone(),
+            body_md: comment.body.clone(),
+            created_at: format_timestamp(comment.created_at),
+            updated_at: comment.updated_at.map(format_timestamp),
+        })
+        .collect::<Vec<_>>();
+
+    match format {
+        OutputFormat::Table => {
+            writeln!(writer, "CommentId | Actor | Created | Updated | Body")?;
+            writeln!(writer, "--------- | ----- | ------- | ------- | ----")?;
+            for entry in &entries {
+                let actor = format_actor(&entry.actor);
+                let updated = entry.updated_at.as_deref().unwrap_or("-");
+                let body = truncate_detail(&single_line_detail(&entry.body_md), 80);
+                writeln!(
+                    writer,
+                    "{} | {} | {} | {} | {}",
+                    entry.comment_id, actor, entry.created_at, updated, body
+                )?;
+            }
+            Ok(())
+        }
+        OutputFormat::Json => {
+            let json = serde_json::to_string_pretty(&entries)?;
+            writeln!(writer, "{json}")?;
+            Ok(())
+        }
+    }
+}
+
+fn handle_list_subtasks<S: TaskStore, R: TaskStore>(
+    service: &TaskService<S>,
+    repository: &TaskRepository<R>,
+    parent_task: &str,
+    format: OutputFormat,
+    writer: &mut dyn Write,
+) -> Result<()> {
+    let parent_task_id = parse_task_id(parent_task)?;
+    repository.get_snapshot(parent_task_id)?;
+    let child_ids = repository.list_children(parent_task_id)?;
+
+    let mut subtasks = Vec::with_capacity(child_ids.len());
+    for child in child_ids {
+        subtasks.push(repository.get_snapshot(child)?);
+    }
+    subtasks.sort_by(compare_snapshots);
+
+    match format {
+        OutputFormat::Table => render_task_table(&subtasks, service.workflow(), writer),
+        OutputFormat::Json => {
+            let json = serde_json::to_string_pretty(&subtasks)?;
+            writeln!(writer, "{json}")?;
+            Ok(())
+        }
+    }
+}
+
+fn handle_list_workflow_states<S: TaskStore>(
+    service: &TaskService<S>,
+    format: OutputFormat,
+    writer: &mut dyn Write,
+) -> Result<()> {
+    let workflow = service.workflow();
+    let response = WorkflowStatesResponse {
+        restricted: workflow.is_restricted(),
+        default_state: workflow.default_state().map(str::to_owned),
+        states: workflow
+            .states()
+            .iter()
+            .map(|state| WorkflowStateEntry {
+                value: state.value().to_owned(),
+                label: state.label().map(str::to_owned),
+                kind: state.kind(),
+            })
+            .collect(),
+    };
+
+    match format {
+        OutputFormat::Table => {
+            writeln!(writer, "Restricted | {}", response.restricted)?;
+            writeln!(writer, "DefaultState | {}", response.default_state.as_deref().unwrap_or("-"))?;
+            writeln!(writer, "Value | Label | Kind | Default")?;
+            writeln!(writer, "----- | ----- | ---- | -------")?;
+            for state in &response.states {
+                let label = state.label.as_deref().unwrap_or("-");
+                let kind = format_state_kind(state.kind.as_ref());
+                let is_default = if response.default_state.as_deref() == Some(state.value.as_str()) {
+                    "yes"
+                } else {
+                    "no"
+                };
+                writeln!(
+                    writer,
+                    "{} | {} | {} | {}",
+                    state.value, label, kind, is_default
+                )?;
+            }
+            Ok(())
+        }
+        OutputFormat::Json => {
+            let json = serde_json::to_string_pretty(&response)?;
+            writeln!(writer, "{json}")?;
+            Ok(())
+        }
+    }
 }
 
 struct CliFilterArgs {
@@ -258,9 +398,13 @@ fn build_filter(args: CliFilterArgs) -> Result<TaskFilter> {
     builder.build().map_err(|err| anyhow!(err))
 }
 
-fn render_task_table(tasks: &[git_mile_core::TaskSnapshot], workflow: &WorkflowConfig) {
-    println!("ID | State | Title | Labels | Assignees | Updated");
-    println!("-- | ----- | ----- | ------ | --------- | -------");
+fn render_task_table(
+    tasks: &[TaskSnapshot],
+    workflow: &WorkflowConfig,
+    writer: &mut dyn Write,
+) -> Result<()> {
+    writeln!(writer, "ID | State | Title | Labels | Assignees | Updated")?;
+    writeln!(writer, "-- | ----- | ----- | ------ | --------- | -------")?;
 
     for snapshot in tasks {
         let state_display = snapshot.state.as_deref().map_or_else(
@@ -286,11 +430,13 @@ fn render_task_table(tasks: &[git_mile_core::TaskSnapshot], workflow: &WorkflowC
         };
         let updated = snapshot.updated_rfc3339.as_deref().unwrap_or("-").to_string();
 
-        println!(
+        writeln!(
+            writer,
             "{} | {} | {} | {} | {} | {}",
             snapshot.id, state_display, snapshot.title, labels, assignees, updated
-        );
+        )?;
     }
+    Ok(())
 }
 
 fn render_log_table(events: &[Event], writer: &mut dyn Write) -> Result<()> {
@@ -311,6 +457,19 @@ fn render_log_table(events: &[Event], writer: &mut dyn Write) -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+fn compare_snapshots(a: &TaskSnapshot, b: &TaskSnapshot) -> Ordering {
+    match (a.updated_at(), b.updated_at()) {
+        (Some(left), Some(right)) => right.cmp(&left),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => a.id.cmp(&b.id),
+    }
+}
+
+fn format_state_kind(kind: Option<&StateKind>) -> String {
+    kind.map_or_else(|| "-".to_owned(), |state_kind| state_kind.as_str().to_owned())
 }
 
 fn parse_task_ids(inputs: Vec<String>) -> Result<Vec<TaskId>> {
@@ -365,6 +524,12 @@ mod tests {
                 .entry(event.task)
                 .or_default()
                 .push(event.clone());
+            {
+                let mut list = guard(&self.inner.list);
+                if !list.contains(&event.task) {
+                    list.push(event.task);
+                }
+            }
             let oid = {
                 let mut counter = guard(&self.inner.next_oid);
                 let oid = fake_oid(*counter);
@@ -714,6 +879,98 @@ mod tests {
 
         let calls = store.load_calls();
         assert_eq!(calls, vec![task]);
+        Ok(())
+    }
+
+    #[test]
+    fn handle_list_comments_outputs_json_entries() -> Result<()> {
+        let (service, repository, _store) = service_with_store();
+        let actor = sample_actor();
+        let created = service.create_with_parents(git_mile_app::CreateTaskInput {
+            title: "task with comments".into(),
+            state: None,
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            description: None,
+            parents: Vec::new(),
+            actor: actor.clone(),
+        })?;
+        let task = created.task;
+        service.add_comment(git_mile_app::CommentInput {
+            task,
+            message: "first comment".into(),
+            actor,
+        })?;
+
+        let mut output = Vec::new();
+        super::handle_list_comments(&repository, &task.to_string(), OutputFormat::Json, &mut output)?;
+
+        let text = String::from_utf8(output).context("comment output must be utf8")?;
+        let comments: Vec<TaskCommentEntry> = serde_json::from_str(&text)?;
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].body_md, "first comment");
+        Ok(())
+    }
+
+    #[test]
+    fn handle_list_subtasks_orders_by_updated_desc() -> Result<()> {
+        let (service, repository, _store) = service_with_store();
+        let actor = sample_actor();
+        let parent = service.create_with_parents(git_mile_app::CreateTaskInput {
+            title: "parent".into(),
+            state: None,
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            description: None,
+            parents: Vec::new(),
+            actor: actor.clone(),
+        })?;
+        let child_one = service.create_with_parents(git_mile_app::CreateTaskInput {
+            title: "child one".into(),
+            state: None,
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            description: None,
+            parents: vec![parent.task],
+            actor: actor.clone(),
+        })?;
+        let child_two = service.create_with_parents(git_mile_app::CreateTaskInput {
+            title: "child two".into(),
+            state: None,
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            description: None,
+            parents: vec![parent.task],
+            actor,
+        })?;
+
+        let mut output = Vec::new();
+        super::handle_list_subtasks(
+            &service,
+            &repository,
+            &parent.task.to_string(),
+            OutputFormat::Json,
+            &mut output,
+        )?;
+        let text = String::from_utf8(output).context("subtask output must be utf8")?;
+        let subtasks: Vec<TaskSnapshot> = serde_json::from_str(&text)?;
+        assert_eq!(subtasks.len(), 2);
+        assert_eq!(subtasks[0].id, child_two.task);
+        assert_eq!(subtasks[1].id, child_one.task);
+        Ok(())
+    }
+
+    #[test]
+    fn handle_list_workflow_states_outputs_json_shape() -> Result<()> {
+        let (service, _repository, _store) = service_with_store();
+        let mut output = Vec::new();
+
+        super::handle_list_workflow_states(&service, OutputFormat::Json, &mut output)?;
+
+        let text = String::from_utf8(output).context("workflow output must be utf8")?;
+        let response: WorkflowStatesResponse = serde_json::from_str(&text)?;
+        assert!(!response.restricted);
+        assert!(response.default_state.is_none());
         Ok(())
     }
 }
