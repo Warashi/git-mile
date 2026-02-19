@@ -62,6 +62,36 @@
           system,
           ...
         }:
+        let
+          toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+          craneLib = (inputs.crane.mkLib pkgs).overrideToolchain (_: toolchain);
+          src = craneLib.cleanCargoSource ./.;
+          commonArgs = {
+            inherit src;
+            pname = "git-mile";
+            version = "0.1.0";
+            strictDeps = true;
+            nativeBuildInputs = [ pkgs.perl ];
+          };
+          cargoArtifacts = craneLib.buildDepsOnly (commonArgs // { cargoExtraArgs = "--package git-mile"; });
+          workspaceArtifacts = craneLib.buildDepsOnly (
+            commonArgs // { cargoExtraArgs = "--workspace --all-features"; }
+          );
+          gitMilePackage = craneLib.buildPackage (
+            commonArgs
+            // {
+              inherit cargoArtifacts;
+              cargoExtraArgs = "--package git-mile";
+            }
+          );
+          nextestCheck = craneLib.cargoNextest (
+            commonArgs
+            // {
+              cargoArtifacts = workspaceArtifacts;
+              cargoNextestExtraArgs = "--workspace --all-features";
+            }
+          );
+        in
         {
           _module.args.pkgs = import inputs.nixpkgs {
             inherit system;
@@ -95,40 +125,38 @@
           };
 
           packages = rec {
-            git-mile = pkgs.callPackage ./. { };
+            git-mile = gitMilePackage;
             default = git-mile;
           };
 
-          devshells.default =
-            let
-              overlays = [ (import inputs.rust-overlay) ];
-              pkgs = import inputs.nixpkgs { inherit system overlays; };
-            in
-            with pkgs;
-            {
-              env = [
-                {
-                  name = "LIBCLANG_PATH";
-                  value = "${llvmPackages.libclang.lib}/lib";
-                }
-              ];
-              devshell = {
-                packages = [
-                  clang
-                  just
-                  llvmPackages.libclang
-                  nixfmt
-                  tombi
-                  (rust-bin.fromRustupToolchainFile ./rust-toolchain.toml)
-                ]
-                ++ (lib.optional stdenv.hostPlatform.isLinux cargo-llvm-cov);
-                startup = {
-                  pre-commit = {
-                    text = config.pre-commit.installationScript;
-                  };
+          checks = {
+            cargo-nextest = nextestCheck;
+          };
+
+          devshells.default = with pkgs; {
+            env = [
+              {
+                name = "LIBCLANG_PATH";
+                value = "${llvmPackages.libclang.lib}/lib";
+              }
+            ];
+            devshell = {
+              packages = [
+                clang
+                just
+                llvmPackages.libclang
+                nixfmt
+                tombi
+                toolchain
+              ]
+              ++ (lib.optional stdenv.hostPlatform.isLinux cargo-llvm-cov);
+              startup = {
+                pre-commit = {
+                  text = config.pre-commit.installationScript;
                 };
               };
             };
+          };
         };
     };
 }
