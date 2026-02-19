@@ -1,6 +1,9 @@
 {
   inputs = {
     # keep-sorted start block=yes
+    crane = {
+      url = "github:ipetkov/crane";
+    };
     devshell = {
       url = "github:numtide/devshell";
       inputs = {
@@ -21,11 +24,15 @@
     };
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
-      inputs.nixpkgs.follows = "nixpkgs";
+      inputs = {
+        nixpkgs.follows = "nixpkgs";
+      };
     };
     treefmt-nix = {
       url = "github:numtide/treefmt-nix";
-      inputs.nixpkgs.follows = "nixpkgs";
+      inputs = {
+        nixpkgs.follows = "nixpkgs";
+      };
     };
     # keep-sorted end
   };
