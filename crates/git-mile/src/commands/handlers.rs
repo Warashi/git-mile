@@ -1095,6 +1095,37 @@ mod tests {
     }
 
     #[test]
+    fn run_update_comment_rejects_missing_comment() -> Result<()> {
+        let (service, repository, _store) = service_with_store();
+        let created = service.create_with_parents(git_mile_app::CreateTaskInput {
+            title: "task".into(),
+            state: None,
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            description: None,
+            parents: Vec::new(),
+            actor: sample_actor(),
+        })?;
+
+        let err = run(
+            Command::UpdateComment {
+                task: created.task.to_string(),
+                comment: EventId::new().to_string(),
+                body: "after".into(),
+                actor_name: Some("alice".into()),
+                actor_email: Some("alice@example.invalid".into()),
+                format: OutputFormat::Json,
+            },
+            &service,
+            &repository,
+            Path::new("."),
+        )
+        .expect_err("must reject missing comment");
+        assert!(err.to_string().contains("not found"));
+        Ok(())
+    }
+
+    #[test]
     fn run_ls_lists_all_tasks() -> Result<()> {
         let (service, repository, store) = service_with_store();
         let task = TaskId::new();

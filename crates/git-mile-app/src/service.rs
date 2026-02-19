@@ -406,6 +406,34 @@ mod tests {
     }
 
     #[test]
+    fn update_task_noop_does_not_append_events() -> Result<()> {
+        let (service, _repo, store) = service_with_store();
+        let actor = sample_actor();
+        let created = service.create_with_parents(CreateTaskInput {
+            title: "Original".into(),
+            state: None,
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            description: None,
+            parents: Vec::new(),
+            actor: actor.clone(),
+        })?;
+        let before = store.appended().len();
+
+        service.update_task(
+            created.task,
+            crate::task_patch::TaskUpdate::default(),
+            &[],
+            &[],
+            &actor,
+        )?;
+
+        let after = store.appended().len();
+        assert_eq!(after, before);
+        Ok(())
+    }
+
+    #[test]
     fn update_comment_appends_comment_updated_event() -> Result<()> {
         let (service, _repo, store) = service_with_store();
         let actor = sample_actor();
