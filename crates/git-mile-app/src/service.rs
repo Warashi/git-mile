@@ -1,13 +1,14 @@
 use anyhow::{Result, anyhow};
 use git_mile_core::TaskSnapshot;
-use git_mile_core::event::{Actor, Event};
-use git_mile_core::id::TaskId;
+use git_mile_core::event::{Actor, Event, EventKind};
+use git_mile_core::id::{EventId, TaskId};
 use git2::Oid;
 
 use std::path::PathBuf;
 
 use crate::config::{HooksConfig, WorkflowConfig};
 use crate::task_log::ordered_events;
+use crate::task_patch::TaskUpdate;
 use crate::task_writer::{CommentRequest, CreateTaskRequest, TaskStore, TaskWriter};
 
 /// Service façade that encapsulates all task-related side effects.
@@ -100,6 +101,58 @@ impl<S: TaskStore> TaskService<S> {
             .first()
             .ok_or_else(|| anyhow!("TaskWriter returned no events for add_comment"))?;
         Ok(CommentOutput { task, oid })
+    }
+
+    /// Apply a patch to an existing task.
+    ///
+    /// # Errors
+    /// Returns an error if validation fails or appending events fails.
+    pub fn update_task(
+        &self,
+        task: TaskId,
+        patch: TaskUpdate,
+        link_parents: &[TaskId],
+        unlink_parents: &[TaskId],
+        actor: &Actor,
+    ) -> Result<()> {
+        self.writer.update_task(task, patch, actor)?;
+        if !link_parents.is_empty() {
+            self.writer.link_parents(task, link_parents, actor)?;
+        }
+        if !unlink_parents.is_empty() {
+            self.writer.unlink_parents(task, unlink_parents, actor)?;
+        }
+        Ok(())
+    }
+
+    /// Update an existing comment body.
+    ///
+    /// # Errors
+    /// Returns an error if the task/comment does not exist or appending fails.
+    pub fn update_comment(
+        &self,
+        task: TaskId,
+        comment_id: EventId,
+        body_md: String,
+        actor: &Actor,
+    ) -> Result<()> {
+        if !self.store().task_exists(task).map_err(Into::into)? {
+            return Err(anyhow!("Task not found: {task}"));
+        }
+
+        let events = self.store().load_events(task).map_err(Into::into)?;
+        let comment_exists = events
+            .iter()
+            .any(|event| matches!(event.kind, EventKind::CommentAdded { comment_id: id, .. } if id == comment_id));
+
+        if !comment_exists {
+            return Err(anyhow!("Comment {comment_id} not found in task {task}"));
+        }
+
+        let mut event = Event::new(task, actor, EventKind::CommentUpdated { comment_id, body_md });
+        event.lamport = events.iter().map(|ev| ev.lamport).max().unwrap_or(0) + 1;
+        self.store().append_event(&event).map_err(Into::into)?;
+        Ok(())
     }
 
     /// Build a [`TaskSnapshot`] for the given task by replaying events.
@@ -315,6 +368,100 @@ mod tests {
         let ids: Vec<_> = log.iter().map(|ev| ev.id).collect();
 
         assert_eq!(vec![earlier.id, later.id], ids);
+        Ok(())
+    }
+
+    #[test]
+    fn update_task_appends_patch_events() -> Result<()> {
+        let (service, _repo, store) = service_with_store();
+        let actor = sample_actor();
+        let created = service.create_with_parents(CreateTaskInput {
+            title: "Original".into(),
+            state: None,
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            description: None,
+            parents: Vec::new(),
+            actor: actor.clone(),
+        })?;
+
+        service.update_task(
+            created.task,
+            crate::task_patch::TaskUpdate {
+                title: Some("Renamed".into()),
+                ..crate::task_patch::TaskUpdate::default()
+            },
+            &[],
+            &[],
+            &actor,
+        )?;
+
+        let appended = store.appended();
+        assert!(
+            appended
+                .iter()
+                .any(|event| matches!(event.kind, EventKind::TaskTitleSet { .. }))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn update_comment_appends_comment_updated_event() -> Result<()> {
+        let (service, _repo, store) = service_with_store();
+        let actor = sample_actor();
+        let created = service.create_with_parents(CreateTaskInput {
+            title: "Original".into(),
+            state: None,
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            description: None,
+            parents: Vec::new(),
+            actor: actor.clone(),
+        })?;
+        let comment = service.add_comment(CommentInput {
+            task: created.task,
+            message: "before".into(),
+            actor: actor.clone(),
+        })?;
+
+        let comment_id = store
+            .appended()
+            .iter()
+            .find_map(|event| match &event.kind {
+                EventKind::CommentAdded { comment_id, .. } => Some(*comment_id),
+                _ => None,
+            })
+            .ok_or_else(|| anyhow!("comment id missing"))?;
+
+        service.update_comment(created.task, comment_id, "after".into(), &actor)?;
+        let appended = store.appended();
+        assert!(
+            appended
+                .iter()
+                .any(|event| matches!(event.kind, EventKind::CommentUpdated { .. }))
+        );
+        assert_eq!(comment.task, created.task);
+        Ok(())
+    }
+
+    #[test]
+    fn update_comment_rejects_unknown_comment() -> Result<()> {
+        let (service, _repo, _store) = service_with_store();
+        let actor = sample_actor();
+        let created = service.create_with_parents(CreateTaskInput {
+            title: "Original".into(),
+            state: None,
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            description: None,
+            parents: Vec::new(),
+            actor: actor.clone(),
+        })?;
+
+        let error = service
+            .update_comment(created.task, EventId::new(), "after".into(), &actor)
+            .expect_err("must reject unknown comment");
+        assert!(error.to_string().contains("not found"));
         Ok(())
     }
 
