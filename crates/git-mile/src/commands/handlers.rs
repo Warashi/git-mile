@@ -7,7 +7,7 @@ use anyhow::{Context, Result, anyhow};
 use git_mile_core::TaskFilter;
 use git_mile_core::event::Event;
 use git_mile_core::{StateKind, TaskSnapshot};
-use git_mile_core::id::TaskId;
+use git_mile_core::id::{EventId, TaskId};
 
 use crate::event_log::{
     entries_from_events, format_actor, format_timestamp, single_line_detail, truncate_detail,
@@ -16,7 +16,8 @@ use crate::mcp::{TaskCommentEntry, WorkflowStateEntry, WorkflowStatesResponse};
 use crate::{Command, LogFormat, LsFormat, OutputFormat};
 use git_mile_app::actor_from_params_or_default;
 use git_mile_app::{
-    CommentInput, CreateTaskInput, TaskFilterBuilder, TaskRepository, TaskService, TaskStore, WorkflowConfig,
+    CommentInput, CreateTaskInput, DescriptionPatch, SetDiff, StatePatch, TaskFilterBuilder,
+    TaskRepository, TaskService, TaskStore, TaskUpdate, WorkflowConfig,
 };
 
 pub fn run<S: TaskStore, R: TaskStore>(
@@ -105,6 +106,58 @@ pub fn run<S: TaskStore, R: TaskStore>(
         Command::ListWorkflowStates { format } => {
             handle_list_workflow_states(service, format, &mut std::io::stdout())
         }
+        Command::UpdateTask {
+            task,
+            title,
+            description,
+            state,
+            clear_state,
+            add_labels,
+            remove_labels,
+            add_assignees,
+            remove_assignees,
+            link_parents,
+            unlink_parents,
+            actor_name,
+            actor_email,
+            format,
+        } => handle_update_task(
+            service,
+            task,
+            title,
+            description,
+            state,
+            clear_state,
+            add_labels,
+            remove_labels,
+            add_assignees,
+            remove_assignees,
+            link_parents,
+            unlink_parents,
+            actor_name.as_deref(),
+            actor_email.as_deref(),
+            repo_root,
+            format,
+            &mut std::io::stdout(),
+        ),
+        Command::UpdateComment {
+            task,
+            comment,
+            body,
+            actor_name,
+            actor_email,
+            format,
+        } => handle_update_comment(
+            service,
+            &task,
+            &comment,
+            body,
+            actor_name.as_deref(),
+            actor_email.as_deref(),
+            repo_root,
+            format,
+            &mut std::io::stdout(),
+        ),
         _ => unreachable!("Unhandled command routed to TaskService"),
     }
 }
@@ -354,6 +407,105 @@ fn handle_list_workflow_states<S: TaskStore>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn handle_update_task<S: TaskStore>(
+    service: &TaskService<S>,
+    task: String,
+    title: Option<String>,
+    description: Option<String>,
+    state: Option<String>,
+    clear_state: bool,
+    add_labels: Vec<String>,
+    remove_labels: Vec<String>,
+    add_assignees: Vec<String>,
+    remove_assignees: Vec<String>,
+    link_parents: Vec<String>,
+    unlink_parents: Vec<String>,
+    actor_name: Option<&str>,
+    actor_email: Option<&str>,
+    repo_root: &Path,
+    format: OutputFormat,
+    writer: &mut dyn Write,
+) -> Result<()> {
+    if let Some(state_value) = state.as_deref() {
+        service.workflow().validate_state(Some(state_value))?;
+    }
+
+    let task_id = parse_task_id(&task)?;
+    let link_parent_ids = parse_task_ids(link_parents)?;
+    let unlink_parent_ids = parse_task_ids(unlink_parents)?;
+    let actor = actor_from_params_or_default(actor_name, actor_email, repo_root);
+
+    let patch = TaskUpdate {
+        title,
+        state: state.map_or_else(
+            || {
+                if clear_state {
+                    Some(StatePatch::Clear)
+                } else {
+                    None
+                }
+            },
+            |value| Some(StatePatch::Set { state: value }),
+        ),
+        description: description.map(|body| DescriptionPatch::Set { description: body }),
+        labels: SetDiff {
+            added: add_labels,
+            removed: remove_labels,
+        },
+        assignees: SetDiff {
+            added: add_assignees,
+            removed: remove_assignees,
+        },
+    };
+
+    service.update_task(task_id, patch, &link_parent_ids, &unlink_parent_ids, &actor)?;
+    let snapshot = service.materialize(task_id)?;
+    match format {
+        OutputFormat::Table => render_task_table(&[snapshot], service.workflow(), writer),
+        OutputFormat::Json => {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&snapshot)?)?;
+            Ok(())
+        }
+    }
+}
+
+fn handle_update_comment<S: TaskStore>(
+    service: &TaskService<S>,
+    task: &str,
+    comment: &str,
+    body: String,
+    actor_name: Option<&str>,
+    actor_email: Option<&str>,
+    repo_root: &Path,
+    format: OutputFormat,
+    writer: &mut dyn Write,
+) -> Result<()> {
+    let task_id = parse_task_id(task)?;
+    let comment_id = parse_event_id(comment)?;
+    let actor = actor_from_params_or_default(actor_name, actor_email, repo_root);
+
+    service.update_comment(task_id, comment_id, body, &actor)?;
+
+    match format {
+        OutputFormat::Table => {
+            writeln!(writer, "TaskId | CommentId | Status")?;
+            writeln!(writer, "------ | --------- | ------")?;
+            writeln!(writer, "{task_id} | {comment_id} | updated")?;
+            Ok(())
+        }
+        OutputFormat::Json => {
+            let payload = serde_json::json!({
+                "task_id": task_id.to_string(),
+                "comment_id": comment_id.to_string(),
+                "status": "updated"
+            });
+            writeln!(writer, "{}", serde_json::to_string_pretty(&payload)?)?;
+            Ok(())
+        }
+    }
+}
+
 struct CliFilterArgs {
     states: Vec<String>,
     labels: Vec<String>,
@@ -478,6 +630,10 @@ fn parse_task_ids(inputs: Vec<String>) -> Result<Vec<TaskId>> {
 
 fn parse_task_id(raw: &str) -> Result<TaskId> {
     TaskId::from_str(raw).with_context(|| format!("Invalid task id: {raw}"))
+}
+
+fn parse_event_id(raw: &str) -> Result<EventId> {
+    EventId::from_str(raw).with_context(|| format!("Invalid comment id: {raw}"))
 }
 
 #[cfg(test)]
@@ -633,6 +789,14 @@ mod tests {
             panic!("expected invalid id error");
         };
         assert!(err.to_string().contains("Invalid task id"));
+    }
+
+    #[test]
+    fn parse_event_id_rejects_invalid_value() {
+        let Err(err) = parse_event_id("not-an-event-id") else {
+            panic!("expected invalid id error");
+        };
+        assert!(err.to_string().contains("Invalid comment id"));
     }
 
     #[test]
@@ -833,6 +997,100 @@ mod tests {
         assert_eq!(events.len(), 2); // 1 for task creation, 1 for comment
         assert!(matches!(events[0].kind, EventKind::TaskCreated { .. }));
         assert!(matches!(events[1].kind, EventKind::CommentAdded { .. }));
+        Ok(())
+    }
+
+    #[test]
+    fn run_update_task_dispatches_to_service() -> Result<()> {
+        let (service, repository, store) = service_with_store();
+
+        let created = service.create_with_parents(git_mile_app::CreateTaskInput {
+            title: "before".into(),
+            state: None,
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            description: None,
+            parents: Vec::new(),
+            actor: sample_actor(),
+        })?;
+
+        run(
+            Command::UpdateTask {
+                task: created.task.to_string(),
+                title: Some("after".into()),
+                description: None,
+                state: None,
+                clear_state: false,
+                add_labels: Vec::new(),
+                remove_labels: Vec::new(),
+                add_assignees: Vec::new(),
+                remove_assignees: Vec::new(),
+                link_parents: Vec::new(),
+                unlink_parents: Vec::new(),
+                actor_name: Some("alice".into()),
+                actor_email: Some("alice@example.invalid".into()),
+                format: OutputFormat::Table,
+            },
+            &service,
+            &repository,
+            Path::new("."),
+        )?;
+
+        let events = store.appended();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event.kind, EventKind::TaskTitleSet { ref title } if title == "after"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn run_update_comment_dispatches_to_service() -> Result<()> {
+        let (service, repository, store) = service_with_store();
+        let created = service.create_with_parents(git_mile_app::CreateTaskInput {
+            title: "task".into(),
+            state: None,
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            description: None,
+            parents: Vec::new(),
+            actor: sample_actor(),
+        })?;
+        service.add_comment(git_mile_app::CommentInput {
+            task: created.task,
+            message: "before".into(),
+            actor: sample_actor(),
+        })?;
+        let comment_id = store
+            .appended()
+            .iter()
+            .find_map(|event| match &event.kind {
+                EventKind::CommentAdded { comment_id, .. } => Some(*comment_id),
+                _ => None,
+            })
+            .ok_or_else(|| anyhow!("comment id not found"))?;
+
+        run(
+            Command::UpdateComment {
+                task: created.task.to_string(),
+                comment: comment_id.to_string(),
+                body: "after".into(),
+                actor_name: Some("alice".into()),
+                actor_email: Some("alice@example.invalid".into()),
+                format: OutputFormat::Json,
+            },
+            &service,
+            &repository,
+            Path::new("."),
+        )?;
+
+        let events = store.appended();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event.kind, EventKind::CommentUpdated { ref body_md, .. } if body_md == "after"))
+        );
         Ok(())
     }
 
