@@ -15,7 +15,7 @@ anyhow = "1.0"
 git-mile-core = { path = "../git-mile-core" }
 git-mile-hooks = { path = "../git-mile-hooks" }
 git-mile-store-git = { path = "../git-mile-store-git" }
-git2 = { version = "0.20", default-features = false }
+git2 = { version = "0.21", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
 time = { version = "0.3", features = ["formatting", "parsing", "serde"] }

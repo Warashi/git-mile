@@ -12,7 +12,7 @@ categories.workspace = true
 [dependencies]
 anyhow = "1"
 git-mile-core = { path = "../git-mile-core" }
-git2 = { version = "0.20", default-features = false, features = [
+git2 = { version = "0.21", default-features = false, features = [
   "https",
   "ssh",
   "vendored-libgit2",

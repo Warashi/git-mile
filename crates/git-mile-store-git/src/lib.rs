@@ -204,7 +204,7 @@ impl GitStore {
     }
 
     fn event_from_commit(commit: &Commit<'_>, oid: Oid) -> Result<Option<Event>> {
-        let Some(message) = commit.message() else {
+        let Ok(message) = commit.message() else {
             return Ok(None);
         };
         let Some((head, body)) = message.split_once("\n\n") else {
@@ -288,7 +288,7 @@ impl GitStore {
         let references = self.repo.references_glob("refs/git-mile/tasks/*")?;
         for reference in references {
             let reference = reference?;
-            let Some(name) = reference.name() else {
+            let Ok(name) = reference.name() else {
                 continue;
             };
             let Some(task_id) = Self::task_id_from_refname(name) else {
@@ -338,7 +338,7 @@ impl GitStore {
         let mut ids = Vec::new();
         for r in self.repo.references_glob("refs/git-mile/tasks/*")? {
             let r = r?;
-            let name = r.name().ok_or_else(|| anyhow!("Invalid ref name"))?;
+            let name = r.name().map_err(|_| anyhow!("Invalid ref name"))?;
             if let Some(id) = Self::task_id_from_refname(name) {
                 ids.push(id);
             }
@@ -369,7 +369,7 @@ impl GitStore {
 
         for reference in self.repo.references_glob("refs/git-mile/tasks/*")? {
             let reference = reference?;
-            let Some(name) = reference.name() else {
+            let Ok(name) = reference.name() else {
                 continue;
             };
             let Some(task_id) = Self::task_id_from_refname(name) else {
@@ -404,7 +404,7 @@ impl GitStore {
 
         for reference in references {
             let reference = reference?;
-            let Some(name) = reference.name() else {
+            let Ok(name) = reference.name() else {
                 continue;
             };
 
@@ -474,7 +474,7 @@ impl GitStore {
 
         for reference in references {
             let reference = reference?;
-            let Some(remote_ref_name) = reference.name() else {
+            let Ok(remote_ref_name) = reference.name() else {
                 continue;
             };
 
@@ -628,7 +628,7 @@ mod tests {
         );
 
         let oid = store.append_event(&created)?;
-        assert_ne!(oid, Oid::zero());
+        assert_ne!(oid, Oid::ZERO_SHA1);
         thread::sleep(StdDuration::from_millis(10));
         store.append_event(&second)?;
 
