@@ -1,4 +1,4 @@
-msrv = "1.93"
+msrv = "1.96"
 doc-valid-idents = ["UUID"]
 allowed-duplicate-crates = [
   "crossterm",
