@@ -21,7 +21,7 @@ git-mile-core = { path = "../git-mile-core" }
 git-mile-store-git = { path = "../git-mile-store-git" }
 git2 = { version = "0.21", default-features = false }
 ratatui = "0.30"
-rmcp = "0.8"
+rmcp = "2"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -3,7 +3,7 @@
 use crate::mcp::params::{WorkflowStateEntry, WorkflowStatesResponse};
 use git_mile_app::WorkflowConfig;
 use rmcp::ErrorData as McpError;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::{CallToolResult, ContentBlock};
 
 /// List workflow states configured for this repository.
 #[allow(clippy::unused_async)]
@@ -25,5 +25,5 @@ pub async fn handle_list_workflow_states(workflow: &WorkflowConfig) -> Result<Ca
     let json_str =
         serde_json::to_string_pretty(&response).map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-    Ok(CallToolResult::success(vec![Content::text(json_str)]))
+    Ok(CallToolResult::success(vec![ContentBlock::text(json_str)]))
 }

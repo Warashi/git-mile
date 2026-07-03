@@ -9,7 +9,7 @@ use git_mile_core::id::TaskId;
 use git_mile_store_git::GitStore;
 use rmcp::ErrorData as McpError;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::{CallToolResult, ContentBlock};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -87,5 +87,5 @@ pub async fn handle_add_comment(
     let json_str =
         serde_json::to_string_pretty(&response).map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-    Ok(CallToolResult::success(vec![Content::text(json_str)]))
+    Ok(CallToolResult::success(vec![ContentBlock::text(json_str)]))
 }

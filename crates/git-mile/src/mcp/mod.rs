@@ -11,8 +11,8 @@ use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::tool::{ToolCallContext, ToolRouter};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolRequestParam, CallToolResult, Implementation, InitializeResult, ListToolsResult, ProtocolVersion,
-    ServerCapabilities,
+    CallToolRequestParams, CallToolResult, Implementation, InitializeResult, ListToolsResult,
+    ProtocolVersion, ServerCapabilities,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{ErrorData as McpError, tool, tool_router};
@@ -171,34 +171,22 @@ impl ServerHandler for GitMileServer {
             .enable_tool_list_changed()
             .build();
 
-        InitializeResult {
-            protocol_version: ProtocolVersion::LATEST,
-            capabilities,
-            server_info: Implementation {
-                name: "git-mile".into(),
-                version: env!("CARGO_PKG_VERSION").into(),
-                icons: None,
-                title: None,
-                website_url: None,
-            },
-            instructions: None,
-        }
+        InitializeResult::new(capabilities)
+            .with_protocol_version(ProtocolVersion::LATEST)
+            .with_server_info(Implementation::new("git-mile", env!("CARGO_PKG_VERSION")))
     }
 
     async fn list_tools(
         &self,
-        _request: Option<rmcp::model::PaginatedRequestParam>,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        Ok(ListToolsResult {
-            tools: self.tool_router.list_all(),
-            next_cursor: None,
-        })
+        Ok(ListToolsResult::with_all_items(self.tool_router.list_all()))
     }
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let tool_context = ToolCallContext::new(self, request, context);
