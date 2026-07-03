@@ -40,8 +40,7 @@ impl<S: TaskStore> Ui<S> {
         let block = Block::default()
             .title("タスクツリー")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow))
-            .style(Style::default().bg(Color::Black));
+            .border_style(Style::default().fg(Color::Yellow));
 
         f.render_widget(Clear, popup_area);
         let inner = block.inner(popup_area);
