@@ -28,7 +28,7 @@ time = { version = "0.3", features = [
 uuid = { version = "1", features = ["serde", "v7"] }
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8"
 
 [lints]
 workspace = true
