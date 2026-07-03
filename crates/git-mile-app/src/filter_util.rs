@@ -174,9 +174,7 @@ pub fn parse_state_kind_tokens(tokens: &[String]) -> FilterBuildResult<Vec<State
                 "blocked" => Ok(StateKind::Blocked),
                 "done" => Ok(StateKind::Done),
                 "backlog" => Ok(StateKind::Backlog),
-                _ => Err(FilterBuildError::InvalidStateKind {
-                    token: token.to_string(),
-                }),
+                _ => Err(FilterBuildError::InvalidStateKind { token: token.clone() }),
             }
         })
         .collect()

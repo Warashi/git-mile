@@ -20,6 +20,7 @@ use git_mile_app::{
     TaskService, TaskStore, TaskUpdate, WorkflowConfig,
 };
 
+#[allow(clippy::too_many_lines)]
 pub fn run<S: TaskStore, R: TaskStore>(
     command: Command,
     service: &TaskService<S>,
@@ -116,7 +117,7 @@ pub fn run<S: TaskStore, R: TaskStore>(
             format,
         } => handle_update_task(
             service,
-            task,
+            &task,
             title,
             description,
             state,
@@ -403,7 +404,7 @@ fn handle_list_workflow_states<S: TaskStore>(
 #[allow(clippy::too_many_arguments)]
 fn handle_update_task<S: TaskStore>(
     service: &TaskService<S>,
-    task: String,
+    task: &str,
     title: Option<String>,
     description: Option<String>,
     state: Option<String>,
@@ -424,7 +425,7 @@ fn handle_update_task<S: TaskStore>(
         service.workflow().validate_state(Some(state_value))?;
     }
 
-    let task_id = parse_task_id(&task)?;
+    let task_id = parse_task_id(task)?;
     let link_parent_ids = parse_task_ids(link_parents)?;
     let unlink_parent_ids = parse_task_ids(unlink_parents)?;
     let actor = actor_from_params_or_default(actor_name, actor_email, repo_root);
@@ -463,6 +464,7 @@ fn handle_update_task<S: TaskStore>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_update_comment<S: TaskStore>(
     service: &TaskService<S>,
     task: &str,
@@ -1098,7 +1100,7 @@ mod tests {
             actor: sample_actor(),
         })?;
 
-        let err = run(
+        let result = run(
             Command::UpdateComment {
                 task: created.task.to_string(),
                 comment: EventId::new().to_string(),
@@ -1110,8 +1112,10 @@ mod tests {
             &service,
             &repository,
             Path::new("."),
-        )
-        .expect_err("must reject missing comment");
+        );
+        let Err(err) = result else {
+            panic!("must reject missing comment");
+        };
         assert!(err.to_string().contains("not found"));
         Ok(())
     }

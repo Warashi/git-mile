@@ -486,9 +486,10 @@ mod tests {
             actor: actor.clone(),
         })?;
 
-        let error = service
-            .update_comment(created.task, EventId::new(), "after".into(), &actor)
-            .expect_err("must reject unknown comment");
+        let result = service.update_comment(created.task, EventId::new(), "after".into(), &actor);
+        let Err(error) = result else {
+            panic!("must reject unknown comment");
+        };
         assert!(error.to_string().contains("not found"));
         Ok(())
     }

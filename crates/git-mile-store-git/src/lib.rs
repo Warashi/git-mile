@@ -153,10 +153,8 @@ impl GitStore {
     }
 
     fn default_cache_capacity() -> NonZeroUsize {
-        NonZeroUsize::new(DEFAULT_EVENT_CACHE_CAPACITY).map_or_else(
-            || unreachable!("DEFAULT_EVENT_CACHE_CAPACITY must be non-zero"),
-            |value| value,
-        )
+        NonZeroUsize::new(DEFAULT_EVENT_CACHE_CAPACITY)
+            .unwrap_or_else(|| unreachable!("DEFAULT_EVENT_CACHE_CAPACITY must be non-zero"))
     }
 
     fn cache_capacity_from_override(raw: Option<String>) -> Option<NonZeroUsize> {

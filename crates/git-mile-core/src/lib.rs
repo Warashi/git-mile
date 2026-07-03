@@ -978,7 +978,7 @@ mod tests {
             ts: base,
             id: fixed_event_id(1),
         };
-        let mut second = EventStamp {
+        let second = EventStamp {
             lamport: 2,
             ts: base - Duration::seconds(5),
             id: fixed_event_id(2),
@@ -998,7 +998,6 @@ mod tests {
         assert!(second < third, "timestamp must break lamport ties");
         assert!(third < fourth, "event id must break timestamp ties");
 
-        second.lamport = 5;
         third.lamport = 5;
         third.ts = base;
         fourth.lamport = 5;

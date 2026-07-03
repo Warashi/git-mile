@@ -10,7 +10,7 @@ pub(super) struct TreeNode {
     /// Task ID.
     pub(super) task_id: TaskId,
     /// Child nodes.
-    pub(super) children: Vec<TreeNode>,
+    pub(super) children: Vec<Self>,
     /// Whether this node is expanded.
     pub(super) expanded: bool,
 }

@@ -39,7 +39,7 @@ fn expect_err<T, E: Display>(result: StdResult<T, E>, ctx: &str) -> E {
 }
 
 fn expect_some<T>(value: Option<T>, ctx: &str) -> T {
-    value.map_or_else(|| panic!("{ctx}"), |inner| inner)
+    value.unwrap_or_else(|| panic!("{ctx}"))
 }
 
 #[allow(clippy::arc_with_non_send_sync)]
