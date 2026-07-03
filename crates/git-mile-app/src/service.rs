@@ -141,9 +141,9 @@ impl<S: TaskStore> TaskService<S> {
         }
 
         let events = self.store().load_events(task).map_err(Into::into)?;
-        let comment_exists = events
-            .iter()
-            .any(|event| matches!(event.kind, EventKind::CommentAdded { comment_id: id, .. } if id == comment_id));
+        let comment_exists = events.iter().any(
+            |event| matches!(event.kind, EventKind::CommentAdded { comment_id: id, .. } if id == comment_id),
+        );
 
         if !comment_exists {
             return Err(anyhow!("Comment {comment_id} not found in task {task}"));

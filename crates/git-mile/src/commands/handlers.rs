@@ -1,13 +1,13 @@
+use std::cmp::Ordering;
 use std::io::Write;
 use std::path::Path;
 use std::str::FromStr;
-use std::cmp::Ordering;
 
 use anyhow::{Context, Result, anyhow};
 use git_mile_core::TaskFilter;
 use git_mile_core::event::Event;
-use git_mile_core::{StateKind, TaskSnapshot};
 use git_mile_core::id::{EventId, TaskId};
+use git_mile_core::{StateKind, TaskSnapshot};
 
 use crate::event_log::{
     entries_from_events, format_actor, format_timestamp, single_line_detail, truncate_detail,
@@ -16,8 +16,8 @@ use crate::mcp::{TaskCommentEntry, WorkflowStateEntry, WorkflowStatesResponse};
 use crate::{Command, LogFormat, LsFormat, OutputFormat};
 use git_mile_app::actor_from_params_or_default;
 use git_mile_app::{
-    CommentInput, CreateTaskInput, DescriptionPatch, SetDiff, StatePatch, TaskFilterBuilder,
-    TaskRepository, TaskService, TaskStore, TaskUpdate, WorkflowConfig,
+    CommentInput, CreateTaskInput, DescriptionPatch, SetDiff, StatePatch, TaskFilterBuilder, TaskRepository,
+    TaskService, TaskStore, TaskUpdate, WorkflowConfig,
 };
 
 pub fn run<S: TaskStore, R: TaskStore>(
@@ -93,16 +93,9 @@ pub fn run<S: TaskStore, R: TaskStore>(
         Command::ListComments { task, format } => {
             handle_list_comments(repository, &task, format, &mut std::io::stdout())
         }
-        Command::ListSubtasks {
-            parent_task,
-            format,
-        } => handle_list_subtasks(
-            service,
-            repository,
-            &parent_task,
-            format,
-            &mut std::io::stdout(),
-        ),
+        Command::ListSubtasks { parent_task, format } => {
+            handle_list_subtasks(service, repository, &parent_task, format, &mut std::io::stdout())
+        }
         Command::ListWorkflowStates { format } => {
             handle_list_workflow_states(service, format, &mut std::io::stdout())
         }
@@ -380,7 +373,11 @@ fn handle_list_workflow_states<S: TaskStore>(
     match format {
         OutputFormat::Table => {
             writeln!(writer, "Restricted | {}", response.restricted)?;
-            writeln!(writer, "DefaultState | {}", response.default_state.as_deref().unwrap_or("-"))?;
+            writeln!(
+                writer,
+                "DefaultState | {}",
+                response.default_state.as_deref().unwrap_or("-")
+            )?;
             writeln!(writer, "Value | Label | Kind | Default")?;
             writeln!(writer, "----- | ----- | ---- | -------")?;
             for state in &response.states {
@@ -391,11 +388,7 @@ fn handle_list_workflow_states<S: TaskStore>(
                 } else {
                     "no"
                 };
-                writeln!(
-                    writer,
-                    "{} | {} | {} | {}",
-                    state.value, label, kind, is_default
-                )?;
+                writeln!(writer, "{} | {} | {} | {}", state.value, label, kind, is_default)?;
             }
             Ok(())
         }
@@ -1086,11 +1079,9 @@ mod tests {
         )?;
 
         let events = store.appended();
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event.kind, EventKind::CommentUpdated { ref body_md, .. } if body_md == "after"))
-        );
+        assert!(events.iter().any(
+            |event| matches!(event.kind, EventKind::CommentUpdated { ref body_md, .. } if body_md == "after")
+        ));
         Ok(())
     }
 

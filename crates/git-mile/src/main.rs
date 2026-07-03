@@ -575,12 +575,16 @@ mod tests {
 
     #[test]
     fn parse_list_subtasks_command() {
-        let cli = Cli::parse_from(["git-mile", "list-subtasks", "--parent-task", "p", "--format", "json"]);
+        let cli = Cli::parse_from([
+            "git-mile",
+            "list-subtasks",
+            "--parent-task",
+            "p",
+            "--format",
+            "json",
+        ]);
         match cli.cmd {
-            Command::ListSubtasks {
-                parent_task,
-                format,
-            } => {
+            Command::ListSubtasks { parent_task, format } => {
                 assert_eq!(parent_task, "p");
                 assert_eq!(format, OutputFormat::Json);
             }
