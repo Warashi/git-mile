@@ -1,17 +1,17 @@
 msrv = "1.96"
 doc-valid-idents = ["UUID"]
 allowed-duplicate-crates = [
-  "crossterm",
+  "bitflags",
   "darling",
   "darling_core",
   "darling_macro",
-  "foldhash",
   "getrandom",
   "hashbrown",
   "linux-raw-sys",
-  "lru",
   "mio",
+  "r-efi",
   "rustix",
+  "syn",
   "thiserror",
   "thiserror-impl",
   "unicode-width",
