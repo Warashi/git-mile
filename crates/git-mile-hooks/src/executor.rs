@@ -90,8 +90,11 @@ impl HookExecutor {
             .spawn()?;
 
         // Write input to stdin
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(input_json.as_bytes())?;
+        if let Some(mut stdin) = child.stdin.take()
+            && let Err(error) = stdin.write_all(input_json.as_bytes())
+            && error.kind() != std::io::ErrorKind::BrokenPipe
+        {
+            return Err(error.into());
         }
 
         // Wait for the process with timeout
