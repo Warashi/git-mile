@@ -19,7 +19,7 @@ use super::super::constants::{
 };
 use super::super::tree_view::TreeNode;
 use super::super::view::Ui;
-use super::util::state_kind_marker;
+use super::util::{markdown_text, state_kind_marker};
 use crate::event_log::{format_actor, format_timestamp};
 
 impl<S: TaskStore> Ui<S> {
@@ -225,9 +225,7 @@ impl<S: TaskStore> Ui<S> {
                         header,
                         Style::default().fg(Color::Yellow),
                     )));
-                    for body_line in comment.body.lines() {
-                        lines.push(Line::from(body_line.to_owned()));
-                    }
+                    lines.extend(markdown_text(&comment.body).lines);
                     lines.push(Line::from(""));
                 }
                 let paragraph = Paragraph::new(lines)
@@ -283,11 +281,8 @@ impl<S: TaskStore> Ui<S> {
                     Paragraph::new("説明はまだありません。").style(Style::default().fg(Color::DarkGray));
                 f.render_widget(paragraph, inner);
             } else {
-                let mut lines = Vec::new();
-                for line in task.snapshot.description.lines() {
-                    lines.push(Line::from(line.to_owned()));
-                }
-                let paragraph = Paragraph::new(lines)
+                let text = markdown_text(&task.snapshot.description);
+                let paragraph = Paragraph::new(text)
                     .wrap(Wrap { trim: false })
                     .scroll((viewer.scroll_offset, 0));
                 f.render_widget(paragraph, inner);

@@ -2,6 +2,7 @@ use super::app::*;
 use super::clipboard::*;
 use super::editor::*;
 use super::view::*;
+use super::widgets::markdown_text;
 use super::widgets::truncate_with_ellipsis;
 use crate::config::keybindings::KeyBindingsConfig;
 use anyhow::{Result, anyhow};
@@ -137,6 +138,71 @@ fn truncate_with_ellipsis_handles_multibyte_titles() {
 fn truncate_with_ellipsis_keeps_grapheme_clusters_intact() {
     let title = "a\u{0301}bcdef";
     assert_eq!(truncate_with_ellipsis(title, 4), "a\u{0301}...");
+}
+
+#[test]
+fn markdown_text_styles_headings() {
+    let text = markdown_text("# 見出し");
+    let line = expect_some(text.lines.first(), "heading line missing");
+    assert_eq!(line.to_string(), "# 見出し");
+    let styled = line
+        .spans
+        .iter()
+        .any(|span| span.style != ratatui::style::Style::default())
+        || line.style != ratatui::style::Style::default();
+    assert!(styled, "heading should carry a non-default style");
+}
+
+#[test]
+fn markdown_text_styles_emphasis_spans() {
+    let text = markdown_text("plain **強調** plain");
+    let line = expect_some(text.lines.first(), "emphasis line missing");
+    let bold_span = line
+        .spans
+        .iter()
+        .find(|span| span.style.add_modifier.contains(ratatui::style::Modifier::BOLD));
+    let span = expect_some(bold_span, "bold span missing");
+    assert_eq!(span.content, "強調");
+}
+
+#[test]
+fn markdown_text_renders_list_items_on_separate_lines() {
+    let text = markdown_text("- 一つ目\n- 二つ目");
+    let rendered: Vec<String> = text.lines.iter().map(ToString::to_string).collect();
+    assert!(
+        rendered.iter().any(|line| line.contains("一つ目")),
+        "first list item missing: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().any(|line| line.contains("二つ目")),
+        "second list item missing: {rendered:?}"
+    );
+    assert_ne!(
+        rendered.iter().position(|line| line.contains("一つ目")),
+        rendered.iter().position(|line| line.contains("二つ目")),
+        "list items should occupy separate lines"
+    );
+}
+
+#[test]
+fn markdown_text_renders_code_blocks_with_fences() {
+    let text = markdown_text("```rust\nlet x = 1;\n```");
+    let rendered: Vec<String> = text.lines.iter().map(ToString::to_string).collect();
+    assert!(
+        rendered.iter().any(|line| line.contains("```rust")),
+        "opening fence missing: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().any(|line| line.contains("let x = 1;")),
+        "code body missing: {rendered:?}"
+    );
+}
+
+#[test]
+fn markdown_text_handles_plain_text() {
+    let text = markdown_text("ただのテキスト");
+    let line = expect_some(text.lines.first(), "plain line missing");
+    assert_eq!(line.to_string(), "ただのテキスト");
 }
 
 impl TaskStore for MockStore {

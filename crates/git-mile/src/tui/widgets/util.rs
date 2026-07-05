@@ -1,7 +1,12 @@
 use std::borrow::Cow;
 
 use git_mile_app::StateKind;
+use ratatui::text::Text;
 use unicode_segmentation::UnicodeSegmentation;
+
+pub(super) fn markdown_text(source: &str) -> Text<'_> {
+    tui_markdown::from_str(source)
+}
 
 pub(super) fn truncate_with_ellipsis(input: &str, max_graphemes: usize) -> Cow<'_, str> {
     const ELLIPSIS: &str = "...";
