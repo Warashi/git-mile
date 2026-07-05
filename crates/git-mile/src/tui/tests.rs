@@ -811,50 +811,73 @@ fn create_task_applies_default_state() -> Result<()> {
 }
 
 #[test]
-fn comment_editor_output_strips_comments_and_trims() {
-    let input = "# comment\nline1\n\nline2  \n# ignored";
-    let parsed = parse_comment_editor_output(input);
-    assert_eq!(parsed.as_deref(), Some("line1\n\nline2"));
+fn comment_editor_output_keeps_markdown_headings() {
+    let input =
+        format!("# 見出し\nline1\n\nline2  \n\n{SCISSORS_LINE}\nこの行より下は無視されます。\nTask: xxx");
+    let parsed = parse_comment_editor_output(&input);
+    assert_eq!(parsed.as_deref(), Some("# 見出し\nline1\n\nline2"));
 }
 
 #[test]
 fn comment_editor_output_none_when_empty() {
-    let input = "# comment\n\n   \n# another comment";
-    assert!(parse_comment_editor_output(input).is_none());
+    let input = format!(
+        "\n   \n{SCISSORS_LINE}\nこの行より下は無視されます。\nコメントをMarkdown形式で入力してください。"
+    );
+    assert!(parse_comment_editor_output(&input).is_none());
+}
+
+#[test]
+fn comment_editor_template_places_instructions_below_scissors() {
+    let template = comment_editor_template(&actor(), TaskId::new());
+    let scissors_pos = expect_some(template.find(SCISSORS_LINE), "scissors line");
+    assert!(parse_comment_editor_output(&template).is_none());
+    assert!(template[..scissors_pos].trim().is_empty());
 }
 
 #[test]
 fn new_task_editor_output_parses_fields() {
-    let raw = "\
-# heading
+    let raw = format!(
+        "\
 title: Sample Task
 state: state/todo
 labels: type/docs, area/cli
 assignees: alice, bob
 ---
+# Heading
 This is description.
-";
-    let parsed = expect_ok(parse_new_task_editor_output(raw), "parse succeeds");
+
+{SCISSORS_LINE}
+この行より下は無視されます。
+title: ignored
+"
+    );
+    let parsed = expect_ok(parse_new_task_editor_output(&raw), "parse succeeds");
     let data = expect_some(parsed, "should create task");
     assert_eq!(data.title, "Sample Task");
     assert_eq!(data.state.as_deref(), Some("state/todo"));
     assert_eq!(data.labels, vec!["type/docs".to_string(), "area/cli".to_string()]);
     assert_eq!(data.assignees, vec!["alice".to_string(), "bob".to_string()]);
-    assert_eq!(data.description.as_deref(), Some("This is description."));
+    assert_eq!(
+        data.description.as_deref(),
+        Some("# Heading\nThis is description.")
+    );
 }
 
 #[test]
 fn new_task_editor_output_none_when_all_empty() {
-    let raw = "\
-# heading
+    let raw = format!(
+        "\
 title:
 state:
 labels:
 assignees:
 ---
-# no description
-";
-    let parsed = expect_ok(parse_new_task_editor_output(raw), "parse succeeds");
+
+{SCISSORS_LINE}
+この行より下は無視されます。
+"
+    );
+    let parsed = expect_ok(parse_new_task_editor_output(&raw), "parse succeeds");
     assert!(parsed.is_none());
 }
 
@@ -875,6 +898,29 @@ assignees:
 fn new_task_editor_template_prefills_default_state() {
     let template = new_task_editor_template(None, None, Some("state/todo"));
     assert!(template.contains("state: state/todo"));
+}
+
+#[test]
+fn edit_task_editor_template_round_trips_markdown_description() {
+    let task = TaskId::new();
+    let events = vec![event(
+        task,
+        ts(0),
+        EventKind::TaskCreated {
+            title: "Title".into(),
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            description: Some("# Heading\n\n- item".into()),
+            state: None,
+            state_kind: None,
+        },
+    )];
+    let view = TaskView::from_events(&events);
+    let template = edit_task_editor_template(&view, Some("state/todo"));
+    let parsed = expect_ok(parse_new_task_editor_output(&template), "parse succeeds");
+    let data = expect_some(parsed, "should keep task data");
+    assert_eq!(data.title, "Title");
+    assert_eq!(data.description.as_deref(), Some("# Heading\n\n- item"));
 }
 
 #[test]

@@ -11,19 +11,25 @@ use git_mile_app::{TaskFilterBuilder, normalize_timestamp, parse_timestamp};
 use super::app::NewTaskData;
 use git_mile_app::TaskView;
 
+pub(super) const SCISSORS_LINE: &str = "------------------------ >8 ------------------------";
+const SCISSORS_NOTICE: &str = "この行より下は無視されます。";
+
+fn content_above_scissors(raw: &str) -> String {
+    raw.lines()
+        .take_while(|line| line.trim() != SCISSORS_LINE)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 pub(super) fn comment_editor_template(actor: &git_mile_core::event::Actor, task: TaskId) -> String {
     format!(
-        "# コメントを入力してください。\n# 空のまま保存するとキャンセルされます。\n# Task: {task}\n# Actor: {} <{}>\n\n",
+        "\n\n{SCISSORS_LINE}\n{SCISSORS_NOTICE}\nコメントをMarkdown形式で入力してください。\n空のまま保存するとキャンセルされます。\nTask: {task}\nActor: {} <{}>\n",
         actor.name, actor.email
     )
 }
 
 pub(super) fn parse_comment_editor_output(raw: &str) -> Option<String> {
-    let body = raw
-        .lines()
-        .filter(|line| !line.trim_start().starts_with('#'))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let body = content_above_scissors(raw);
     let trimmed = body.trim();
     if trimmed.is_empty() {
         None
@@ -57,24 +63,27 @@ pub(super) fn edit_task_editor_template(task: &TaskView, state_hint: Option<&str
     };
 
     let mut lines = vec![
-        "# 選択中のタスクを編集します。タイトルは必須です。".to_string(),
-        "# 空のフィールドは対応する値をクリアします。".to_string(),
         format!("title: {}", snapshot.title),
-    ];
-    if let Some(hint) = state_hint {
-        lines.push(format!("# state 候補: {hint}"));
-    }
-    lines.extend([
         format!("state: {state}"),
         format!("labels: {labels}"),
         format!("assignees: {assignees}"),
         "---".to_string(),
-        "# この下で説明を編集してください。空欄で説明を削除します。".to_string(),
-    ]);
+    ];
     if snapshot.description.is_empty() {
         lines.push(String::new());
     } else {
         lines.extend(snapshot.description.lines().map(str::to_owned));
+    }
+    lines.extend([
+        String::new(),
+        SCISSORS_LINE.to_string(),
+        SCISSORS_NOTICE.to_string(),
+        "選択中のタスクを編集します。タイトルは必須です。".to_string(),
+        "空のフィールドは対応する値をクリアします。".to_string(),
+        "--- より下の行が説明(Markdown形式)になります。空欄で説明を削除します。".to_string(),
+    ]);
+    if let Some(hint) = state_hint {
+        lines.push(format!("state 候補: {hint}"));
     }
     lines.push(String::new());
     lines.join("\n")
@@ -86,34 +95,36 @@ pub(super) fn new_task_editor_template(
     default_state: Option<&str>,
 ) -> String {
     let header = parent.map_or_else(
-        || "# 新規タスクを作成します。".to_owned(),
+        || "新規タスクを作成します。".to_owned(),
         |p| {
             format!(
-                "# 新規タスク（親: {} [{}...]）を作成します。",
+                "新規タスク（親: {} [{}...]）を作成します。",
                 p.snapshot.title,
                 &p.snapshot.id.to_string()[..12]
             )
         },
     );
 
-    let mut lines = vec![
-        header,
-        "# タイトルは必須です。".to_string(),
-        "# 空のまま保存すると作成をキャンセルしたものとして扱います。".to_string(),
-        "title: ".to_string(),
-    ];
-    if let Some(hint) = state_hint {
-        lines.push(format!("# state 候補: {hint}"));
-    }
     let state_line = default_state.map_or_else(|| "state: ".to_string(), |value| format!("state: {value}"));
-    lines.extend([
+    let mut lines = vec![
+        "title: ".to_string(),
         state_line,
         "labels: ".to_string(),
         "assignees: ".to_string(),
         "---".to_string(),
-        "# この下に説明をMarkdown形式で記入してください。不要なら空のままにしてください。".to_string(),
         String::new(),
-    ]);
+        String::new(),
+        SCISSORS_LINE.to_string(),
+        SCISSORS_NOTICE.to_string(),
+        header,
+        "タイトルは必須です。".to_string(),
+        "空のまま保存すると作成をキャンセルしたものとして扱います。".to_string(),
+        "--- より下に説明をMarkdown形式で記入してください。不要なら空のままにしてください。".to_string(),
+    ];
+    if let Some(hint) = state_hint {
+        lines.push(format!("state 候補: {hint}"));
+    }
+    lines.push(String::new());
     lines.join("\n")
 }
 
@@ -148,11 +159,6 @@ pub(super) fn filter_editor_template(filter: &TaskFilter) -> String {
         .unwrap_or_default();
 
     let lines = vec![
-        "# フィルタを編集します。空欄のフィールドは該当条件なしとして扱われます。".to_string(),
-        "# states/labels/assignees/parents/children はカンマ区切りで入力してください。".to_string(),
-        "# updated_since / updated_until は RFC3339 (例: 2025-01-01T09:00:00+09:00) 形式。".to_string(),
-        "# state_kinds には done/in_progress などの kind を指定し、!done で除外できます。".to_string(),
-        format!("# state_kinds の候補: {}", state_kind_options_hint()),
         format!("states: {states}"),
         format!(
             "state_kinds: {}",
@@ -165,6 +171,14 @@ pub(super) fn filter_editor_template(filter: &TaskFilter) -> String {
         format!("text: {text}"),
         format!("updated_since: {updated_since}"),
         format!("updated_until: {updated_until}"),
+        String::new(),
+        SCISSORS_LINE.to_string(),
+        SCISSORS_NOTICE.to_string(),
+        "フィルタを編集します。空欄のフィールドは該当条件なしとして扱われます。".to_string(),
+        "states/labels/assignees/parents/children はカンマ区切りで入力してください。".to_string(),
+        "updated_since / updated_until は RFC3339 (例: 2025-01-01T09:00:00+09:00) 形式。".to_string(),
+        "state_kinds には done/in_progress などの kind を指定し、!done で除外できます。".to_string(),
+        format!("state_kinds の候補: {}", state_kind_options_hint()),
         String::new(),
     ];
     lines.join("\n")
@@ -218,11 +232,9 @@ pub(super) fn parse_new_task_editor_output(raw: &str) -> Result<Option<NewTaskDa
     let mut description_lines = Vec::new();
     let mut in_description = false;
 
-    for line in raw.lines() {
+    let content = content_above_scissors(raw);
+    for line in content.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with('#') {
-            continue;
-        }
         if in_description {
             description_lines.push(line);
             continue;
@@ -305,9 +317,10 @@ pub(super) fn parse_filter_editor_output(raw: &str) -> Result<TaskFilter, String
     let mut include_state_kind_tokens: Vec<String> = Vec::new();
     let mut exclude_state_kind_tokens: Vec<String> = Vec::new();
 
-    for line in raw.lines() {
+    let content = content_above_scissors(raw);
+    for line in content.lines() {
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
+        if trimmed.is_empty() {
             continue;
         }
         let Some((key, value)) = trimmed.split_once(':') else {
