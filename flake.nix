@@ -149,10 +149,12 @@
                 tombi
                 toolchain
               ]
-              ++ (lib.optional stdenv.hostPlatform.isLinux cargo-llvm-cov);
+              ++ config.pre-commit.settings.enabledPackages
+              ++ lib.optional stdenv.hostPlatform.isLinux cargo-llvm-cov;
+              packagesFrom = [ gitMilePackage ];
               startup = {
                 pre-commit = {
-                  text = config.pre-commit.installationScript;
+                  text = config.pre-commit.shellHook;
                 };
               };
             };
